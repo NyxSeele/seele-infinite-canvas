@@ -1,0 +1,145 @@
+.acm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 8000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.acm-modal {
+  width: min(380px, 100%);
+  background: var(--tl-card-bg, #ffffff);
+  border: 1px solid var(--tl-card-border, #e5e5e5);
+  border-radius: 16px;
+  box-shadow: var(--tl-menu-shadow, 0 16px 48px rgba(0, 0, 0, 0.2));
+  padding: 18px;
+  color: var(--tl-text-primary, #111111);
+}
+
+.acm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.acm-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.acm-close {
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  color: var(--tl-text-secondary);
+  cursor: pointer;
+}
+
+.acm-viewport {
+  position: relative;
+  width: 300px;
+  height: 300px;
+  margin: 0 auto;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #111;
+  touch-action: none;
+}
+
+.acm-canvas {
+  display: block;
+  width: 300px;
+  height: 300px;
+  pointer-events: none;
+}
+
+.acm-loading {
+  position: absolute;
+  inset: 0;
+  background: #111;
+}
+
+.acm-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 50%;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.45);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+}
+
+.acm-drag-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  cursor: grab;
+  touch-action: none;
+}
+
+.acm-drag-layer:active {
+  cursor: grabbing;
+}
+
+.acm-zoom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 4px;
+  font-size: 12px;
+  color: var(--tl-text-secondary);
+}
+
+.acm-zoom input {
+  flex: 1;
+}
+
+.acm-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--tl-text-secondary);
+  text-align: center;
+}
+
+.acm-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.acm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  box-sizing: border-box;
+  border-radius: 20px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.acm-btn--ghost {
+  border: 1px solid var(--tl-btn-secondary-border, var(--tl-card-border));
+  background: var(--tl-btn-secondary-bg, rgba(255, 255, 255, 0.07));
+  color: var(--tl-btn-secondary-fg, var(--tl-text-secondary));
+}
+
+.acm-btn--ghost:hover:not(:disabled) {
+  background: var(--tl-btn-secondary-hover, #1e1e1e);
+}
+
+.acm-btn--primary {
+  border: 1px solid var(--tl-btn-primary-bg);
+  background: var(--tl-btn-primary-bg);
+  color: var(--tl-btn-primary-fg);
+}

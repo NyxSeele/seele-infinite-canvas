@@ -1,0 +1,68 @@
+.user-model-permissions.is-saving {
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.admin-saving-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.model-perm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-perm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.model-perm-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-perm-name {
+  font-weight: 500;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-perm-type {
+  font-size: 12px;
+  display: inline-block;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.model-perm-type.type-image {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.model-perm-type.type-video {
+  background: #fce7f3;
+  color: #be185d;
+}
+
+.model-perm-type.type-text {
+  background: #dcfce7;
+  color: #15803d;
+}

@@ -1,0 +1,264 @@
+.ghf-records-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+  max-height: 72px;
+  overflow: auto;
+}
+
+.ghf-record-chip {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--alf-text, #fff) 8%, transparent);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.ghf-flyout {
+  position: fixed;
+  left: 76px;
+  top: 50%;
+  transform: translateY(-50%) translateX(-14px);
+  width: 360px;
+  max-height: min(80vh, 700px);
+  display: flex;
+  flex-direction: column;
+  background: var(--alf-bg, #161616);
+  border: 1px solid var(--alf-border, rgba(255, 255, 255, 0.1));
+  border-radius: 14px;
+  box-shadow: var(--alf-shadow, 0 12px 40px rgba(0, 0, 0, 0.45));
+  z-index: 199;
+  overflow: hidden;
+  pointer-events: all;
+  color: var(--alf-text, rgba(255, 255, 255, 0.92));
+  opacity: 0;
+  transition: width 0.2s ease, max-height 0.2s ease;
+}
+
+.ghf-flyout--open {
+  animation: ghf-flyout-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.ghf-flyout--closing {
+  animation: ghf-flyout-out 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes ghf-flyout-in {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+
+@keyframes ghf-flyout-out {
+  from {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-14px);
+  }
+}
+
+.ghf-flyout--expanded {
+  width: min(68vw, 860px);
+  max-height: min(86vh, 860px);
+}
+
+.ghf-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--alf-border, rgba(255, 255, 255, 0.1));
+}
+
+.ghf-head-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ghf-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--alf-text, rgba(255, 255, 255, 0.92));
+  flex-shrink: 0;
+}
+
+.ghf-scope-body .ghf-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.ghf-scope-switch {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--alf-border, rgba(255, 255, 255, 0.1));
+  border-radius: 7px;
+  background: var(--alf-bg-soft, rgba(255, 255, 255, 0.04));
+  color: var(--alf-text-muted, rgba(255, 255, 255, 0.5));
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.ghf-scope-switch:hover {
+  color: var(--alf-text, rgba(255, 255, 255, 0.92));
+  border-color: var(--alf-accent, rgba(167, 139, 250, 0.5));
+}
+
+.ghf-scope-hint {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--alf-text-muted, rgba(255, 255, 255, 0.5));
+  flex-basis: 100%;
+}
+
+.ghf-head-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ghf-icon-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--alf-border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  background: var(--alf-bg-soft, rgba(255, 255, 255, 0.04));
+  color: var(--alf-text-muted, rgba(255, 255, 255, 0.5));
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.ghf-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+}
+
+.ghf-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--alf-text-muted, rgba(255, 255, 255, 0.48));
+  cursor: pointer;
+  font-family: inherit;
+  border-radius: 8px;
+}
+
+.ghf-tab--active {
+  color: var(--alf-text, #fff);
+  background: var(--alf-bg-soft, rgba(255, 255, 255, 0.06));
+}
+
+.ghf-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px 12px;
+}
+
+.ghf-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.ghf-flyout--expanded .ghf-grid {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.ghf-card {
+  border: 1px solid var(--alf-border, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  background: var(--alf-bg-soft, rgba(255, 255, 255, 0.04));
+  padding: 6px;
+  cursor: grab;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  user-select: none;
+}
+
+.ghf-card:hover {
+  border-color: var(--alf-accent, rgba(255, 255, 255, 0.35));
+}
+
+.ghf-card:active {
+  cursor: grabbing;
+}
+
+.ghf-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  min-height: 140px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  display: block;
+}
+
+.ghf-thumb--broken {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--alf-text-muted, rgba(255, 255, 255, 0.4));
+}
+
+.ghf-title-line {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--alf-text, rgba(255, 255, 255, 0.9));
+}
+
+.ghf-meta {
+  font-size: 10px;
+  color: var(--alf-text-muted, rgba(255, 255, 255, 0.4));
+}
+
+.ghf-empty {
+  text-align: center;
+  padding: 36px 16px;
+}
+
+.ghf-empty-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--alf-text, rgba(255, 255, 255, 0.9));
+}
+
+.ghf-empty-desc {
+  margin: 0;
+  font-size: 11px;
+  color: var(--alf-text-muted, rgba(255, 255, 255, 0.48));
+  line-height: 1.5;
+}

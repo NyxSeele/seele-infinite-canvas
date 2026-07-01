@@ -1,0 +1,87 @@
+/* Velora brand tokens */
+:root {
+  --velora-gradient: linear-gradient(120deg, #22d3ee 0%, #34d399 45%, #6ee7b7 100%);
+  --velora-gradient-hover: linear-gradient(120deg, #38bdf8 0%, #4ade80 50%, #86efac 100%);
+  --velora-cyan: #22d3ee;
+  --velora-emerald: #34d399;
+  --velora-mint: #6ee7b7;
+}
+
+/* Velora brand shell background (shared by auth + loading) */
+.velora-shell-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background: #08080c;
+}
+
+.velora-shell-bg__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, black 20%, transparent 75%);
+}
+
+.velora-shell-bg__orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.55;
+}
+
+.velora-shell-bg__orb--1 {
+  width: 420px;
+  height: 420px;
+  top: -120px;
+  left: -80px;
+  background: #22d3ee;
+  opacity: 0.35;
+}
+
+.velora-shell-bg__orb--2 {
+  width: 360px;
+  height: 360px;
+  right: -60px;
+  bottom: -100px;
+  background: #34d399;
+  opacity: 0.4;
+}
+
+.velora-shell-bg__orb--3 {
+  width: 280px;
+  height: 280px;
+  top: 40%;
+  left: 35%;
+  background: #6ee7b7;
+  opacity: 0.28;
+}
+
+.velora-wordmark {
+  font-family: var(--font-sans);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  background: var(--velora-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: none;
+}
+
+.velora-wordmark--hero {
+  font-size: 48px;
+}
+
+.velora-wordmark--sm {
+  font-size: 22px;
+  margin-top: 4px;
+}
+
+.velora-wordmark--loading {
+  font-size: 28px;
+  margin-top: 20px;
+}

@@ -1,0 +1,129 @@
+.img-ref-picker {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  z-index: 10020;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 160px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(24, 24, 24, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  pointer-events: all;
+}
+
+.img-ref-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.img-ref-picker-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.img-ref-picker-cancel {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.img-ref-picker-cancel:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.img-ref-picker-empty {
+  padding: 28px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.img-ref-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  overflow: auto;
+  padding: 2px;
+}
+
+.img-ref-picker-cell {
+  position: relative;
+  aspect-ratio: 1;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  overflow: hidden;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.img-ref-picker-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.img-ref-picker-cell-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 4px 6px;
+  font-size: 10px;
+  color: #fff;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.img-ref-picker-cell--hover {
+  border-color: rgba(99, 179, 237, 0.65);
+}
+
+.img-ref-picker-cell--selected {
+  border-color: rgba(99, 179, 237, 1);
+  box-shadow: 0 0 0 2px rgba(99, 179, 237, 0.35);
+}
+
+.img-ref-picker-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.img-ref-picker-confirm {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #111;
+  background: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+}
+
+.img-ref-picker-confirm:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.img-ref-picker-confirm:not(:disabled):hover {
+  background: #fff;
+}

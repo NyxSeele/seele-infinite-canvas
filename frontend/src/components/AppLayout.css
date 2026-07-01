@@ -1,0 +1,112 @@
+.app-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.app-nav .tab-btn {
+  text-decoration: none;
+  display: inline-block;
+}
+
+.app-nav .tab-btn.active {
+  background: #fff;
+  color: #1677ff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-nav-link {
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: #1677ff;
+  color: #fff;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.header-nav-link:hover {
+  background: #4096ff;
+}
+
+.header-admin-link {
+  color: #1677ff;
+  text-decoration: none;
+  font-size: 14px;
+  transition: color 0.2s;
+}
+
+.header-admin-link:hover {
+  color: #4096ff;
+}
+
+.header-logout {
+  padding: 6px 14px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fff;
+  color: #333;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.header-logout:hover {
+  border-color: #ff4d4f;
+  color: #ff4d4f;
+}
+
+.quota-bar {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #666;
+}
+
+/* Dark canvas theme — header background/border */
+body[data-canvas-theme="dark"] .app-header,
+body[data-canvas-theme="dark"] header,
+body[data-canvas-theme="dark"] nav {
+  background-color: #111111 !important;
+  border-bottom-color: #1f1f1f !important;
+}
+
+body[data-canvas-theme="dark"] .app-header *,
+body[data-canvas-theme="dark"] header *,
+body[data-canvas-theme="dark"] nav * {
+  color: #e0e0e0 !important;
+}
+
+/* Dark canvas theme — header link/button overrides */
+body[data-canvas-theme="dark"] .header-nav-link {
+  background: #2a2a2a;
+  color: #f0f0f0;
+  border: 1px solid #3a3a3a;
+}
+body[data-canvas-theme="dark"] .header-nav-link:hover {
+  background: #3a3a3a;
+}
+body[data-canvas-theme="dark"] .header-admin-link {
+  color: #888888;
+}
+body[data-canvas-theme="dark"] .header-admin-link:hover {
+  color: #f0f0f0;
+}
+body[data-canvas-theme="dark"] .header-logout {
+  background: transparent;
+  border-color: #3a3a3a;
+  color: #888888;
+}
+body[data-canvas-theme="dark"] .header-logout:hover {
+  border-color: #ff4444;
+  color: #ff4444;
+}

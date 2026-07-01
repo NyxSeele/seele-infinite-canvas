@@ -1,0 +1,30 @@
+.node-loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 120px;
+  padding: 24px 16px;
+  color: var(--tl-text-secondary, rgba(255, 255, 255, 0.5));
+}
+
+.node-loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(167, 139, 250, 0.9);
+  border-radius: 50%;
+  animation: node-loading-spin 0.75s linear infinite;
+}
+
+.node-loading-text {
+  font-size: 13px;
+  text-align: center;
+}
+
+@keyframes node-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

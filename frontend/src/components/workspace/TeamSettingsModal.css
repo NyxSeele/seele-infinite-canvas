@@ -1,0 +1,155 @@
+.team-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.team-modal {
+  width: min(520px, 100%);
+  max-height: min(80vh, 640px);
+  overflow: auto;
+  background: var(--tl-card-bg, #fff);
+  color: var(--tl-text, #111);
+  border-radius: 14px;
+  border: 1px solid var(--tl-border, #e5e5e5);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+  padding: 20px;
+}
+
+.team-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.team-modal-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.team-modal-close {
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  cursor: pointer;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.team-modal-section {
+  margin-bottom: 20px;
+}
+
+.team-modal-section h3 {
+  margin: 12px 0 8px;
+  font-size: 14px;
+}
+
+.team-modal-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.team-modal-error {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.team-modal-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.team-modal-input,
+.team-modal-select {
+  flex: 1;
+  min-width: 120px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--tl-border, #ddd);
+  background: var(--tl-input-bg, #fafafa);
+  color: inherit;
+  font-size: 13px;
+}
+
+.team-modal-select--sm {
+  flex: 0 0 auto;
+  min-width: 96px;
+}
+
+.team-modal-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.team-modal-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--tl-border, #ddd);
+  background: var(--tl-card-bg, #fff);
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.team-modal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.team-modal-btn--danger {
+  border-color: color-mix(in srgb, #ef4444 40%, transparent);
+  color: #b91c1c;
+}
+
+.team-member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.team-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--tl-text-secondary, #888) 15%, transparent);
+}
+
+.team-member-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.team-member-role {
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+.team-member-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.team-modal-leave {
+  margin-top: 12px;
+}

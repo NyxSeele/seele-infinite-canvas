@@ -1,0 +1,47 @@
+/* 编辑态与展示态保持相同占位，避免双击后卡片高度塌陷 */
+.cn-content-slot {
+  box-sizing: border-box;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+  width: 100%;
+}
+
+.cn-content-slot--tall {
+  min-height: 300px;
+}
+
+.cn-content-slot--scene {
+  min-height: 7.5em;
+}
+
+.cn-edit-match {
+  box-sizing: border-box;
+  width: 100%;
+  flex: 1;
+  min-height: inherit;
+  font-family: inherit;
+  line-height: 1.75;
+}
+
+/* React Flow 按内容测量高度时保持各类型节点最小宽度 */
+.react-flow__node-text-note {
+  width: 320px !important;
+}
+
+.react-flow__node-text-response {
+  width: 480px !important;
+}
+
+.react-flow__node-outline {
+  width: 540px !important;
+}
+
+.react-flow__node-shot-script {
+  width: 840px !important;
+}
+
+.react-flow__node-script-table {
+  width: 1360px !important;
+}

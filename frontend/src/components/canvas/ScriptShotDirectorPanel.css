@@ -1,0 +1,80 @@
+.st-shot-director {
+  margin: 6px 0 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--tl-input-bg);
+  border: 1px solid var(--tl-card-border);
+}
+
+.st-shot-director-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.st-shot-director-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tl-text-secondary);
+}
+
+.st-director-toggle {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--tl-card-border);
+  background: var(--tl-toolbar-btn-bg);
+  color: var(--tl-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.st-director-summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--tl-text-primary);
+}
+
+.st-director-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.st-director-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.st-director-field--wide {
+  grid-column: 1 / -1;
+}
+
+.st-director-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tl-text-secondary);
+}
+
+.st-director-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--tl-card-bg);
+  border: 1px solid var(--tl-input-border);
+  border-radius: 8px;
+  color: var(--tl-text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  outline: none;
+  font-family: inherit;
+}
+
+.st-director-input:focus {
+  border-color: var(--tl-card-border-hover);
+}

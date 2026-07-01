@@ -1,0 +1,102 @@
+/* 全链路卡片：标题 / 标签 / 正文层级 */
+
+.cn-title {
+
+  font-size: 17px;
+
+  font-weight: 700;
+
+  color: var(--tl-text-primary);
+
+  letter-spacing: 0.01em;
+
+}
+
+
+
+.cn-section-title {
+
+  font-size: 15px;
+
+  font-weight: 700;
+
+  color: var(--tl-text-primary);
+
+}
+
+
+
+.cn-label {
+
+  font-size: 12px;
+
+  font-weight: 600;
+
+  color: var(--tl-text-secondary);
+
+  letter-spacing: 0.02em;
+
+}
+
+
+
+.cn-body {
+
+  font-size: 14px;
+
+  line-height: 1.7;
+
+  color: var(--tl-text-primary);
+
+}
+
+
+
+.cn-body-lg {
+
+  font-size: 15px;
+
+  line-height: 1.75;
+
+  color: var(--tl-text-primary);
+
+}
+
+
+
+.cn-emphasis {
+
+  font-weight: 700;
+
+  color: var(--tl-text-primary);
+
+}
+
+
+
+.cn-muted {
+
+  color: var(--tl-text-secondary);
+
+  font-weight: 400;
+
+}
+
+
+
+.cn-param-key {
+
+  font-weight: 700;
+
+  color: rgba(167, 139, 250, 0.95);
+
+}
+
+
+
+.rf-page--light .cn-param-key {
+
+  color: #7c3aed;
+
+}
+

@@ -1,0 +1,77 @@
+.scope-switch-panel {
+  overflow: hidden;
+}
+
+.scope-switch-panel--exiting {
+  animation: scope-switch-out 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.scope-switch-panel--entering {
+  animation: scope-switch-in 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes scope-switch-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes scope-switch-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+
+.scope-switch-panel--entering.scope-switch-stagger > *,
+.scope-switch-panel--entering .scope-switch-stagger > * {
+  opacity: 0;
+  animation: scope-switch-stagger-in 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: calc(var(--i, 0) * 35ms);
+}
+
+@keyframes scope-switch-stagger-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scope-switch-panel--exiting {
+    animation: scope-switch-out-reduced 80ms ease forwards;
+  }
+
+  .scope-switch-panel--entering {
+    animation: scope-switch-in-reduced 80ms ease forwards;
+  }
+
+  .scope-switch-panel--entering.scope-switch-stagger > *,
+  .scope-switch-panel--entering .scope-switch-stagger > * {
+    animation: scope-switch-in-reduced 80ms ease forwards;
+    animation-delay: 0ms;
+  }
+
+  @keyframes scope-switch-in-reduced {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes scope-switch-out-reduced {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+}

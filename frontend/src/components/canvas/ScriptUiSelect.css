@@ -1,0 +1,55 @@
+.st-ui-select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+}
+
+.st-ui-select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid rgba(196, 181, 253, 0.85);
+  transform: translateY(-25%);
+}
+
+.st-ui-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 7px 28px 7px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(167, 139, 250, 0.28);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.08) 0%,
+    rgba(0, 0, 0, 0.22) 100%
+  );
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  min-width: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.st-ui-select:hover {
+  border-color: rgba(167, 139, 250, 0.5);
+}
+
+.st-ui-select:focus {
+  outline: none;
+  border-color: rgba(167, 139, 250, 0.65);
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.18);
+}
+
+.st-ui-select option {
+  background: #1e1e22;
+  color: #fff;
+}

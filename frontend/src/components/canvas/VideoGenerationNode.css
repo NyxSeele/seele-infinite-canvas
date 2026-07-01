@@ -1,0 +1,138 @@
+/* VideoGenerationNode — gn2-* styles are in GenerationCardNode.css */
+.gn2-style-ref-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--accent, #6366f1);
+  opacity: 0.9;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+.gn2-style-ref-badge svg {
+  display: block;
+}
+
+.gn2-style-ref-corner {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 22;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.52);
+  color: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  pointer-events: auto;
+  cursor: default;
+}
+
+.gn2-style-ref-corner svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+/* Zone slide-out overrides for video node (same as GenerationCardNode) */
+.gn2-plus-left-zone.gn2-plus-zone--visible {
+  transform: translateY(-50%) translateX(-18px);
+}
+.gn2-plus-right-zone.gn2-plus-zone--visible {
+  transform: translateY(-50%) translateX(18px);
+}
+
+.gn2-video-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* 预览区不拦截指针：点击空白处可拖动卡片 */
+  pointer-events: none;
+}
+
+.gn2-video-wrap .gn2-result-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+/* 仅交互控件恢复指针事件 */
+.gn2-video-wrap .gn2-video-play-zone,
+.gn2-video-wrap .gn2-video-dots-wrap {
+  pointer-events: auto;
+}
+
+.gn2-video-play-zone {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gn2-video-play-btn {
+  width: 52px;
+  height: 52px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, background 0.15s, transform 0.15s;
+}
+
+.gn2-video-play-zone:hover .gn2-video-play-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.gn2-video-play-zone:hover .gn2-video-play-btn:hover {
+  background: rgba(0, 0, 0, 0.72);
+  transform: scale(1.05);
+}
+
+.gn2-video-dots-wrap {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 25;
+  opacity: 1;
+}
+
+.gn2-video-dots-wrap .cell-dots-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 1px;
+}
+
+.gn2-video-dots-wrap .cell-dots-btn:hover {
+  background: rgba(0, 0, 0, 0.55);
+}

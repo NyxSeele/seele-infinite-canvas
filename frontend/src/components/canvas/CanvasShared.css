@@ -1,0 +1,524 @@
+@import "../../styles/promptBarTokens.css";
+
+/* ── React Flow handle: hidden by default, shows on node hover ─ */
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node:not(.selected) .gn2-root,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node:not(.selected) .tn-wrapper,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node:not(.selected) .tr-wrapper,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node:not(.selected) .ss-wrapper,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node:not(.selected) .st-wrapper,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node:not(.selected) .sbc-root {
+  opacity: var(--canvas-unselected-opacity);
+  transition: opacity 0.2s ease;
+}
+
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .gn2-root,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .tn-wrapper,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .tr-wrapper {
+  opacity: 1;
+}
+
+.react-flow__handle.node-handle {
+  width: 14px !important;
+  height: 14px !important;
+  border-radius: 50% !important;
+  background: var(--gn2-plus-bg, #3a3a3a) !important;
+  border: 2px solid var(--gn2-plus-border, #666) !important;
+  opacity: 0;
+  pointer-events: all;
+  transition: opacity 0.2s, background 0.15s;
+  cursor: crosshair;
+  transform: translateY(-50%) !important;
+  z-index: 20 !important;
+}
+
+/* Fix offset for 14px target handle (React Flow default assumes ~8px) */
+.react-flow__handle-left.node-handle {
+  left: -7px !important;
+}
+/* Fix offset for 22px source handle — 12px gap from card right edge */
+.react-flow__handle-right.source.node-handle {
+  right: -34px !important;
+}
+
+.canvas-card:hover .react-flow__handle.node-handle,
+.canvas-card:focus-within .react-flow__handle.node-handle,
+.gn2-root:hover .react-flow__handle.node-handle,
+.gn2-root:focus-within .react-flow__handle.node-handle {
+  opacity: 1;
+}
+
+/* Spring-back animation: retract into card then spring out */
+@keyframes handle-spring-back {
+  0%   { transform: translateY(-50%) translateX(0)     scale(1);    }
+  30%  { transform: translateY(-50%) translateX(-60px) scale(0.12); }
+  65%  { transform: translateY(-50%) translateX(14px)  scale(1.30); }
+  82%  { transform: translateY(-50%) translateX(-4px)  scale(0.94); }
+  100% { transform: translateY(-50%) translateX(0)     scale(1);    }
+}
+
+.react-flow__handle.source.node-handle.handle-returning {
+  transition: top 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+  animation: handle-spring-back 0.62s cubic-bezier(0.34, 1.56, 0.64, 1) forwards !important;
+}
+
+/* Hide source handle while node picker is open */
+.picker-open .react-flow__handle.source.node-handle {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+  animation: none !important;
+}
+
+/* source handle: always visible as a '+' affordance */
+.react-flow__handle.source.node-handle {
+  opacity: 1 !important;
+  width: 22px !important;
+  height: 22px !important;
+  background: var(--gn2-plus-bg, #2a2a2a) !important;
+  border: 1.5px solid var(--gn2-plus-border, rgba(255,255,255,0.25)) !important;
+  border-radius: 50% !important;
+}
+.react-flow__handle.source.node-handle::after {
+  content: "+";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--gn2-plus-fg, rgba(255,255,255,0.5));
+  line-height: 1;
+  pointer-events: none;
+}
+.react-flow__handle.source.node-handle:hover {
+  background: var(--gn2-plus-bg-hover, #3a3a3a) !important;
+  border-color: var(--gn2-plus-border-hover, rgba(255,255,255,0.6)) !important;
+}
+.react-flow__handle.source.node-handle:hover::after {
+  color: var(--gn2-plus-fg-hover, #fff);
+}
+
+.react-flow__handle.node-handle:hover {
+  background: var(--gn2-plus-bg-hover, #ffffff) !important;
+  border-color: var(--gn2-plus-border-hover, #ffffff) !important;
+}
+
+/* ── Shared card shell ─────────────────────────────────────── */
+.canvas-card {
+  background: #161616;
+  border-radius: 12px;
+  border: none;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  min-width: 220px;
+  transition: box-shadow 0.2s;
+  font-family: var(--font-sans);
+  backdrop-filter: blur(4px);
+}
+.canvas-card:hover {
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.38);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px 6px;
+  border-bottom: none;
+  user-select: none;
+  background: transparent;
+}
+
+.card-title-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-secondary, #666666);
+  flex-shrink: 0;
+}
+
+.card-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #666666);
+  letter-spacing: 0.01em;
+}
+
+.card-close-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #888888);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  padding: 0;
+  line-height: 1;
+}
+.card-close-btn:hover {
+  color: #ff4444;
+  background: rgba(255, 68, 68, 0.1);
+}
+
+.card-body {
+  padding: 14px;
+}
+
+/* ── Inputs ────────────────────────────────────────────────── */
+.card-prompt-input {
+  width: 100%;
+  min-height: 72px;
+  padding: 10px 12px;
+  border: 1px solid var(--input-border, #e0e0e0);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: none;
+  box-sizing: border-box;
+  background: var(--input-bg, #f5f5f5);
+  color: var(--text-primary, #111111);
+  transition: border-color 0.2s;
+  outline: none;
+}
+.card-prompt-input:focus {
+  border-color: var(--card-border-hover, #c0c0c0);
+}
+.card-prompt-input::placeholder {
+  color: var(--text-placeholder, #aaaaaa);
+}
+
+/* ── Size / option buttons ─────────────────────────────────── */
+.card-size-options {
+  display: flex;
+  gap: 5px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.size-option-btn {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--input-border, #e0e0e0);
+  background: var(--tag-bg, #f0f0f0);
+  color: var(--text-secondary, #666666);
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.size-option-btn:hover {
+  border-color: var(--card-border-hover, #c0c0c0);
+  color: var(--text-primary, #111111);
+}
+.size-option-btn.active {
+  background: var(--btn-primary, #111111);
+  color: var(--btn-primary-text, #ffffff);
+  border-color: var(--btn-primary, #111111);
+  font-weight: 500;
+}
+
+/* ── Primary action button ─────────────────────────────────── */
+.card-generate-btn,
+.card-retry-btn {
+  width: 100%;
+  height: 36px;
+  margin-top: 10px;
+  border: none;
+  background: var(--btn-primary, #111111);
+  color: var(--btn-primary-text, #ffffff);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.card-generate-btn:hover,
+.card-retry-btn:hover { opacity: 0.85; }
+
+/* ── Readonly prompt ───────────────────────────────────────── */
+.card-readonly-prompt {
+  padding: 10px 12px;
+  background: var(--input-bg, #f5f5f5);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #666666);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+/* ── Progress ──────────────────────────────────────────────── */
+.card-progress-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.progress-bar-bg {
+  width: 100%;
+  height: 4px;
+  background: var(--input-bg, #f5f5f5);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--btn-primary, #111111);
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+.progress-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #666666);
+  text-align: center;
+}
+.progress-label {
+  font-size: 11px;
+  color: var(--text-placeholder, #aaaaaa);
+  text-align: center;
+}
+
+/* ── Image preview ─────────────────────────────────────────── */
+.card-image-preview {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--input-bg, #f5f5f5);
+}
+.card-image-preview img {
+  width: 100%;
+  display: block;
+  object-fit: cover;
+}
+.card-image-preview:hover { opacity: 0.92; }
+
+/* ── Prompt display (collapsible) ──────────────────────────── */
+.card-prompt-display { margin-top: 10px; }
+.prompt-toggle {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--card-border, #e5e5e5);
+  background: transparent;
+  color: var(--text-secondary, #666666);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+.prompt-toggle:hover { background: var(--input-bg, #f5f5f5); }
+.prompt-text {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--input-bg, #f5f5f5);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-secondary, #666666);
+  line-height: 1.5;
+}
+
+/* ── Secondary action buttons ──────────────────────────────── */
+.card-action-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.card-action-buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.action-btn {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--input-border, #e0e0e0);
+  background: transparent;
+  color: var(--text-secondary, #666666);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 0.15s, color 0.15s;
+}
+.action-btn:hover {
+  opacity: 0.85;
+  color: var(--text-primary, #111111);
+}
+
+/* ── Error states ──────────────────────────────────────────── */
+.card-error-section {
+  padding: 12px;
+  background: var(--error-bg, #fff1f0);
+  border: 1px solid var(--error-border, #ffb3b0);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  text-align: center;
+}
+.error-icon { font-size: 24px; margin-bottom: 4px; }
+.error-text { font-size: 12px; color: var(--error-text, #d4380d); }
+.card-error-message {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--error-bg, #fff1f0);
+  border: 1px solid var(--error-border, #ffb3b0);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--error-text, #d4380d);
+}
+
+/* ── Model selector ────────────────────────────────────────── */
+.card-model-select {
+  width: 100%;
+  background: var(--tl-input-bg, #1f1f1f);
+  border: 1px solid var(--tl-card-border, #2a2a2a);
+  border-radius: 8px;
+  color: var(--tl-text-secondary, #888);
+  font-size: 12px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  outline: none;
+  box-sizing: border-box;
+}
+.card-model-select:focus { border-color: var(--tl-card-border-hover, #3a3a3a); }
+
+/* Hide only the fallback left target handle (.node-handle class), NOT in-container source */
+.react-flow__handle-left.node-handle {
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  min-height: 1px !important;
+  background: transparent !important;
+  border: none !important;
+  opacity: 0 !important;
+}
+
+/* ── Source handle anchors: large hit area, centered on card edge ──
+   width:40px height:60px so RF reads center = card edge.
+   Negative margin shifts bbox center onto the edge.
+   z-index:30 > zone z-index:21, so drag events reach Handle first.
+*/
+.react-flow__handle.gn2-edge-handle {
+  position: absolute !important;
+  top: 50% !important;
+  width: 40px !important;
+  height: 60px !important;
+  min-width: 40px !important;
+  min-height: 60px !important;
+  margin-top: -30px !important;
+  opacity: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  pointer-events: all !important;
+  cursor: crosshair !important;
+  border-radius: 0 !important;
+  z-index: 30 !important;
+  transform: none !important;
+}
+.react-flow__handle.gn2-edge-handle--right {
+  right: -20px !important;  /* center = right:0 i.e. card edge */
+  left: auto !important;
+}
+.react-flow__handle.gn2-edge-handle--left {
+  left: -20px !important;   /* center = left:0 i.e. card edge */
+  right: auto !important;
+}
+
+/* ── Plus zone: fixed at card vertical center, slides out on hover (shared with image-gen) ── */
+.gn2-plus-right-zone {
+  position: absolute;
+  right: -18px;
+  top: 50%;
+  transform: translateY(-50%) translateX(0);
+  width: 36px;
+  height: 60px;
+  z-index: 21;
+  pointer-events: all;
+  cursor: crosshair;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.25s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+.gn2-plus-right-zone.gn2-plus-zone--visible {
+  transform: translateY(-50%) translateX(18px);
+}
+
+.gn2-plus-left-zone {
+  position: absolute;
+  left: -18px;
+  top: 50%;
+  transform: translateY(-50%) translateX(0);
+  width: 36px;
+  height: 60px;
+  z-index: 21;
+  pointer-events: all;
+  cursor: crosshair;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.25s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+.gn2-plus-left-zone.gn2-plus-zone--visible {
+  transform: translateY(-50%) translateX(-18px);
+}
+
+.gn2-plus-btn-visual {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--gn2-plus-bg, #2a2a2a);
+  border: 1.5px solid var(--gn2-plus-border, rgba(255, 255, 255, 0.25));
+  color: var(--gn2-plus-fg, rgba(255, 255, 255, 0.5));
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: crosshair;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.15s, border-color 0.15s, color 0.15s;
+  z-index: 1;
+  flex-shrink: 0;
+  user-select: none;
+}
+.gn2-plus-zone--visible .gn2-plus-btn-visual {
+  opacity: 1;
+}
+.gn2-plus-zone--visible:hover .gn2-plus-btn-visual {
+  background: var(--gn2-plus-bg-hover, #3a3a3a);
+  border-color: var(--gn2-plus-border-hover, rgba(255, 255, 255, 0.6));
+  color: var(--gn2-plus-fg-hover, #fff);
+}
+
+.rf-page--light .gn2-plus-btn-visual {
+  --gn2-plus-bg: #f0f0f0;
+  --gn2-plus-border: rgba(0, 0, 0, 0.18);
+  --gn2-plus-fg: rgba(0, 0, 0, 0.55);
+  --gn2-plus-bg-hover: #e4e4e4;
+  --gn2-plus-border-hover: rgba(0, 0, 0, 0.35);
+  --gn2-plus-fg-hover: #111;
+}
+
+/* ── Ref-image tag ─────────────────────────────────────────── */
+.ref-image-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--tag-bg, #f0f0f0);
+  color: var(--text-secondary, #666666);
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-bottom: 10px;
+}

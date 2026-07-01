@@ -1,0 +1,87 @@
+.jt-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--tl-bg);
+  color: var(--tl-text-primary);
+}
+
+.jt-card {
+  width: min(440px, 100%);
+  background: var(--tl-card-bg);
+  border: 1px solid var(--tl-card-border);
+  border-radius: 18px;
+  box-shadow: var(--tl-card-shadow);
+  padding: 28px 24px;
+}
+
+.jt-card h1 {
+  margin: 0 0 12px;
+  font-size: 22px;
+}
+
+.jt-desc {
+  margin: 0 0 10px;
+  line-height: 1.6;
+  color: var(--tl-text-primary);
+}
+
+.jt-muted {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--tl-text-secondary);
+  line-height: 1.5;
+}
+
+.jt-quota {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--tl-input-bg);
+  border: 1px solid var(--tl-card-border);
+}
+
+.jt-error {
+  margin: 0 0 12px;
+  color: var(--tl-error-text);
+  font-size: 13px;
+}
+
+.jt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.jt-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.jt-btn--ghost {
+  background: transparent;
+  color: var(--tl-text-secondary);
+}
+
+.rf-page--light .jt-btn--ghost {
+  background: #eef0f3;
+  border: 1px solid #dfe3ea;
+  color: var(--tl-text-primary);
+}
+
+.jt-btn--primary {
+  background: var(--tl-btn-primary-bg);
+  color: var(--tl-btn-primary-fg);
+}
+
+.jt-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

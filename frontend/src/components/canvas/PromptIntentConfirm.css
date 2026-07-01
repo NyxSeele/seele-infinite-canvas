@@ -1,0 +1,284 @@
+.pic-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.rf-page--light .pic-backdrop,
+body:has(.rf-page--light) .pic-backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.pic-dialog {
+  width: min(520px, 96vw);
+  max-height: 85vh;
+  overflow: auto;
+  padding: 20px 22px;
+  border-radius: 14px;
+  background: var(--card-bg, #1e1e1e);
+  border: 1px solid var(--card-border, rgba(255, 255, 255, 0.12));
+  box-shadow: var(--card-shadow, 0 16px 48px rgba(0, 0, 0, 0.5));
+  color: var(--text-primary, rgba(255, 255, 255, 0.95));
+}
+
+body:has(.rf-page--light) .pic-dialog {
+  background: var(--tl-card-bg, #ffffff);
+  border-color: var(--tl-card-border, #e5e5e5);
+  color: var(--tl-text-primary, #111111);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.12);
+}
+
+.pic-backdrop.rf-page--light .pic-dialog {
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+  box-shadow: var(--card-shadow);
+}
+
+.pic-backdrop.rf-page--dark .pic-dialog {
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+  box-shadow: var(--card-shadow);
+}
+
+.pic-backdrop.rf-page--light .pic-btn--ghost {
+  background: var(--tl-toolbar-btn-bg);
+  color: var(--text-secondary);
+}
+
+.pic-backdrop.rf-page--light .pic-btn--ghost:hover:not(:disabled) {
+  background: var(--tl-toolbar-btn-hover);
+  color: var(--text-primary);
+}
+
+.pic-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pic-sub {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.pic-loading {
+  margin: 16px 0;
+  color: #a78bfa;
+}
+
+.rf-page--light .pic-loading,
+body:has(.rf-page--light) .pic-loading {
+  color: #7c3aed;
+}
+
+.pic-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pic-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pic-conf {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.pic-summary {
+  margin: 0 0 12px;
+  line-height: 1.55;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.pic-warn {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  color: #fcd34d;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.rf-page--light .pic-warn,
+body:has(.rf-page--light) .pic-warn {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(217, 119, 6, 0.35);
+  color: #b45309;
+}
+
+.pic-prompt-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.pic-prompt-edit {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border, rgba(167, 139, 250, 0.35));
+  background: var(--input-bg, rgba(0, 0, 0, 0.3));
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.55;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.pic-backdrop.rf-page--light .pic-prompt-edit,
+body:has(.rf-page--light) .pic-backdrop .pic-prompt-edit {
+  background: #ffffff;
+  border-color: #e5e5e5;
+  color: #111111;
+}
+
+.pic-backdrop.rf-page--light .pic-prompt-edit:focus,
+body:has(.rf-page--light) .pic-backdrop .pic-prompt-edit:focus {
+  outline: none;
+  border-color: #bdbdbd;
+  background: #ffffff;
+}
+
+.pic-backdrop.rf-page--dark .pic-prompt-edit {
+  background: #1a1a1a;
+  border-color: #333333;
+  color: #f0f0f0;
+}
+
+.pic-prompt-edit:focus {
+  outline: none;
+  border-color: var(--card-border-hover, rgba(167, 139, 250, 0.55));
+}
+
+.pic-hint {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.pic-hint strong {
+  color: #c4b5fd;
+}
+
+.rf-page--light .pic-hint strong,
+body:has(.rf-page--light) .pic-hint strong {
+  color: #7c3aed;
+}
+
+.pic-skip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  line-height: 1.45;
+}
+
+.pic-skip input {
+  margin-top: 3px;
+  accent-color: #a78bfa;
+}
+
+.pic-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.pic-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  border: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pic-btn--ghost {
+  background: var(--tl-toolbar-btn-bg, rgba(255, 255, 255, 0.08));
+  color: var(--text-secondary);
+}
+
+.pic-btn--ghost:hover:not(:disabled) {
+  background: var(--tl-toolbar-btn-hover, rgba(255, 255, 255, 0.12));
+  color: var(--text-primary);
+}
+
+.pic-btn--secondary {
+  background: var(--tl-toolbar-btn-bg, rgba(255, 255, 255, 0.08));
+  color: var(--tl-text-primary, #e9d5ff);
+  border: 1px solid var(--tl-card-border, rgba(255, 255, 255, 0.12));
+}
+
+.rf-page--light .pic-btn--secondary,
+body:has(.rf-page--light) .pic-btn--secondary {
+  background: #eef0f3;
+  color: var(--tl-text-primary, #111111);
+  border-color: #dfe3ea;
+}
+
+.rf-page--light .pic-btn--secondary:hover:not(:disabled),
+body:has(.rf-page--light) .pic-btn--secondary:hover:not(:disabled) {
+  background: #e4e7ec;
+}
+
+.pic-btn--secondary:hover:not(:disabled) {
+  background: var(--tl-toolbar-btn-hover, rgba(255, 255, 255, 0.12));
+}
+
+.pic-btn--primary {
+  background: var(--tl-btn-primary-bg, #8b5cf6);
+  color: var(--tl-btn-primary-fg, #fff);
+  border: 1px solid var(--tl-btn-primary-bg, #8b5cf6);
+}
+
+.rf-page--light .pic-btn--primary,
+body:has(.rf-page--light) .pic-btn--primary {
+  background: #111111;
+  color: #ffffff;
+  border-color: #111111;
+}
+
+.pic-btn--primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.rf-page--light .pic-btn--primary:hover:not(:disabled),
+body:has(.rf-page--light) .pic-btn--primary:hover:not(:disabled) {
+  background: #2a2a2a;
+  border-color: #2a2a2a;
+  filter: none;
+}
+
+.pic-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

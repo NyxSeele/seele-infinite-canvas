@@ -1,0 +1,71 @@
+.velora-loading-page {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: #f2f2f5;
+}
+
+.velora-loading-page__center {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.velora-loading-page__logo-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 140px;
+  height: 140px;
+  margin: -70px 0 0 -70px;
+  border-radius: 50%;
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  box-shadow:
+    0 0 40px rgba(34, 211, 238, 0.12),
+    0 0 80px rgba(52, 211, 153, 0.08);
+  animation: velora-ring-pulse 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.velora-loading-page__logo {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  animation: velora-logo-spin 2.8s linear infinite;
+  filter: drop-shadow(0 8px 28px rgba(52, 211, 153, 0.35));
+}
+
+.velora-loading-page__message {
+  margin: 16px 0 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.06em;
+}
+
+@keyframes velora-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes velora-ring-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.65;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}

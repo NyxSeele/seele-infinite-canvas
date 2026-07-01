@@ -1,0 +1,26 @@
+# 环境变量与密钥
+.env
+backend/.env
+frontend/.env.local
+frontend/.env.production.local
+
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.db
+backend/.pytest_cache/
+backend/uploads/
+backend/scripts/adversarial_results/*
+!backend/scripts/adversarial_results/.gitkeep
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

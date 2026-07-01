@@ -1,0 +1,339 @@
+/* 大纲 / 分镜表 / 剧本等文本链路卡片 — 跟随画布主题 */
+
+.rf-page .outline-card,
+.rf-page .st-root,
+.rf-page .ss-card,
+.rf-page .tr-card,
+.rf-page .sbc-root {
+  background: var(--tl-card-bg);
+  border-color: var(--tl-card-border);
+  box-shadow: var(--tl-card-shadow);
+  color: var(--tl-text-primary);
+}
+
+.rf-page .outline-node-header,
+.rf-page .st-header,
+.rf-page .ss-header,
+.rf-page .tr-header {
+  background: var(--tl-card-bg);
+  border-color: var(--tl-card-border);
+  color: var(--tl-text-primary);
+}
+
+.rf-page .st-header-title,
+.rf-page .ss-title,
+.rf-page .tr-title,
+.rf-page .outline-node-title {
+  color: var(--tl-text-primary);
+}
+
+.rf-page .outline-version-tab,
+.rf-page .st-tab,
+.rf-page .ss-tab,
+.rf-page .tr-tab {
+  background: var(--tl-toolbar-btn-bg);
+  border-color: var(--tl-card-border);
+  color: var(--tl-text-secondary);
+}
+
+.rf-page .outline-version-tab--active,
+.rf-page .st-tab--active,
+.rf-page .ss-tab--active {
+  background: var(--tl-menu-hover);
+  border-color: var(--tl-card-border-hover);
+  color: var(--tl-text-primary);
+}
+
+.rf-page .outline-body,
+.rf-page .outline-segment,
+.rf-page .st-table-wrap,
+.rf-page .st-row,
+.rf-page .ss-body,
+.rf-page .tr-body {
+  background: var(--tl-card-bg);
+  border-color: var(--tl-card-border);
+  color: var(--tl-text-primary);
+}
+
+.rf-page .outline-segment-meta,
+.rf-page .st-col-head,
+.rf-page .st-th {
+  background: var(--tl-input-bg);
+  color: var(--tl-text-secondary);
+  border-color: var(--tl-card-border);
+}
+
+.rf-page .outline-btn,
+.rf-page .st-btn,
+.rf-page .ss-btn,
+.rf-page .tr-btn,
+.rf-page .outline-action-btn {
+  background: var(--tl-toolbar-btn-bg);
+  border: 1px solid var(--tl-card-border);
+  color: var(--tl-text-primary);
+}
+
+.rf-page .outline-btn:hover,
+.rf-page .st-btn:hover,
+.rf-page .ss-btn:hover,
+.rf-page .tr-btn:hover,
+.rf-page .outline-action-btn:hover {
+  background: var(--tl-toolbar-btn-hover);
+  color: var(--tl-text-primary);
+}
+
+.rf-page .outline-btn--primary,
+.rf-page .st-btn--primary,
+.rf-page .ss-btn--primary,
+.rf-page .tr-btn--primary {
+  background: var(--tl-btn-primary-bg);
+  color: var(--tl-btn-primary-fg);
+  border-color: var(--tl-btn-primary-bg);
+}
+
+.rf-page .ref-panel {
+  background: var(--tl-menu-bg);
+  border-color: var(--tl-menu-border);
+  box-shadow: var(--tl-menu-shadow);
+}
+
+.rf-page .ref-panel-item {
+  color: var(--tl-text-primary);
+}
+
+.rf-page .ref-panel-item:hover {
+  background: var(--tl-menu-hover);
+}
+
+.rf-page .st-preset-apply-btn,
+.rf-page .st-shot-edit-toggle,
+.rf-page .st-add-row {
+  background: var(--tl-toolbar-btn-bg);
+  border: 1px solid var(--tl-card-border);
+  color: var(--tl-text-primary);
+}
+
+.rf-page .st-preset-apply-btn:hover:not(:disabled),
+.rf-page .st-shot-edit-toggle:hover,
+.rf-page .st-add-row:hover {
+  background: var(--tl-toolbar-btn-hover);
+}
+
+.rf-page .st-lib-card .st-cast-collapsible-toggle {
+  background: transparent;
+  border: none;
+  color: var(--tl-text-primary);
+}
+
+.rf-page .st-lib-card .st-cast-collapsible-toggle:hover {
+  background: transparent;
+}
+
+.rf-page .st-mini-input,
+.rf-page .st-shot-prompt-input,
+.rf-page .st-director-input {
+  background: var(--tl-input-bg);
+  border-color: var(--tl-input-border);
+  color: var(--tl-text-primary);
+}
+
+/* 亮色模式：卡片白底，仅功能按钮浅灰底 */
+.rf-page--light .st-header,
+.rf-page--light .outline-node-header,
+.rf-page--light .ss-header,
+.rf-page--light .tr-header {
+  background: var(--tl-card-bg);
+}
+
+.rf-page--light .st-toolbar,
+.rf-page--light .st-toolbar--simple {
+  background: transparent;
+  border: none;
+}
+
+.rf-page--light .st-toolbar-pills {
+  background: transparent;
+  border: none;
+}
+
+.rf-page--light .st-advanced-toolbar {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.rf-page .st-continuity-toggle {
+  color: var(--tl-text-secondary);
+}
+
+.rf-page .st-advanced-toolbar--open .st-continuity-toggle span {
+  color: var(--tl-text-primary);
+}
+
+.rf-page--light .st-continuity-toggle,
+.rf-page--light .st-advanced-toolbar--open .st-continuity-toggle span {
+  color: var(--tl-text-primary);
+}
+
+.rf-page--light .nb-topbar {
+  background: transparent;
+}
+
+/* 亮色：分镜表可点击项统一浅灰底（避免透明无边框） */
+.rf-page--light .st-shot-action-btn,
+.rf-page--light .st-shot-num-input,
+.rf-page--light .st-preset-apply-btn,
+.rf-page--light .st-shot-edit-toggle,
+.rf-page--light .st-add-row,
+.rf-page--light .st-director-toggle,
+.rf-page--light .st-gen-all-btn:not(.st-gen-all-btn--primary),
+.rf-page--light .st-mode-tab,
+.rf-page--light .st-shot-menu-btn,
+.rf-page--light .st-shot-gen-beats,
+.rf-page--light .st-shot-gen-storyboard,
+.rf-page--light .st-shot-gen-video,
+.rf-page--light .st-shot-gen-image,
+.rf-page--light .st-shot-retry-btn,
+.rf-page--light .sbc-delete-btn,
+.rf-page--light .st-kf-add-btn,
+.rf-page--light .st-shot-scene-select,
+.rf-page--light .st-scene-add-btn,
+.rf-page--light .st-beat-del,
+.rf-page--light .st-beat-add-btn {
+  background: var(--tl-btn-secondary-bg, #eef0f3);
+  border: 1px solid var(--tl-btn-secondary-border, #dfe3ea);
+  color: var(--tl-btn-secondary-fg, var(--tl-text-primary));
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.rf-page--light .st-gen-all-btn--primary {
+  background: #111111;
+  border-color: #111111;
+  color: #ffffff;
+}
+
+.rf-page--light .st-gen-all-btn--primary:hover:not(:disabled) {
+  background: #2a2a2a;
+  border-color: #2a2a2a;
+}
+
+.rf-page--light .st-mode-tab--active {
+  background: #ffffff;
+  border-color: #b8bcc4;
+  color: var(--tl-text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.rf-page--light .st-shot-action-btn--primary {
+  background: var(--tl-btn-secondary-hover, #f3f5f8);
+  border-color: var(--tl-card-border-hover, #cdd2d9);
+  color: var(--tl-text-primary);
+}
+
+.rf-page--light .st-lib-card .st-cast-collapsible-toggle {
+  background: transparent;
+  border: none;
+  color: var(--tl-text-primary);
+}
+
+.rf-page--light .nb-icon-btn {
+  background: transparent;
+  border: none;
+}
+.rf-page--light .st-theme-context,
+.rf-page--light .st-global-style,
+.rf-page--light .outline-version-tab,
+.rf-page--light .tr-screenplay-btn,
+.rf-page--light .tr-screenplay-view-src,
+.rf-page--light .tr-retry-btn,
+.rf-page--light .tr-action-btn {
+  background: var(--tl-btn-secondary-bg, #eef0f3);
+  border: 1px solid var(--tl-btn-secondary-border, #dfe3ea);
+  color: var(--tl-text-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.rf-page--light .st-toolbar-row--models .st-model-dropup {
+  background: transparent;
+  border-color: transparent;
+}
+
+.rf-page--light .st-toolbar-pills .nb-model-btn-bare {
+  background: var(--tl-btn-secondary-bg, #eef0f3) !important;
+  border: 1px solid var(--tl-btn-secondary-border, #dfe3ea) !important;
+}
+
+.rf-page--light .st-toolbar-pills .nb-model-btn-bare:hover {
+  background: var(--tl-btn-secondary-hover, #f3f5f8) !important;
+  border-color: var(--tl-card-border-hover, #cdd2d9) !important;
+}
+
+.rf-page--light .ncd-dots-btn {
+  background: transparent;
+  border: none;
+  color: var(--tl-text-secondary);
+}
+
+.rf-page--light .st-shot-action-btn:hover:not(:disabled),
+.rf-page--light .nb-icon-btn:hover,
+.rf-page--light .st-preset-apply-btn:hover:not(:disabled),
+.rf-page--light .st-shot-edit-toggle:hover,
+.rf-page--light .st-add-row:hover,
+.rf-page--light .st-director-toggle:hover,
+.rf-page--light .st-gen-all-btn:not(.st-gen-all-btn--primary):hover:not(:disabled),
+.rf-page--light .st-mode-tab:hover,
+.rf-page--light .st-shot-menu-btn:hover,
+.rf-page--light .st-shot-gen-beats:hover:not(:disabled),
+.rf-page--light .st-shot-gen-storyboard:hover:not(:disabled),
+.rf-page--light .st-shot-gen-video:hover:not(:disabled),
+.rf-page--light .st-shot-gen-image:hover:not(:disabled),
+.rf-page--light .st-shot-retry-btn:hover:not(:disabled),
+.rf-page--light .sbc-delete-btn:hover:not(:disabled),
+.rf-page--light .st-kf-add-btn:hover,
+.rf-page--light .st-scene-add-btn:hover:not(:disabled),
+.rf-page--light .st-beat-del:hover,
+.rf-page--light .st-beat-add-btn:hover,
+.rf-page--light .outline-version-tab:hover,
+.rf-page--light .tr-screenplay-btn:hover:not(:disabled),
+.rf-page--light .tr-action-btn:hover:not(:disabled) {
+  background: var(--tl-btn-secondary-hover, #f3f5f8);
+}
+
+.rf-page--light .tr-action-row,
+.rf-page--light .tr-screenplay-synced {
+  background: transparent;
+  border: 1px solid var(--tl-card-border);
+}
+
+.rf-page--light .st-cast-add-btn {
+  background: var(--tl-btn-secondary-bg, #eef0f3);
+  border: 1px solid var(--tl-btn-secondary-border, #dfe3ea);
+  color: var(--tl-text-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.rf-page--light .st-cast-add-btn:hover:not(:disabled) {
+  background: var(--tl-btn-secondary-hover, #f3f5f8);
+}
+
+.rf-page--light .st-mini-input,
+.rf-page--light .st-shot-prompt-input,
+.rf-page--light .st-director-input {
+  background: #f5f5f5;
+  border-color: #e0e0e0;
+  color: var(--tl-text-primary);
+}
+
+.rf-page--light .st-mini-input:hover,
+.rf-page--light .st-mini-input:focus,
+.rf-page--light .st-shot-prompt-input:hover,
+.rf-page--light .st-shot-prompt-input:focus,
+.rf-page--light .st-director-input:hover,
+.rf-page--light .st-director-input:focus {
+  background: #ffffff;
+  border-color: #c0c4cc;
+}
+
+.rf-page--light .st-segment-divider-label {
+  color: #7c3aed;
+}

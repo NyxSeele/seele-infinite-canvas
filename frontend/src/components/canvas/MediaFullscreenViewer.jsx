@@ -1,0 +1,172 @@
+import { useState, useEffect, useRef, useCallback } from "react"
+import { createPortal } from "react-dom"
+import "./GenerationCardNode.css"
+
+const MIN_SCALE = 0.5
+const MAX_SCALE = 6
+
+function isVideoSrc(src) {
+  return /\.(mp4|webm|mov|mkv)(\?|$)/i.test(src || "")
+}
+
+export default function MediaFullscreenViewer({ src, kind, onClose }) {
+  const isVideo = kind === "video" || isVideoSrc(src)
+  const [imgPos, setImgPos] = useState({ x: 0, y: 0 })
+  const [scale, setScale] = useState(1)
+  const [dragging, setDragging] = useState(false)
+  const dragStart = useRef({ mx: 0, my: 0, ix: 0, iy: 0 })
+  const wrapperRef = useRef(null)
+
+  const resetView = useCallback(() => {
+    setImgPos({ x: 0, y: 0 })
+    setScale(1)
+  }, [])
+
+  const closeFullscreen = useCallback(() => {
+    resetView()
+    setDragging(false)
+    onClose()
+  }, [onClose, resetView])
+
+  useEffect(() => {
+    if (!src) return
+    document.body.classList.add("image-fullscreen-open")
+    const onKey = (e) => {
+      if (e.key === "Escape") closeFullscreen()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("keydown", onKey)
+      document.body.classList.remove("image-fullscreen-open")
+    }
+  }, [src, closeFullscreen])
+
+  useEffect(() => {
+    if (!dragging || isVideo) return
+    const onMove = (e) => {
+      e.stopPropagation()
+      setImgPos({
+        x: dragStart.current.ix + e.clientX - dragStart.current.mx,
+        y: dragStart.current.iy + e.clientY - dragStart.current.my,
+      })
+    }
+    const onUp = (e) => {
+      e.stopPropagation()
+      setDragging(false)
+    }
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+    return () => {
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+    }
+  }, [dragging, isVideo])
+
+  const handleWheel = useCallback(
+    (e) => {
+      if (isVideo) return
+      e.preventDefault()
+      e.stopPropagation()
+
+      setScale((prevScale) => {
+        const nextScale = Math.min(
+          MAX_SCALE,
+          Math.max(MIN_SCALE, prevScale - e.deltaY * 0.001)
+        )
+        if (nextScale === prevScale) return prevScale
+
+        const ratio = nextScale / prevScale
+        const dx = e.clientX - window.innerWidth / 2
+        const dy = e.clientY - window.innerHeight / 2
+
+        setImgPos((prev) => ({
+          x: prev.x - (dx - prev.x) * (ratio - 1),
+          y: prev.y - (dy - prev.y) * (ratio - 1),
+        }))
+
+        return nextScale
+      })
+    },
+    [isVideo]
+  )
+
+  useEffect(() => {
+    if (!src || isVideo) return
+    const el = wrapperRef.current
+    if (!el) return
+    el.addEventListener("wheel", handleWheel, { passive: false })
+    return () => el.removeEventListener("wheel", handleWheel)
+  }, [src, isVideo, handleWheel])
+
+  if (!src) return null
+
+  const wrapperTransform = isVideo
+    ? undefined
+    : `translate(calc(-50% + ${imgPos.x}px), calc(-50% + ${imgPos.y}px)) scale(${scale})`
+
+  return createPortal(
+    <div className="image-viewer" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        ref={wrapperRef}
+        className={`image-viewer__wrapper${isVideo ? " image-viewer__wrapper--video" : ""}`}
+        style={
+          isVideo
+            ? undefined
+            : {
+                transform: wrapperTransform,
+                transition: dragging ? "none" : "transform 0.08s ease-out",
+                cursor: dragging ? "grabbing" : "grab",
+              }
+        }
+        onMouseDown={
+          isVideo
+            ? undefined
+            : (e) => {
+                if (e.button !== 0) return
+                e.stopPropagation()
+                setDragging(true)
+                dragStart.current = {
+                  mx: e.clientX,
+                  my: e.clientY,
+                  ix: imgPos.x,
+                  iy: imgPos.y,
+                }
+              }
+        }
+      >
+        {isVideo ? (
+          <video
+            className="image-viewer__video"
+            src={src}
+            controls
+            autoPlay
+            playsInline
+            loop
+          />
+        ) : (
+          <img
+            src={src}
+            alt=""
+            draggable={false}
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              resetView()
+            }}
+          />
+        )}
+        <button
+          type="button"
+          className="image-viewer__close nodrag nopan"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            closeFullscreen()
+          }}
+        >
+          ×
+        </button>
+      </div>
+    </div>,
+    document.body
+  )
+}

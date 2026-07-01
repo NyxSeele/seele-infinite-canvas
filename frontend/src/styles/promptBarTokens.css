@@ -1,0 +1,22 @@
+/* Prompt Bar design tokens */
+:root {
+  --prompt-input-min-h-text: 136px;
+  --prompt-input-min-h-image: 128px;
+  --prompt-input-min-h-video: 104px;
+  --prompt-input-expanded-min-h: 200px;
+  --prompt-input-max-h: 160px;
+  --prompt-input-expanded-max-h: 320px;
+  --prompt-banner-padding: 12px 16px;
+  --prompt-accent: #a78bfa;
+  --prompt-accent-border: rgba(167, 139, 250, 0.55);
+  --prompt-accent-glow: rgba(167, 139, 250, 0.22);
+  --canvas-spinner-color: #a78bfa;
+  --canvas-unselected-opacity: 0.72;
+}
+
+.rf-page--light {
+  --prompt-accent: #7c6ff7;
+  --prompt-accent-border: rgba(124, 111, 247, 0.45);
+  --prompt-accent-glow: rgba(124, 111, 247, 0.18);
+  --canvas-spinner-color: #7c6ff7;
+}

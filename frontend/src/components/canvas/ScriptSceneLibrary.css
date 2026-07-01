@@ -1,0 +1,53 @@
+.st-scene-lib {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.st-scene-chip {
+  border-color: var(--tl-card-border);
+}
+
+.st-scene-chip-type {
+  color: var(--tl-text-primary);
+}
+
+.st-scene-thumb-pending {
+  border: 1.5px dashed var(--tl-card-border);
+  background: var(--tl-toolbar-btn-bg);
+  color: var(--tl-text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.st-scene-add-btn {
+  white-space: nowrap;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--tl-card-border);
+  background: var(--tl-toolbar-btn-bg);
+  color: var(--tl-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.st-scene-add-btn:hover:not(:disabled) {
+  background: var(--tl-toolbar-btn-hover);
+}
+
+.st-scene-empty {
+  margin: 0 0 4px;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.st-scene-import-item {
+  outline: none;
+}

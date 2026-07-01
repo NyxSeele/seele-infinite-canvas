@@ -1,0 +1,304 @@
+.asset-lib-panel--overlay {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  min-height: 0;
+  overflow: hidden;
+  font-size: 14px;
+}
+
+.asset-lib-panel--overlay .clt-asset-desc {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.asset-lib-panel--overlay .clt-asset-filters {
+  gap: 8px;
+}
+
+.asset-lib-panel--overlay .clt-asset-filter {
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.asset-lib-panel--overlay .clt-asset-filter--active {
+  background: rgba(167, 139, 250, 0.2);
+  border-color: rgba(167, 139, 250, 0.45);
+  color: #fff;
+}
+
+.asset-lib-panel--overlay .clt-asset-grid {
+  flex: 1;
+  max-height: none;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 12px;
+  padding: 2px 2px 6px;
+}
+
+.asset-lib-panel--overlay .clt-asset-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 36px 20px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.asset-lib-panel--overlay .clt-asset-card-main {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
+}
+
+.asset-lib-panel--overlay .clt-asset-card-main:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.asset-lib-panel--overlay .clt-asset-name {
+  font-size: 13px;
+}
+
+.asset-lib-panel--overlay .clt-asset-kind {
+  font-size: 11px;
+}
+
+.asset-lib-panel--overlay .clt-asset-add {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.asset-lib-panel--overlay .clt-asset-input {
+  flex: 1;
+  min-width: 160px;
+  font-size: 14px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.asset-lib-panel--overlay .clt-asset-upload-btn {
+  font-size: 13px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  background: rgba(167, 139, 250, 0.22);
+}
+
+.asset-lib-panel--overlay .st-model-dropup .nb-model-btn-bare {
+  min-width: 100px;
+  font-size: 13px;
+}
+
+.clt-asset-panel {
+  position: relative;
+  width: 300px;
+  max-height: min(72vh, 640px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 12px;
+}
+
+.clt-asset-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.clt-asset-desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 400;
+}
+
+.clt-asset-desc strong {
+  color: rgba(196, 181, 253, 0.95);
+  font-weight: 600;
+}
+
+.clt-asset-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.clt-asset-filter {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.6);
+  font-family: inherit;
+}
+
+.clt-asset-filter--active {
+  background: rgba(167, 139, 250, 0.28);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.clt-asset-grid {
+  flex: 1;
+  min-height: 100px;
+  max-height: 360px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  align-content: start;
+  padding-right: 2px;
+}
+
+.clt-asset-card {
+  position: relative;
+}
+
+.clt-asset-card-main {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  font-family: inherit;
+  color: inherit;
+}
+
+.clt-asset-card-main:hover {
+  border-color: rgba(167, 139, 250, 0.45);
+  background: rgba(167, 139, 250, 0.08);
+}
+
+.clt-asset-thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.clt-asset-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clt-asset-kind {
+  font-size: 11px;
+  color: rgba(167, 139, 250, 0.85);
+  text-align: left;
+}
+
+.clt-asset-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.clt-asset-card:hover .clt-asset-del {
+  opacity: 1;
+}
+
+.clt-asset-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.clt-asset-input {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  padding: 9px 12px;
+  font-family: inherit;
+}
+
+.clt-asset-upload-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(167, 139, 250, 0.35);
+  color: #fff;
+  font-family: inherit;
+}
+
+.clt-asset-upload-btn:hover:not(:disabled) {
+  background: rgba(167, 139, 250, 0.55);
+}
+
+.clt-asset-upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.clt-asset-file {
+  display: none;
+}
+
+.clt-asset-error {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  color: #f87171;
+}
+
+.clt-asset-toast {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.88);
+  color: #fff;
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  pointer-events: none;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}

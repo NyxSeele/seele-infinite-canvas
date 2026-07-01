@@ -1,0 +1,92 @@
+.pnm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.52);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.pnm-card {
+  width: min(100%, 360px);
+  padding: 28px 24px 22px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.22);
+  text-align: center;
+}
+
+.pnm-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  color: #6366f1;
+  background: color-mix(in srgb, #6366f1 12%, #fff);
+}
+
+.pnm-title {
+  margin: 0 0 10px;
+  font-size: 17px;
+  font-weight: 650;
+  color: #111827;
+  letter-spacing: -0.02em;
+}
+
+.pnm-message {
+  margin: 0 0 22px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: #4b5563;
+}
+
+.pnm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 120px;
+  height: 38px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 999px;
+  background: #111827;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.pnm-btn:hover {
+  filter: brightness(1.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .pnm-card {
+    background: #1a1a1a;
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
+  }
+
+  .pnm-title {
+    color: #f3f4f6;
+  }
+
+  .pnm-message {
+    color: #a1a1aa;
+  }
+
+  .pnm-btn {
+    background: #f3f4f6;
+    color: #111827;
+  }
+}

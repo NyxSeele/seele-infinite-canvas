@@ -1,0 +1,97 @@
+@import "../../styles/promptBarTokens.css";
+
+.nb-banner--prompt-video .nb-textarea-wrap {
+  min-height: var(--prompt-input-min-h-video);
+}
+
+.nb-banner--prompt-image .mention-editor {
+  min-height: var(--prompt-input-min-h-image);
+  max-height: var(--prompt-input-max-h);
+}
+
+.nb-banner--prompt-video .mention-editor {
+  min-height: var(--prompt-input-min-h-video);
+  max-height: var(--prompt-input-max-h);
+}
+
+.mention-editor--expanded {
+  min-height: var(--prompt-input-expanded-min-h);
+  max-height: var(--prompt-input-expanded-max-h);
+}
+
+.mention-editor {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  min-height: 80px;
+  max-height: 160px;
+  width: 100%;
+  padding: 8px 0;
+  font-family: inherit;
+  line-height: 1.5;
+  flex: 1;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+}
+
+.mention-editor--disabled {
+  opacity: 0.55;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.mention-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-placeholder);
+  pointer-events: none;
+}
+
+.mention-token {
+  color: #4c9aff;
+  font-weight: 500;
+  border-radius: 4px;
+  padding: 0 2px;
+  user-select: all;
+  cursor: default;
+}
+
+.mention-token--selected {
+  background: rgba(76, 154, 255, 0.22);
+  outline: 1px solid rgba(76, 154, 255, 0.45);
+}
+
+.mention-hover-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: var(--tl-menu-bg);
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  border-radius: 12px;
+  box-shadow: var(--tl-menu-shadow);
+  pointer-events: auto;
+  max-width: 200px;
+}
+
+.mention-hover-preview img {
+  width: 160px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+
+.mention-hover-preview-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

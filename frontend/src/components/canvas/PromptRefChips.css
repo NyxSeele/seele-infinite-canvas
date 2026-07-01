@@ -1,0 +1,80 @@
+.prompt-ref-chips {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 0 0 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+
+.prompt-ref-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.prompt-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 140px;
+  height: 32px;
+  padding: 2px 6px 2px 2px;
+  border-radius: 8px;
+  background: var(--tl-toolbar-btn-bg);
+  border: 1px solid var(--card-border);
+}
+
+.prompt-ref-chip img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.prompt-ref-chip-fallback {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--input-bg);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.prompt-ref-chip-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.prompt-ref-chip-remove {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.prompt-ref-chip-remove:hover {
+  background: var(--tl-toolbar-btn-hover);
+  color: var(--text-primary);
+}
+
+.nb-textarea-wrap .prompt-ref-chips {
+  padding-top: 0;
+}

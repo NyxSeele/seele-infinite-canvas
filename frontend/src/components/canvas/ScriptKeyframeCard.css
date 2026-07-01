@@ -1,0 +1,240 @@
+.st-kf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 4px 0 8px;
+}
+
+.st-kf-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--tl-input-bg);
+  border: 1px solid var(--tl-card-border);
+  min-width: 0;
+}
+
+.st-kf-card--generating {
+  border-color: rgba(167, 139, 250, 0.35);
+}
+
+.st-kf-card--completed {
+  border-color: rgba(80, 200, 120, 0.25);
+}
+
+.st-kf-card--failed {
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.st-kf-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.st-kf-label-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--tl-card-bg);
+  border: 1px solid var(--tl-input-border);
+  border-radius: 6px;
+  color: var(--tl-text-primary);
+  font-size: 14px;
+  padding: 5px 8px;
+  outline: none;
+  font-family: inherit;
+}
+
+.st-kf-status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.5);
+  flex-shrink: 0;
+}
+
+.st-kf-status--completed {
+  color: #6ee7a0;
+  background: rgba(80, 200, 120, 0.12);
+}
+
+.st-kf-status--generating {
+  color: #c4b5fd;
+  background: rgba(167, 139, 250, 0.15);
+}
+
+.st-kf-status--failed {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.st-kf-del {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.st-kf-del:hover {
+  color: #f87171;
+}
+
+.st-kf-card .st-prompt-field .mention-editor--script-row {
+  min-height: 72px;
+  max-height: 160px;
+}
+
+.st-kf-media-row {
+  display: flex;
+  gap: 12px;
+}
+
+.st-kf-media-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.st-kf-media-label {
+  align-self: flex-start;
+}
+
+.st-kf-thumb {
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.st-kf-thumb--result {
+  border-color: rgba(80, 200, 120, 0.4);
+}
+
+.st-kf-thumb-placeholder {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.28);
+  font-size: 11px;
+}
+
+.st-kf-ref-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.st-kf-result-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  line-height: 0;
+}
+
+.st-kf-time {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.st-kf-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.st-kf-mini-btn {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.st-kf-mini-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.st-kf-gen-btn {
+  flex: 1;
+  min-width: 88px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  background: rgba(167, 139, 250, 0.15);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.st-kf-gen-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.st-kf-gen-btn:hover:not(:disabled) {
+  background: rgba(167, 139, 250, 0.28);
+}
+
+.st-kf-error {
+  margin: 0;
+  font-size: 11px;
+  color: #fca5a5;
+  line-height: 1.4;
+}
+
+.st-kf-add-btn {
+  min-height: 120px;
+  border: 1px solid var(--tl-card-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--tl-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.st-kf-add-btn:hover {
+  border-color: rgba(167, 139, 250, 0.4);
+  color: var(--tl-text-primary);
+  background: rgba(167, 139, 250, 0.06);
+}
+
+.st-shot-prompt-wrap {
+  min-width: 0;
+}
+
+.st-shot-prompt-wrap .mention-editor--script-row {
+  min-height: 56px;
+  max-height: 120px;
+}

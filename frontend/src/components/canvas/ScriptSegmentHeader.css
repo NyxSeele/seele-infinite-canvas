@@ -1,0 +1,25 @@
+.st-segment-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 6px 0 4px;
+  padding: 4px 0;
+  box-sizing: border-box;
+}
+
+.st-segment-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--tl-card-border);
+  opacity: 0.85;
+}
+
+.st-segment-divider-label {
+  flex-shrink: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: #a78bfa;
+}

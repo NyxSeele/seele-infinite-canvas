@@ -1,0 +1,27 @@
+.agent-node-thinking {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  background: rgba(74, 127, 212, 0.12);
+  border: 1px solid rgba(74, 127, 212, 0.35);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.rf-page--light .agent-node-thinking {
+  background: rgba(74, 127, 212, 0.08);
+  color: rgba(0, 0, 0, 0.78);
+}
+
+.agent-node-thinking__icon {
+  flex-shrink: 0;
+}
+
+.agent-node-thinking__text {
+  flex: 1;
+  white-space: pre-wrap;
+}

@@ -1,0 +1,38 @@
+.ghost-edge-line {
+  stroke: var(--rf-edge-stroke, rgba(255, 255, 255, 0.42));
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  transition: stroke 0.2s, filter 0.2s, stroke-width 0.2s;
+}
+
+.ghost-edge-glow {
+  stroke: rgba(255, 255, 255, 0);
+  stroke-width: 6;
+  stroke-linecap: round;
+  fill: none;
+  filter: blur(4px);
+  transition: stroke 0.2s;
+  pointer-events: none;
+}
+
+.ghost-edge-group:hover .ghost-edge-line,
+.ghost-edge-node-selected .ghost-edge-line {
+  stroke: var(--rf-edge-stroke-hover, rgba(255, 255, 255, 0.9));
+  stroke-width: 1.8;
+  filter: var(--rf-edge-shadow, drop-shadow(0 0 3px rgba(255,255,255,0.7)) drop-shadow(0 0 8px rgba(255,255,255,0.35)));
+}
+
+.ghost-edge-group:hover .ghost-edge-glow,
+.ghost-edge-node-selected .ghost-edge-glow {
+  stroke: var(--rf-edge-glow, rgba(255, 255, 255, 0.18));
+}
+
+.react-flow__edge.selected .ghost-edge-line {
+  stroke: var(--rf-edge-stroke-active, rgba(255, 255, 255, 0.95));
+  stroke-width: 2;
+  filter: var(--rf-edge-shadow-active, drop-shadow(0 0 4px rgba(255,255,255,0.8)) drop-shadow(0 0 12px rgba(255,255,255,0.4)));
+}
+
+.react-flow__edge.selected .ghost-edge-glow {
+  stroke: var(--rf-edge-glow-active, rgba(255, 255, 255, 0.25));
+}

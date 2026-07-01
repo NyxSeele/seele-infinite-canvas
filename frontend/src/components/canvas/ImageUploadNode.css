@@ -1,0 +1,136 @@
+/* ── ImageUploadNode — dark theme, matches GenerationCardNode ── */
+
+.iu-wrapper {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  overflow: visible;
+  position: relative;
+}
+
+/* Label row — reuses gn2-label-row from GenerationCardNode.css */
+.iu-close-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.35);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.iu-wrapper:hover .iu-close-btn { opacity: 1; }
+.iu-close-btn:hover { color: rgba(255,255,255,0.8); }
+
+/* Card body */
+.iu-card {
+  background: rgba(20,20,20,0.88);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  backdrop-filter: blur(4px);
+  overflow: hidden;
+  pointer-events: all;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.iu-card--selected {
+  box-shadow: 0 0 0 2px #7c6ff7, 0 0 16px 4px rgba(124,111,247,0.45);
+  border-color: #7c6ff7;
+}
+
+/* Drop zone (no image yet) */
+.iu-drop-zone {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  border: 1.5px dashed rgba(255,255,255,0.15);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  transition: border-color 0.2s, background 0.2s;
+  margin: 8px;
+  width: calc(100% - 16px);
+}
+.iu-drop-zone:hover,
+.iu-drop-zone--dragging {
+  border-color: rgba(255,255,255,0.35);
+  background: rgba(255,255,255,0.06);
+}
+.iu-upload-icon { font-size: 28px; opacity: 0.5; }
+.iu-upload-hint {
+  font-size: 13px;
+  color: rgba(255,255,255,0.6);
+  font-weight: 500;
+}
+.iu-upload-sub {
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+}
+.iu-uploading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.5);
+}
+
+/* Spinner — kept from original */
+.upload-spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255,255,255,0.15);
+  border-top-color: rgba(255,255,255,0.7);
+  border-radius: 50%;
+  animation: iu-spin 0.7s linear infinite;
+}
+@keyframes iu-spin { to { transform: rotate(360deg); } }
+
+/* Preview area — SAME as .gn2-preview */
+.iu-preview {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 0;         /* card already has border-radius */
+  overflow: hidden;
+  position: relative;
+  background: #1a1a1a;
+  cursor: pointer;
+}
+/* gn2-result-img already handles object-fit:cover */
+
+/* Filename overlay — bottom-left absolute */
+.iu-filename {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Re-upload text button */
+.iu-reupload-btn {
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  padding: 8px 0;
+  width: 100%;
+  text-align: center;
+  transition: color 0.15s;
+}
+.iu-reupload-btn:hover { color: rgba(255,255,255,0.8); }

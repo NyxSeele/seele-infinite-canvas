@@ -1,0 +1,6 @@
+/* View Transitions：主题切换圆形扩散（动画由 useThemeTransition + WAAPI 驱动） */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}

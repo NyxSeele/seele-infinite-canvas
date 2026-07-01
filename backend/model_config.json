@@ -1,0 +1,4 @@
+{
+  "image_model": "v1-5-pruned-emaonly.safetensors",
+  "video_model": "ltx-video-2b-v0.9.5.safetensors"
+}

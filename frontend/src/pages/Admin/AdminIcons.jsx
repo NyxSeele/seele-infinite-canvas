@@ -1,0 +1,50 @@
+export function IconDashboard() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+      <rect x="2" y="2" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="10" y="2" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="2" y="10" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="10" y="10" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  )
+}
+
+export function IconUsers() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+      <circle cx="7" cy="6" r="2.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2.5 15c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="12.5" cy="6.5" r="2" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M11 15c.3-1.8 1.5-3 3.5-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+export function IconModels() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+      <rect x="3" y="4" width="12" height="10" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="6.5" cy="8.5" r="1.2" fill="currentColor" />
+      <circle cx="11.5" cy="8.5" r="1.2" fill="currentColor" />
+      <path d="M6 12h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M9 2v2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+export function IconTasks() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+      <path d="M3 5h12M3 9h8M3 13h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M14 9l1.5 1.5L18 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+export function IconChevron() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path d="M10 4L6 8l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}

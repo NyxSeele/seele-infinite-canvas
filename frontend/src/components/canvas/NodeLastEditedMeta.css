@@ -1,0 +1,12 @@
+.node-last-edited {
+  display: inline-block;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.2;
+  opacity: 0.55;
+  margin-left: 6px;
+  vertical-align: middle;
+}
