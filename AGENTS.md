@@ -10,10 +10,11 @@ AI Studio is a two-tier app: a **FastAPI backend** (`backend/`, port `7788`) and
 - Set `AGENT_MOCK_GENERATION=true` in `backend/.env` for E2E testing without a GPU/ComfyUI (real image/video generation needs an external ComfyUI at `COMFYUI_URL` plus `DASHSCOPE_API_KEY`/`DEEPSEEK_API_KEY` for LLM features). These are optional and not required to boot the app or run the canvas CRUD flow.
 
 ### Running services (from `/workspace`)
-- Python deps live in the repo-root venv at `/workspace/.venv` (not gitignored's `backend/.venv`). Use `/workspace/.venv/bin/...`.
+- Python deps live in the repo-root venv at `/workspace/.venv` (NOT `backend/.venv`). Use `/workspace/.venv/bin/...`.
+- **First-time DB setup (required on a fresh VM, not done by the update script):** `cd backend && /workspace/.venv/bin/alembic upgrade head && /workspace/.venv/bin/python init_db.py` (runs migrations 001-021, then create_all + seeds `admin`/`testuser`/`testuser2`). Idempotent; the SQLite file `backend/aistudio.db` is gitignored.
+- **Redis** (installed by the update script but not started by it): start with `redis-server --port 6379` in the background (e.g. a tmux session) before the backend if you want `redis:true`.
 - Backend: `cd backend && /workspace/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 7788` (add `--reload` for hot reload). Health check: `GET /api/health` returns `{"status":"ok","env":"development","redis":true}`.
 - Frontend: `cd frontend && npm run dev` → http://127.0.0.1:8173 (proxies API to `http://127.0.0.1:7788` via `frontend/.env.development`).
-- DB init/migrations: `cd backend && /workspace/.venv/bin/alembic upgrade head` then `/workspace/.venv/bin/python init_db.py` (create_all + seed). Idempotent.
 
 ### Testing / lint (non-obvious)
 - Backend tests: `cd backend && /workspace/.venv/bin/python -m pytest tests/ -q` (42 tests). `pytest` is a test-only dependency not in `requirements.txt`; the update script installs it.
