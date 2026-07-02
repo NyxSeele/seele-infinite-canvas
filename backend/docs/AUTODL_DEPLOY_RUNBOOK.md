@@ -2,7 +2,7 @@
 
 > 团队内测专用：单机部署前端 + 后端 + Redis + ComfyUI，供 4 人远程访问。  
 > 文本/Agent 走百炼 API（`DASHSCOPE_API_KEY`），不占 GPU。  
-> 版本：2026-06-30 · 对应 HANDOFF 第八节 B 真实 GPU 验收
+> 版本：2026-07-02 · 对应 HANDOFF 第八节 B 真实 GPU 验收
 
 **阅读顺序**：先读本手册 §1–§2 确认 GPU/磁盘 → 按 §3–§11 开机部署 → §12 验收与排错。
 
@@ -272,11 +272,14 @@ npm run build
 
 ### 8.1 安装
 
+ComfyUI 与 backend **共用 backend 的 venv**（与 [`deploy/supervisor-autodl.conf`](../../deploy/supervisor-autodl.conf) 一致，避免维护两套 Python 环境）：
+
 ```bash
 cd /root/autodl-tmp
 git clone https://github.com/comfyanonymous/ComfyUI.git comfyui
-cd comfyui
-pip install -r requirements.txt
+
+source /root/autodl-tmp/AIStudio/backend/.venv/bin/activate
+pip install -r /root/autodl-tmp/comfyui/requirements.txt
 # 若需 xformers 等按 ComfyUI 官方说明安装
 ```
 
@@ -309,8 +312,8 @@ ln -sf /root/autodl-tmp/models/checkpoints/*.safetensors \
 ### 8.4 启动 ComfyUI（仅本机）
 
 ```bash
-cd /root/autodl-tmp/comfyui
-python main.py --listen 127.0.0.1 --port 8000
+/root/autodl-tmp/AIStudio/backend/.venv/bin/python \
+  /root/autodl-tmp/comfyui/main.py --listen 127.0.0.1 --port 8000
 ```
 
 健康检查：
@@ -332,52 +335,12 @@ python scripts/_comfyui_workflow_structure_probe.py --model wan
 
 ## §9 Nginx（团队访问入口）
 
-创建 `/etc/nginx/sites-available/aistudio`（或 `conf.d/aistudio.conf`）：
-
-```nginx
-server {
-    listen 6006;
-    server_name _;
-
-    root /root/autodl-tmp/AIStudio/frontend/dist;
-    index index.html;
-
-    client_max_body_size 20m;
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:7788;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
-    }
-
-    location /health {
-        proxy_pass http://127.0.0.1:7788;
-        proxy_set_header Host $host;
-    }
-
-    location /ws {
-        proxy_pass http://127.0.0.1:7788;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
+仓库已提供模板 [`deploy/nginx-autodl.conf`](../../deploy/nginx-autodl.conf)。复制到系统配置目录并按注释修改路径（若项目不在 `/root/autodl-tmp/AIStudio`）：
 
 ```bash
+cp /root/autodl-tmp/AIStudio/deploy/nginx-autodl.conf /etc/nginx/sites-available/aistudio
+# 编辑 root= 指向前端 dist 目录（默认 /root/autodl-tmp/AIStudio/frontend/dist）
+ln -sf /etc/nginx/sites-available/aistudio /etc/nginx/sites-enabled/aistudio   # 若使用 sites-enabled
 nginx -t && nginx -s reload
 ```
 
@@ -387,37 +350,18 @@ nginx -t && nginx -s reload
 
 ## §10 Supervisor 常驻进程
 
-创建 `/etc/supervisor/conf.d/aistudio.conf`：
-
-```ini
-[program:comfyui]
-command=/root/autodl-tmp/comfyui/.venv/bin/python main.py --listen 127.0.0.1 --port 8000
-directory=/root/autodl-tmp/comfyui
-autostart=true
-autorestart=true
-stderr_logfile=/root/autodl-tmp/logs/comfyui.err.log
-stdout_logfile=/root/autodl-tmp/logs/comfyui.out.log
-environment=CUDA_VISIBLE_DEVICES="0"
-
-[program:aistudio-backend]
-command=/root/autodl-tmp/AIStudio/backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 7788
-directory=/root/autodl-tmp/AIStudio/backend
-autostart=true
-autorestart=true
-stderr_logfile=/root/autodl-tmp/logs/backend.err.log
-stdout_logfile=/root/autodl-tmp/logs/backend.out.log
-```
+仓库已提供模板 [`deploy/supervisor-autodl.conf`](../../deploy/supervisor-autodl.conf)。ComfyUI 与 backend **共用 backend venv** 的 Python（单一真相来源，勿在 Runbook 内再写另一套路径）：
 
 ```bash
 mkdir -p /root/autodl-tmp/logs
+cp /root/autodl-tmp/AIStudio/deploy/supervisor-autodl.conf /etc/supervisor/conf.d/aistudio.conf
+# 若代码路径非 /root/autodl-tmp/AIStudio 或 comfyui 不在 /root/autodl-tmp/comfyui，编辑 command/directory 三处路径
 supervisorctl reread
 supervisorctl update
 supervisorctl status
 ```
 
 Redis 使用系统服务：`systemctl enable redis-server`。
-
-若 ComfyUI 与 backend 共用 backend 的 venv，将 `comfyui` 的 `command` 改为对应 python 路径。
 
 ---
 

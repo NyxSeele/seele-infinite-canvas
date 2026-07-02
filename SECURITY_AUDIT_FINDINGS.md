@@ -129,8 +129,8 @@
 
 | 项 | 内容 |
 |----|------|
-| **当前行为** | `allow_origins=settings.cors_origin_list`；未配置时默认 localhost/127.0.0.1 的 **5173、3000、8173**（**不含 8174**）。`allow_credentials=True`；非 `*`。 |
-| **代码** | [`backend/main.py`](backend/main.py) L89-95；[`backend/core/config.py`](backend/core/config.py) L104-115 |
+| **当前行为** | `allow_origins=settings.cors_origin_list`；未配置 `CORS_ORIGINS` 时默认 localhost/127.0.0.1 的 **5173、3000、8173、8174**（历史 Vite 端口 + 当前 dev **8173**）。`allow_credentials=True`；非 `*`。 |
+| **代码** | [`backend/main.py`](backend/main.py) L89-95；[`backend/core/config.py`](backend/core/config.py) L132-146 |
 | **风险等级** | **低**（开发）；**中**（若生产未设 `CORS_ORIGINS` 则浏览器跨域失败而非过宽） |
 | **公网部署前** | 设置 `CORS_ORIGINS` 为正式前端域名；Vite 备用端口需一并列入 |
 
@@ -152,10 +152,10 @@
 
 | 项 | 内容 |
 |----|------|
-| **当前行为** | 一般 `/api/*` 受 IP 限流（默认 120/min，`.env` 可见 600）。`/api/agent/*` **未**在 skip 列表 → 受 IP 限流。**无** per-user Agent 专用频控。`check_user_rate_limit` 仅用于 **image/video 任务**（[`generation_guard.py`](backend/services/generation_guard.py)）。 |
-| **风险等级** | **中**（成本：LLM 按量计费） |
+| **当前行为** | 一般 `/api/*` 受 IP 限流（默认 120/min，`.env` 可调）。`/api/agent/run` 与 `/api/agent/chat-title` 在路由层调用 **`check_agent_rate_limit`**（默认 `AGENT_RATE_LIMIT_USER_PER_MINUTE=20`，Redis 优先）。`check_user_rate_limit` 另用于 **image/video 任务**（[`generation_guard.py`](backend/services/generation_guard.py)）。 |
+| **风险等级** | **低～中**（已有 per-user Agent 频控；公网仍可按套餐收紧配额） |
 | **本地四人用是否必改** | 否 |
-| **公网部署前** | 建议对 `/api/agent/run` 加用户级日配额或频控 |
+| **公网部署前** | 确认 Redis 已开；按需调低 `AGENT_RATE_LIMIT_USER_PER_MINUTE` 或增加日配额 |
 
 ---
 
@@ -168,7 +168,7 @@
 | 3 | 任务参考图读盘无归属校验 | **中～高** | 可缓 | 建议修 |
 | 4 | 团队媒体不按 project_id（队友可见） | **中** | **待产品确认** | 按产品决策 |
 | 5 | `.env.example` JWT 可预测占位符 | **中** | 可接受 | 必换密钥 |
-| 6 | Agent 无用户级频控（LLM 成本） | **中** | 可接受 | 建议加 |
+| 6 | Agent 用户级频控（`AGENT_RATE_LIMIT_*`） | **低～中** | 可接受 | 确认 Redis；按需收紧 |
 | 7 | 上传无 magic bytes | **中** | 可接受 | 建议加 |
 | 8 | 导出：团队 viewer 可下他人 zip | **低～中** | 可接受 | 确认策略 |
 | 9 | JWT 密钥多用途（API Key/媒体票） | **中** | 可接受 | 知悉轮换影响 |

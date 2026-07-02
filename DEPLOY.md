@@ -1,6 +1,6 @@
 # AI Studio 部署指南
 
-> 最后更新：2026-06-30 · 本地开发端口 **8173**（前端）/ **7788**（后端）
+> 最后更新：2026-07-02 · 本地开发端口 **8173**（前端）/ **7788**（后端）
 
 ## 架构概览
 
@@ -81,6 +81,17 @@ backend 容器启动时自动 `alembic upgrade head`。
 
 ComfyUI 仍在宿主机或另一容器，通过 `COMFYUI_URL` 连接。
 
+### 5. Docker 与镜头级视频风格参考（ffmpeg）
+
+**镜头级视频风格参考**（Prompt Bar → 风格参考）依赖 ffmpeg 抽帧分析（[`style_reference_service.py`](backend/services/style_reference_service.py) 优先 `imageio-ffmpeg`，否则系统 `ffmpeg`）。
+
+| 项 | 说明 |
+|----|------|
+| **当前镜像** | [`backend/Dockerfile`](backend/Dockerfile) **未安装** ffmpeg，也未 `pip install imageio-ffmpeg` |
+| **Docker 部署行为** | 该功能 API 返回 **503**（`ffmpeg 不可用`）；出图/视频/Agent 其它链路不受影响 |
+| **AutoDL / 裸机** | Runbook §5 已 `apt-get install ffmpeg`；可选 `pip install imageio-ffmpeg` |
+| **若要在 Docker 启用** | 在 Dockerfile 增加 `apt-get install -y ffmpeg` 并在 `requirements.txt` 或镜像构建步骤中 `pip install imageio-ffmpeg`，然后重建 backend 镜像 |
+
 ---
 
 ## 方式三：手动部署（不用 Docker）
@@ -160,9 +171,11 @@ cd backend && alembic upgrade head   # 含 001–021
 ### 建议（P1）
 
 - [ ] 公网正式环境：HTTPS、`CORS_ORIGINS`
+- [ ] **公网部署前必读**：[SECURITY_AUDIT_FINDINGS.md](SECURITY_AUDIT_FINDINGS.md)（JWT、seed、CORS、登录/Agent 限流等）
 - [ ] AutoDL 内测：可用平台自定义服务 URL，跳过自有证书
 - [ ] 备份 `uploads/` 与数据库
 - [ ] ComfyUI 切换日按 [COMFYUI_CUTOVER_RUNBOOK.md](backend/docs/COMFYUI_CUTOVER_RUNBOOK.md) 核对权重文件名
+- [ ] Docker 部署且需**镜头级视频风格参考**：按上文「Docker 与 ffmpeg」节扩展 backend 镜像；否则接受该功能 503
 
 ### 功能占位（不阻塞内测）
 
@@ -186,7 +199,7 @@ cd backend && alembic upgrade head   # 含 001–021
 | `DASHSCOPE_API_KEY` | Agent / 文本 / classify / 风格参考 |
 | `JIMENG_API_KEY` | 仅即梦 `jimeng-5.0-lite` |
 | `GENERATION_MAX_CONCURRENT` | 默认 3；4 人内测建议 2 |
-| `GENERATION_MAX_CONCURRENT_TEAM` | 默认 10 |
+| `GENERATION_MAX_CONCURRENT_TEAM` | 默认 10；4 人内测建议 8（见 `.env.example`） |
 | `RATE_LIMIT_*` / `LOGIN_*` / `AGENT_RATE_LIMIT_*` | 见 `.env.example` |
 | `AGENT_MOCK_GENERATION` | `true` 无 GPU 测链路；生产 `false` |
 | `AGENT_MOCK_FAILURE_RATE` | 0–1，测失败 UX |
@@ -230,3 +243,4 @@ A: HANDOFF 第八节 B + `scripts/_real_media_pipeline_probe.py`。
 | [backend/docs/AUTODL_DEPLOY_RUNBOOK.md](backend/docs/AUTODL_DEPLOY_RUNBOOK.md) | AutoDL 全流程 |
 | [backend/docs/COMFYUI_CUTOVER_RUNBOOK.md](backend/docs/COMFYUI_CUTOVER_RUNBOOK.md) | 模型切换与回滚 |
 | [backend/docs/V1_CANVAS_PROBE_COVERAGE.md](backend/docs/V1_CANVAS_PROBE_COVERAGE.md) | 探针覆盖 |
+| [SECURITY_AUDIT_FINDINGS.md](SECURITY_AUDIT_FINDINGS.md) | 公网部署前安全清单 |
