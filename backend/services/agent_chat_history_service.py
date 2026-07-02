@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from core.datetime_utils import to_utc_iso
 from models.agent_chat_archive import AgentChatArchive
+from services.canvas_access import touch_project_updated_at
 
 MAX_ARCHIVES_PER_PROJECT = 30
 MAX_MESSAGES_PER_ARCHIVE = 80
@@ -47,7 +49,7 @@ def list_chat_archives(db: Session, user_id: int, project_id: str) -> list[dict]
                 "project_id": row.project_id,
                 "title": row.title,
                 "messages": msgs if isinstance(msgs, list) else [],
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "updated_at": to_utc_iso(row.updated_at),
                 "updatedAt": int(row.updated_at.timestamp() * 1000) if row.updated_at else 0,
                 "message_count": count,
             }
@@ -99,6 +101,7 @@ def save_chat_archive(
         )
         db.add(row)
 
+    touch_project_updated_at(db, project_id)
     db.commit()
 
     total = (
@@ -139,5 +142,6 @@ def delete_chat_archive(
     if not row:
         return False
     db.delete(row)
+    touch_project_updated_at(db, project_id)
     db.commit()
     return True

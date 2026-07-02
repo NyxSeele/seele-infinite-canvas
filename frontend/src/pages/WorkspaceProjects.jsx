@@ -96,15 +96,23 @@ export default function WorkspaceProjects() {
 
     const onProjectSaved = (e) => {
 
-      const { projectId, updated_at } = e.detail || {}
+      const { projectId, updated_at, preview_url } = e.detail || {}
 
-      if (!projectId || !updated_at) return
+      if (!projectId) return
 
-      setProjects((prev) => prev.map((p) => (
+      setProjects((prev) => prev.map((p) => {
 
-        p.id === projectId ? { ...p, updated_at } : p
+        if (p.id !== projectId) return p
 
-      )))
+        const next = { ...p }
+
+        if (updated_at) next.updated_at = updated_at
+
+        if (preview_url !== undefined && preview_url !== null) next.preview_url = preview_url
+
+        return next
+
+      }))
 
     }
 
@@ -164,11 +172,25 @@ export default function WorkspaceProjects() {
 
   const handleRename = useCallback(async (projectId, name) => {
 
-    await saveCanvasProject(projectId, { name })
+    const res = await saveCanvasProject(projectId, { name })
 
     setProjects((prev) => prev.map((p) => (
 
-      p.id === projectId ? { ...p, name, updated_at: new Date().toISOString() } : p
+      p.id === projectId
+
+        ? {
+
+            ...p,
+
+            name,
+
+            updated_at: res.updated_at ?? p.updated_at,
+
+            preview_url: res.preview_url ?? p.preview_url,
+
+          }
+
+        : p
 
     )))
 

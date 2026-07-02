@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from models.agent_conversation import AgentConversation
+from services.canvas_access import touch_project_updated_at
 
 MAX_STORED_MESSAGES = 80
 
@@ -60,4 +61,5 @@ def save_conversation_messages(
                 updated_at=now,
             )
         )
+    touch_project_updated_at(db, project_id)
     db.commit()

@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from core.datetime_utils import to_utc_iso
 from models.canvas_comment import CanvasCommentMessage, CanvasCommentThread, new_comment_id
 from models.canvas_project import CanvasProject
+from services.canvas_access import touch_project_updated_at
 from services.notification_service import create_comment_mention_notifications
 from services.user_profile import avatar_url_map
 from services.canvas_lock import publish_project_event
@@ -58,8 +60,8 @@ def _serialize_message(row: CanvasCommentMessage, avatars: dict[int, str] | None
         "author_avatar_url": avatars.get(int(row.author_id), ""),
         "body": row.body,
         "mentioned_user_ids": _mentioned_ids_from_row(row),
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "created_at": to_utc_iso(row.created_at),
+        "updated_at": to_utc_iso(row.updated_at),
     }
 
 
@@ -73,7 +75,7 @@ def _serialize_thread(
         "project_id": thread.project_id,
         "node_id": thread.node_id,
         "created_by": thread.created_by,
-        "created_at": thread.created_at.isoformat() if thread.created_at else None,
+        "created_at": to_utc_iso(thread.created_at),
         "messages": [_serialize_message(m, avatars) for m in messages],
     }
 
@@ -217,6 +219,7 @@ def add_comment(
         author_name=username or str(user_id),
         mentioned_user_ids=mentions,
     )
+    touch_project_updated_at(db, project_id)
     db.commit()
     db.refresh(msg)
     db.refresh(thread)
@@ -283,6 +286,7 @@ def reply_comment(
         author_name=username or str(user_id),
         mentioned_user_ids=mentions,
     )
+    touch_project_updated_at(db, project_id)
     db.commit()
 
     messages = (
@@ -330,6 +334,7 @@ def update_message(
 
     msg.body = text
     msg.updated_at = _utcnow()
+    touch_project_updated_at(db, project_id)
     db.commit()
 
     thread = db.query(CanvasCommentThread).filter(CanvasCommentThread.id == msg.thread_id).first()
@@ -382,6 +387,7 @@ def delete_message(
     )
     if remaining == 0 and thread:
         db.delete(thread)
+        touch_project_updated_at(db, project_id)
         db.commit()
         _publish_comment_event(
             project_id,
@@ -390,6 +396,7 @@ def delete_message(
         )
         return {"deleted": True, "node_id": node_id, "thread_id": thread_id}
 
+    touch_project_updated_at(db, project_id)
     db.commit()
     messages = (
         db.query(CanvasCommentMessage)

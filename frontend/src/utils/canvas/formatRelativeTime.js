@@ -1,10 +1,11 @@
+import { parseServerTimestamp } from "../datetime"
+
 export function formatRelativeTime(ts) {
-  let ms = ts
-  if (typeof ts === "string") ms = Date.parse(ts)
-  if (typeof ms !== "number" || !Number.isFinite(ms)) return ""
+  const ms = parseServerTimestamp(ts)
+  if (ms == null) return ""
   const diff = Date.now() - ms
   if (diff < -30000) {
-    const d = new Date(ts)
+    const d = new Date(ms)
     const pad = (n) => String(n).padStart(2, "0")
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
   }

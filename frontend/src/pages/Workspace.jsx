@@ -108,11 +108,15 @@ export default function Workspace() {
   useEffect(() => {
     const onTeamChange = () => refresh()
     const onProjectSaved = (e) => {
-      const { projectId, updated_at } = e.detail || {}
-      if (!projectId || !updated_at) return
-      setProjects((prev) => prev.map((p) => (
-        p.id === projectId ? { ...p, updated_at } : p
-      )))
+      const { projectId, updated_at, preview_url } = e.detail || {}
+      if (!projectId) return
+      setProjects((prev) => prev.map((p) => {
+        if (p.id !== projectId) return p
+        const next = { ...p }
+        if (updated_at) next.updated_at = updated_at
+        if (preview_url !== undefined && preview_url !== null) next.preview_url = preview_url
+        return next
+      }))
     }
     const onVisible = () => {
       if (document.visibilityState === "visible") refresh()
@@ -138,9 +142,16 @@ export default function Workspace() {
   )
 
   const handleRenameProject = useCallback(async (projectId, name) => {
-    await saveCanvasProject(projectId, { name })
+    const res = await saveCanvasProject(projectId, { name })
     setProjects((prev) => prev.map((p) => (
-      p.id === projectId ? { ...p, name, updated_at: new Date().toISOString() } : p
+      p.id === projectId
+        ? {
+            ...p,
+            name,
+            updated_at: res.updated_at ?? p.updated_at,
+            preview_url: res.preview_url ?? p.preview_url,
+          }
+        : p
     )))
   }, [])
 

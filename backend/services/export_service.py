@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import zipfile
 from datetime import datetime, timezone
+from core.datetime_utils import to_utc_iso
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -514,5 +515,5 @@ def export_job_to_dict(job: ExportJob) -> dict[str, Any]:
         "file_path": job.file_path,
         "error_message": job.error_message,
         "download_url": download_url,
-        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "created_at": to_utc_iso(job.created_at),
     }

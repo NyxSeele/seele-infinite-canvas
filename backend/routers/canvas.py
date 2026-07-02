@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from core.datetime_utils import to_utc_iso
 from core.dependencies import get_current_user
 from db.session import get_db
 from models import User
@@ -98,7 +99,7 @@ def _project_summary(row: CanvasProject) -> dict:
         "name": row.name,
         "team_id": row.team_id,
         "version": int(row.version or 1),
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "updated_at": to_utc_iso(row.updated_at),
         "last_modified_by": row.last_modified_by,
         "node_count": _node_count(row.data),
         "preview_url": _preview_from_data(row.data),

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from core.datetime_utils import to_utc_iso
 from models.notification import Notification, new_notification_id
 
 
@@ -20,7 +21,7 @@ def _serialize(row: Notification) -> dict:
         "type": row.type,
         "payload": row.payload_dict(),
         "is_read": row.is_read,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "created_at": to_utc_iso(row.created_at),
     }
 
 

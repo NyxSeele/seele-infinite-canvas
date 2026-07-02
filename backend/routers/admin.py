@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from core.datetime_utils import to_utc_iso
 from core.dependencies import require_admin
 from db.session import get_db
 from models import Task, User, UserQuota
@@ -85,7 +86,7 @@ def admin_overview_stats(
             "task_type": task.task_type,
             "status": task.status,
             "prompt_text": (task.prompt_text or "")[:120] or None,
-            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "created_at": to_utc_iso(task.created_at),
         }
         for task, user in recent_rows
     ]
@@ -131,7 +132,7 @@ def list_all_tasks(
                 "progress": None,
                 "prompt_text": (task.prompt_text or "")[:200] or None,
                 "error": task.error,
-                "created_at": task.created_at.isoformat() if task.created_at else None,
+                "created_at": to_utc_iso(task.created_at),
             }
         )
     return {
@@ -169,7 +170,7 @@ def list_users(
                 "email": u.email,
                 "role": u.role,
                 "is_active": u.is_active,
-                "created_at": u.created_at.isoformat() if u.created_at else None,
+                "created_at": to_utc_iso(u.created_at),
                 "quota": get_quota_info(db, u.id),
             }
         )
@@ -191,7 +192,7 @@ def get_user_detail(
         "email": user.email,
         "role": user.role,
         "is_active": user.is_active,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "created_at": to_utc_iso(user.created_at),
         "quota": get_quota_info(db, user.id),
     }
 

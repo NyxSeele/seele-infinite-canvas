@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from core.datetime_utils import to_utc_iso
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -187,7 +188,7 @@ async def aggregate_style_json(frame_descriptions: list[str]) -> dict:
         "style_keywords": [str(k).strip() for k in keywords if str(k).strip()],
         "display_summary": str(data.get("display_summary") or "").strip(),
         "source": "user_upload",
-        "extracted_at": datetime.now(timezone.utc).isoformat(),
+        "extracted_at": to_utc_iso(datetime.now(timezone.utc)),
     }
 
 
@@ -299,7 +300,7 @@ def update_node_style_reference(
         if key in patch and patch[key] is not None:
             current[key] = patch[key]
     if not current.get("extracted_at"):
-        current["extracted_at"] = datetime.now(timezone.utc).isoformat()
+        current["extracted_at"] = to_utc_iso(datetime.now(timezone.utc))
     if not current.get("source"):
         current["source"] = "user_upload"
     return patch_video_node_style_reference(

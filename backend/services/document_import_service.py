@@ -11,6 +11,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from core.datetime_utils import to_utc_iso
 from docx import Document
 from sqlalchemy.orm import Session
 
@@ -72,7 +73,7 @@ def save_import_session(file_bytes: bytes, filename: str) -> tuple[str, Path]:
     meta = {
         "filename": Path(filename).name,
         "ext": dest.suffix.lower(),
-        "created_at": _utcnow().isoformat(),
+        "created_at": to_utc_iso(_utcnow()),
     }
     (session_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     return session_id, dest
@@ -474,7 +475,7 @@ def apply_document_import(
             "sheetName": sheet_name,
             "kind": "outline",
             "contentHash": content_hash,
-            "importedAt": _utcnow().isoformat(),
+            "importedAt": to_utc_iso(_utcnow()),
         }
         if target:
             target["data"] = {
@@ -533,7 +534,7 @@ def apply_document_import(
             "sheetName": sheet_name,
             "kind": "shot_table",
             "contentHash": content_hash,
-            "importedAt": _utcnow().isoformat(),
+            "importedAt": to_utc_iso(_utcnow()),
         }
         existing = None
         if replace_id:
