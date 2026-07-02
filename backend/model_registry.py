@@ -172,6 +172,13 @@ _CAP_HUNYUAN = {
     "aspect_ratios": ["16:9", "9:16", "1:1"],
     "durations": [5, 10],
 }
+_CAP_VIDEO_ENHANCE = {
+    "upscale_factors": [1.0, 1.5, 2.0, 3.0],
+    "strengths": ["normal", "sharp"],
+}
+
+VIDEO_ENHANCE_SEEDVR2_ID = "video-enhance-seedvr2"
+VIDEO_ENHANCE_REALESRGAN_ID = "video-enhance-realesrgan"
 
 ALL_MODELS: list[dict] = [
     # ── 文本生成 ──────────────────────────────────────────────────────────
@@ -310,7 +317,7 @@ ALL_MODELS: list[dict] = [
         "name": "LTX Video",
         "category": "video",
         "type": "local",
-        "comfyui_model_file": "ltx-video-2b-v0.9.safetensors",  # 占位；服务器确认后替换
+        "comfyui_model_file": "ltx-video-2b-v0.9.5.safetensors",
         "default_enabled": False,
         "capabilities": _CAP_LTX,
         "workflow_type": "ltx",
@@ -624,7 +631,7 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
         id="ltx-video",
         display_name="LTX Video",
         category="video",
-        comfyui_checkpoint="ltx-video-2b-v0.9.safetensors",
+        comfyui_checkpoint="ltx-video-2b-v0.9.5.safetensors",
         workflow_type="ltx",
         workflow_module="backend/comfyui/client.py",
         workflow_builder="submit_video_prompt",
@@ -654,9 +661,64 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
         },
         notes="ComfyUI 原生 HunyuanVideo 节点链；画布视频按 video_backend=hunyuan 分派",
     ),
+    _comfyui_local_provider(
+        id=VIDEO_ENHANCE_SEEDVR2_ID,
+        display_name="SeedVR2 Video Enhance",
+        category="video_enhance",
+        comfyui_checkpoint="seedvr2_ema_7b_fp16.safetensors",
+        workflow_type="seedvr2_enhance",
+        workflow_module="backend/comfyui/client.py",
+        workflow_builder="submit_seedvr2_enhance_prompt",
+        workflow_impl="ready",
+        capabilities=_CAP_VIDEO_ENHANCE,
+        notes="SeedVR2 7B 视频画质增强；需 ComfyUI-SeedVR2_VideoUpscaler 自定义节点",
+    ),
+    _comfyui_local_provider(
+        id=VIDEO_ENHANCE_REALESRGAN_ID,
+        display_name="Real-ESRGAN Video Enhance",
+        category="video_enhance",
+        comfyui_checkpoint="RealESRGAN_x4plus.pth",
+        workflow_type="realesrgan_enhance",
+        workflow_module="backend/comfyui/client.py",
+        workflow_builder="submit_realesrgan_enhance_prompt",
+        workflow_impl="ready",
+        capabilities=_CAP_VIDEO_ENHANCE,
+        notes="Real-ESRGAN 逐帧超分 fallback；较短镜头可用",
+    ),
 ]
 
 COMFYUI_PROVIDER_MAP: dict[str, dict] = {p["id"]: p for p in COMFYUI_LOCAL_PROVIDERS}
+
+_VIDEO_ENHANCE_ORDER = (VIDEO_ENHANCE_SEEDVR2_ID, VIDEO_ENHANCE_REALESRGAN_ID)
+
+
+def _video_enhance_provider_available(provider_id: str) -> bool:
+    entry = COMFYUI_PROVIDER_MAP.get(provider_id)
+    if not entry:
+        return False
+    return bool(entry.get("enabled")) and entry.get("workflow_impl") == "ready"
+
+
+def resolve_video_enhance_workflow(
+    preferred: str | None = None,
+) -> tuple[str, dict] | None:
+    """
+    解析可用的视频画质增强 workflow。
+    preferred: auto | seedvr2 | realesrgan；auto 时 SeedVR2 优先。
+    返回 (provider_id, provider_entry) 或 None。
+    """
+    key = (preferred or "auto").strip().lower()
+    if key == "realesrgan":
+        candidates = (VIDEO_ENHANCE_REALESRGAN_ID,)
+    elif key == "seedvr2":
+        candidates = (VIDEO_ENHANCE_SEEDVR2_ID,)
+    else:
+        candidates = _VIDEO_ENHANCE_ORDER
+
+    for provider_id in candidates:
+        if _video_enhance_provider_available(provider_id):
+            return provider_id, COMFYUI_PROVIDER_MAP[provider_id]
+    return None
 
 
 def get_comfyui_provider(model_id: str) -> dict | None:

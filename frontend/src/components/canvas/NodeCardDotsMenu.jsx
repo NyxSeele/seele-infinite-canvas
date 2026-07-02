@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useLocale } from "../../utils/locale"
 import { saveAsWord } from "../../utils/canvas/saveAsWord"
+import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
 import "./NodeCardDotsMenu.css"
 
 const sp = (e) => e.stopPropagation()
@@ -23,6 +24,7 @@ export default function NodeCardDotsMenu({
     if (!menuOpen) return undefined
     const close = (e) => {
       if (menuRef.current && !menuRef.current.contains(e.target)) {
+        markSuppressPaneMenu()
         setMenuOpen(false)
       }
     }

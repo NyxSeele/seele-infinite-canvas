@@ -19,10 +19,11 @@ const TGT_STYLE = {
 }
 
 /** 文本工作流节点左右加号 + 拖线锚点（与 GenerationCardNode 一致） */
-export default function TextWorkflowEdgePlugs({ nodeId, nodeType, disabled = false }) {
+export default function TextWorkflowEdgePlugs({ nodeId, nodeType, disabled = false, selected = false }) {
   const canvasActions = useCanvasActions()
   const [leftVisible, setLeftVisible] = useState(false)
   const [rightVisible, setRightVisible] = useState(false)
+  const plusPinned = selected
 
   if (disabled) return null
 
@@ -35,7 +36,7 @@ export default function TextWorkflowEdgePlugs({ nodeId, nodeType, disabled = fal
         id="src-left"
         className="gn2-edge-handle gn2-edge-handle--left"
         onMouseEnter={() => setLeftVisible(true)}
-        onMouseLeave={() => setLeftVisible(false)}
+        onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }}
       />
       <Handle
         type="source"
@@ -43,13 +44,13 @@ export default function TextWorkflowEdgePlugs({ nodeId, nodeType, disabled = fal
         id="src-right"
         className="gn2-edge-handle gn2-edge-handle--right"
         onMouseEnter={() => setRightVisible(true)}
-        onMouseLeave={() => setRightVisible(false)}
+        onMouseLeave={() => { if (!plusPinned) setRightVisible(false) }}
       />
 
       <div
-        className={`gn2-plus-left-zone nodrag${leftVisible ? " gn2-plus-zone--visible" : ""}`}
+        className={`gn2-plus-left-zone nodrag${leftVisible || plusPinned ? " gn2-plus-zone--visible" : ""}`}
         onMouseEnter={() => setLeftVisible(true)}
-        onMouseLeave={() => setLeftVisible(false)}
+        onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }}
         onClick={(e) => {
           e.stopPropagation()
           canvasActions?.openPickerAt(e.clientX - 20, e.clientY, {
@@ -62,9 +63,9 @@ export default function TextWorkflowEdgePlugs({ nodeId, nodeType, disabled = fal
       </div>
 
       <div
-        className={`gn2-plus-right-zone nodrag${rightVisible ? " gn2-plus-zone--visible" : ""}`}
+        className={`gn2-plus-right-zone nodrag${rightVisible || plusPinned ? " gn2-plus-zone--visible" : ""}`}
         onMouseEnter={() => setRightVisible(true)}
-        onMouseLeave={() => setRightVisible(false)}
+        onMouseLeave={() => { if (!plusPinned) setRightVisible(false) }}
         onClick={(e) => {
           e.stopPropagation()
           canvasActions?.openPickerAt(e.clientX + 20, e.clientY, {

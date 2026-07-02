@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from models import User
-from models.canvas_project import CanvasProject
+from models.canvas_project import CanvasProject, utcnow
 from services.team_service import EDIT_ROLES, get_member_role, require_team_editor
 
 
@@ -51,6 +51,14 @@ def list_projects_query(db: Session, user: User, team_id: str | None):
     )
 
 
+def touch_project_updated_at(db: Session, project_id: str) -> None:
+    """更新项目 updated_at，不递增 version（协作活动标记）。"""
+    row = db.get(CanvasProject, project_id)
+    if not row:
+        return
+    row.updated_at = utcnow()
+
+
 def migrate_project_to_team(
     db: Session,
     user: User,
@@ -67,6 +75,7 @@ def migrate_project_to_team(
         raise HTTPException(status_code=400, detail="该项目已是团队画布")
     require_team_editor(db, team_id, user)
     row.team_id = team_id
+    row.updated_at = utcnow()
     db.commit()
     db.refresh(row)
     return row

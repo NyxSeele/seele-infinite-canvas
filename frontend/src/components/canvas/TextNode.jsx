@@ -159,7 +159,7 @@ export default function TextNode({ id, data, selected }) {
 
   return (
     <div className={`tn-wrapper${selected ? " tn-wrapper--selected" : ""}`} ref={wrapperRef}>
-      <TextWorkflowEdgePlugs nodeId={id} nodeType="text-note" />
+      <TextWorkflowEdgePlugs nodeId={id} nodeType="text-note" selected={selected} />
       <div className="tn-label-row">
         <MenuIcon />
         {labelEditing ? (

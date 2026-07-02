@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useStore } from "reactflow"
 import { useCanvasStore, useTeamStore } from "../../stores"
 import { getCanvasTeamId } from "../../utils/teamContext"
@@ -64,6 +64,14 @@ export default function GenerationHistoryFlyout({ open, onClose, getCardPointerH
   const [personalList, setPersonalList] = useState([])
   const [teamList, setTeamList] = useState([])
   const [teamLoading, setTeamLoading] = useState(false)
+  const openRef = useRef(false)
+
+  useEffect(() => {
+    const justOpened = open && !openRef.current
+    openRef.current = open
+    if (!justOpened) return
+    setScopeTab(projectTeamId ? "team" : "mine")
+  }, [open, projectTeamId])
 
   const tabs = useMemo(
     () => [

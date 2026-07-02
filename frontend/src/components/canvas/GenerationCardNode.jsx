@@ -12,6 +12,7 @@ import NodeLastEditedMeta from "./NodeLastEditedMeta"
 import { getCanvasTeamId, teamIdPayload } from "../../utils/teamContext"
 import MediaFullscreenViewer from "./MediaFullscreenViewer"
 import GenerationStopButton from "./GenerationStopButton"
+import GenerationBrandLoader from "./GenerationBrandLoader"
 import { cancelCanvasTask } from "../../services/cancelTask"
 import {
   buildClearGenerationTaskPatch,
@@ -26,6 +27,7 @@ import { createStaleProgressGuard, isTerminalTaskStatus } from "./taskPollTimeou
 import { MENU_SUBMENU_CLOSE_MS } from "../../utils/menuFlyoutTiming"
 import { parseGenerationError } from "./taskNetworkError"
 import { getRetryPolicy } from "../../utils/canvas/generationRetryPolicy"
+import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
 import { uploadImageFile } from "../../services/uploadImage"
 import { ensureMediaUrl, stripMediaTicket } from "../../utils/mediaTicket"
 import { useLocale } from "../../utils/locale"
@@ -845,6 +847,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     const close = (e) => {
       if (cellMenuPortalRef.current?.contains(e.target)) return
       if (subMenuPortalRef.current?.contains(e.target)) return
+      markSuppressPaneMenu()
       closeCellMenus()
     }
     document.addEventListener("mousedown", close)
@@ -1116,6 +1119,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
   useCanvasNodeWheel(rootRef)
   const [leftVisible, setLeftVisible] = useState(false)
   const [rightVisible, setRightVisible] = useState(false)
+  const plusPinned = selected
 
   const rootWidth = showResultsGrid ? gridLayout.gridWidth : undefined
   const previewSizeStyle = showResultsGrid
@@ -1211,15 +1215,15 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
         <Handle type="target" position={Position.Left} id="tgt" style={{ position: 'absolute', top: '50%', left: -1, width: 1, height: 1, minWidth: 1, minHeight: 1, background: 'transparent', border: 'none', opacity: 0, transform: 'translateY(-50%)', zIndex: 25 }} />
         {/* Source handles: large hit area centered on card edge */}
         <Handle type="source" position={Position.Left}  id="src-left"  className="gn2-edge-handle gn2-edge-handle--left"
-          onMouseEnter={() => setLeftVisible(true)} onMouseLeave={() => setLeftVisible(false)} />
+          onMouseEnter={() => setLeftVisible(true)} onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }} />
         <Handle type="source" position={Position.Right} id="src-right" className="gn2-edge-handle gn2-edge-handle--right"
-          onMouseEnter={() => setRightVisible(true)} onMouseLeave={() => setRightVisible(false)} />
+          onMouseEnter={() => setRightVisible(true)} onMouseLeave={() => { if (!plusPinned) setRightVisible(false) }} />
 
         {/* Left zone: hover container + sliding visual button */}
         <div
-          className={`gn2-plus-left-zone nodrag${leftVisible ? ' gn2-plus-zone--visible' : ''}`}
+          className={`gn2-plus-left-zone nodrag${leftVisible || plusPinned ? ' gn2-plus-zone--visible' : ''}`}
           onMouseEnter={() => setLeftVisible(true)}
-          onMouseLeave={() => setLeftVisible(false)}
+          onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }}
           onClick={(e) => { e.stopPropagation(); canvasActions?.openPickerAt(e.clientX - 20, e.clientY, { toLeft: true, targetNodeId: id }) }}
         >
           <div className="gn2-plus-btn-visual">+</div>
@@ -1227,9 +1231,9 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
 
         {/* Right zone: hover container + sliding visual button */}
         <div
-          className={`gn2-plus-right-zone nodrag${rightVisible ? ' gn2-plus-zone--visible' : ''}`}
+          className={`gn2-plus-right-zone nodrag${rightVisible || plusPinned ? ' gn2-plus-zone--visible' : ''}`}
           onMouseEnter={() => setRightVisible(true)}
-          onMouseLeave={() => setRightVisible(false)}
+          onMouseLeave={() => { if (!plusPinned) setRightVisible(false) }}
           onClick={(e) => { e.stopPropagation(); canvasActions?.openPickerAt(e.clientX + 20, e.clientY, { fromEdge: true, sourceNodeId: id, sourceNodeType: 'image-gen' }) }}
         >
           <div className="gn2-plus-btn-visual">+</div>
@@ -1342,13 +1346,13 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
                       </div>
                     ) : (
                       <div className="results-cell-pending">
-                        <div className="gn2-spinner" aria-hidden />
                         {isPending && (
                           <>
-                            <span className="gn2-gen-label">
+                            <GenerationBrandLoader />
+                            <span className="gn2-pct">
                               {isMultiGrid
-                                ? (cellProgress > 0 ? `${cellProgress}%` : t("canvas.gen.generating"))
-                                : (pollProgress > 0 ? `${pollProgress}%` : progressHint)}
+                                ? (cellProgress > 0 ? `${cellProgress}%` : "0%")
+                                : (pollProgress > 0 ? `${pollProgress}%` : "0%")}
                             </span>
                             {i === 0 && (
                               <GenerationStopButton onStop={handleStopGeneration} />

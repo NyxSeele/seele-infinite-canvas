@@ -36,6 +36,7 @@ from routers import (
     exports,
     import_document,
     style_reference,
+    lut,
 )
 from services.redis_client import get_redis
 from services.local_model_sync import sync_local_models
@@ -98,7 +99,7 @@ app.add_middleware(
 os.makedirs("uploads/images", exist_ok=True)
 os.makedirs("uploads/videos", exist_ok=True)
 os.makedirs("uploads/exports", exist_ok=True)
-os.makedirs("uploads/import_sessions", exist_ok=True)
+os.makedirs("uploads/luts", exist_ok=True)
 
 app.include_router(auth.router)
 app.include_router(teams.router)
@@ -120,6 +121,7 @@ app.include_router(notifications.router)
 app.include_router(exports.router)
 app.include_router(import_document.router)
 app.include_router(style_reference.router)
+app.include_router(lut.router)
 
 if not settings.is_production:
     from routers import debug_trace
@@ -136,7 +138,13 @@ async def root():
 @app.get("/api/health")
 async def health():
     redis_ok = get_redis() is not None
-    return {"status": "ok", "env": settings.app_env, "redis": redis_ok}
+    return {
+        "status": "ok",
+        "env": settings.app_env,
+        "redis": redis_ok,
+        "agent_mock_generation": settings.agent_mock_generation,
+        "comfyui_url": comfyui_http_url(),
+    }
 
 
 if __name__ == "__main__":

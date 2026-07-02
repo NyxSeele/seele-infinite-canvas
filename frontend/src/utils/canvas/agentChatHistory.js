@@ -1,3 +1,4 @@
+import { parseServerTimestamp } from "../../utils/datetime"
 import {
   deleteAgentChatHistoryApi,
   generateAgentChatTitleApi,
@@ -48,8 +49,7 @@ function parseUpdatedAt(entry) {
     return entry.updatedAt
   }
   if (entry?.updated_at) {
-    const parsed = Date.parse(entry.updated_at)
-    if (Number.isFinite(parsed)) return parsed
+    return parseServerTimestamp(entry.updated_at)
   }
   return null
 }

@@ -2,6 +2,11 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { useReactFlow, useStore } from "reactflow"
 import { useReferenceSelect } from "./CanvasActionsContext"
 import VideoReferencePanel, { VideoAtMentionList } from "./VideoReferencePanel"
+import VideoEnhancePanel from "./VideoEnhancePanel"
+import {
+  getVideoEnhanceBridge,
+  subscribeVideoEnhanceBridge,
+} from "./videoEnhanceBridge"
 import MentionTextarea from "./MentionTextarea"
 import { useCanvasStore, useModelStore } from "../../stores"
 import api, { API_BASE } from "../../services/api"
@@ -21,6 +26,12 @@ import {
   MAX_REFERENCE_IMAGES,
 } from "./videoReferenceHelpers"
 import useModelCapabilities from "../../hooks/useModelCapabilities"
+import {
+  CONTENT_STYLE_OPTIONS,
+  findScriptTableNode,
+  getProjectContentStyle,
+  normalizeContentStyle,
+} from "../../utils/canvas/contentStylePresets"
 import {
   mergeMentionRefsIntoFreeRefs,
   mergeMentionRefsIntoReferenceImages,
@@ -353,7 +364,7 @@ export default function CanvasPromptBar({
   projectId = null,
   readOnly = false,
 }) {
-  const { getNode } = useReactFlow()
+  const { getNode, getNodes } = useReactFlow()
   const transform   = useStore((s) => s.transform)
   const textModels  = useModelStore((s) => s.textModels)
   const imageModels = useModelStore((s) => s.imageModels)
@@ -390,6 +401,7 @@ export default function CanvasPromptBar({
   // image
   const [imgModel,      setImgModel]      = useState("")
   const [imgModelOpen,  setImgModelOpen]  = useState(false)
+  const [contentStyleOpen, setContentStyleOpen] = useState(false)
   const [imgQuality,    setImgQuality]    = useState("2K")
   const [imgRatio,      setImgRatio]      = useState("1:1")
   const [imgResolution, setImgResolution] = useState("1024x1024")
@@ -405,6 +417,8 @@ export default function CanvasPromptBar({
   const [vidDuration,   setVidDuration]   = useState("5s")
   const [vidAudio,      setVidAudio]      = useState("开启")
   const [vidPanelOpen,  setVidPanelOpen]  = useState(false)
+  const [referenceSlotsExpanded, setReferenceSlotsExpanded] = useState(false)
+  const [enhanceBridgeTick, setEnhanceBridgeTick] = useState(0)
   const [atMentionOpen, setAtMentionOpen]   = useState(false)
   const [atMentionQuery, setAtMentionQuery] = useState("")
   const [isExpanded,    setIsExpanded]    = useState(false)
@@ -435,8 +449,10 @@ export default function CanvasPromptBar({
     }
   }, [refSelect])
 
+  useEffect(() => subscribeVideoEnhanceBridge(() => setEnhanceBridgeTick((n) => n + 1)), [])
+
   useEffect(() => {
-    if (!atMentionOpen) return
+    if (!atMentionOpen) return undefined
     const handler = (e) => {
       if (mentionListRef.current?.contains(e.target)) return
       if (textareaWrapRef.current?.contains(e.target)) return
@@ -539,9 +555,11 @@ export default function CanvasPromptBar({
     if (!n) return
     const isPromptNode =
       n.type === "text-note" || n.type === "text-response"
-    const fromNode = isPromptNode
-      ? (n.data?.prompt ?? n.data?.content ?? "")
-      : ""
+    const fromNode =
+      n.data?.prompt ??
+      n.data?.displayPrompt ??
+      (isPromptNode ? (n.data?.content ?? "") : "") ??
+      ""
     setPrompt(fromNode)
     setMentions(Array.isArray(n.data?.mentions) ? n.data.mentions : [])
     if (isPromptNode && fromNode && !n.data?.prompt && n.data?.onUpdate) {
@@ -566,6 +584,7 @@ export default function CanvasPromptBar({
       if (n.data?.referenceMode === "freeref") setVidMode("参考")
       else if (n.data?.referenceMode === "keyframe") setVidMode("首尾帧")
       else if (n.data?.vidMode) setVidMode(n.data.vidMode)
+      setReferenceSlotsExpanded(!!n.data?.referenceSlotsOpen)
       if (n.data?.vidRatio) setVidRatio(n.data.vidRatio)
       if (n.data?.vidQuality) setVidQuality(n.data.vidQuality)
       if (n.data?.vidDuration) setVidDuration(n.data.vidDuration)
@@ -584,6 +603,24 @@ export default function CanvasPromptBar({
     setPrompt(promptBarSync.text ?? "")
   }, [promptBarSync, selectedNodeId])
 
+  const scriptTableNode = useMemo(
+    () => findScriptTableNode(getNodes()),
+    [getNodes, selectedNodeId, visible]
+  )
+  const projectContentStyle = useMemo(
+    () => getProjectContentStyle(getNodes()),
+    [getNodes, selectedNodeId, visible, scriptTableNode?.data?.contentStyle]
+  )
+
+  const handleContentStyleChange = useCallback((styleId) => {
+    const next = normalizeContentStyle(styleId)
+    const st = findScriptTableNode(getNodes())
+    if (st?.data?.onUpdate) {
+      st.data.onUpdate(st.id, { contentStyle: next })
+    }
+    setContentStyleOpen(false)
+  }, [getNodes])
+
   const closeAllParamPanels = useCallback(() => {
     setCountDropOpen(false)
     setTextModelOpen(false)
@@ -591,11 +628,13 @@ export default function CanvasPromptBar({
     setImgPanelOpen(false)
     setVidModelOpen(false)
     setVidPanelOpen(false)
+    setContentStyleOpen(false)
   }, [])
 
   // 点击卡片外 / 画布空白 / 非面板区域时收起（capture 避免 nb-banner stopPropagation）
   useEffect(() => {
-    const anyOpen = countDropOpen || textModelOpen || imgModelOpen || imgPanelOpen || vidModelOpen || vidPanelOpen
+    const anyOpen = countDropOpen || textModelOpen || imgModelOpen || imgPanelOpen
+      || vidModelOpen || vidPanelOpen || contentStyleOpen
     if (!anyOpen) return
     const closeOnOutside = (e) => {
       if (e.target.closest(
@@ -605,7 +644,7 @@ export default function CanvasPromptBar({
     }
     document.addEventListener("pointerdown", closeOnOutside, true)
     return () => document.removeEventListener("pointerdown", closeOnOutside, true)
-  }, [countDropOpen, textModelOpen, imgModelOpen, imgPanelOpen, vidModelOpen, vidPanelOpen, closeAllParamPanels])
+  }, [countDropOpen, textModelOpen, imgModelOpen, imgPanelOpen, vidModelOpen, vidPanelOpen, contentStyleOpen, closeAllParamPanels])
 
   useEffect(() => {
     window.addEventListener(PARAM_PANEL_CLOSE_EVENT, closeAllParamPanels)
@@ -791,6 +830,8 @@ export default function CanvasPromptBar({
         if (hasImageMentions) {
           patch.referenceMode = "freeref"
         }
+        patch.referenceSlotsOpen = true
+        setReferenceSlotsExpanded(true)
       }
       if (isImage) {
         const nextRefs = syncMentionRefsIntoReferenceImages(
@@ -810,7 +851,7 @@ export default function CanvasPromptBar({
       }
       node.data.onUpdate(selectedNodeId, patch)
     }
-  }, [selectedNodeId, node, isVideo, isImage, isTextResponse, getNode])
+  }, [selectedNodeId, node, isVideo, isImage, isTextResponse, getNode, setReferenceSlotsExpanded])
 
   const runGenerate = useCallback(async (finalPrompt, generateParams) => {
     setSending(true)
@@ -1135,13 +1176,16 @@ export default function CanvasPromptBar({
     const rec = new SR()
     rec.lang = "zh-CN"; rec.continuous = false; rec.interimResults = false
     rec.onresult = (ev) => {
-      const t = ev.results[0]?.[0]?.transcript || ""
-      if (t) setPrompt((p) => p ? p + " " + t : t)
+      const transcript = ev.results[0]?.[0]?.transcript || ""
+      if (transcript) {
+        const next = prompt ? `${prompt} ${transcript}` : transcript
+        syncPromptToNode(next, mentions)
+      }
     }
     rec.onend = () => setMicActive(false)
     rec.onerror = () => setMicActive(false)
     recognitionRef.current = rec; rec.start(); setMicActive(true)
-  }, [micActive])
+  }, [micActive, prompt, mentions, syncPromptToNode])
 
   if (!mounted || !node) return null
 
@@ -1352,6 +1396,37 @@ export default function CanvasPromptBar({
               <BarChartIcon /><span>{modelLabel(imageModels, imgModel, imgModel)}</span>
             </button>
           </div>
+          <div className="nb-bottom-sep" />
+          <div className="nb-dropup-wrap">
+            {contentStyleOpen && scriptTableNode && (
+              <div className="nb-dropup-menu" onPointerDown={sp}>
+                {CONTENT_STYLE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={`nb-dropup-item nodrag${projectContentStyle === opt.id ? " nb-dropup-item--active" : ""}`}
+                    onClick={(e) => { sp(e); handleContentStyleChange(opt.id) }}
+                  >
+                    {t(`canvas.contentStyle.${opt.id === "photorealistic_cinema" ? "photorealistic" : "generic"}`)}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              className="nb-model-btn-bare nodrag"
+              onPointerDown={sp}
+              onClick={(e) => {
+                sp(e)
+                if (scriptTableNode) setContentStyleOpen((v) => !v)
+              }}
+              disabled={!scriptTableNode}
+              title={scriptTableNode ? t("canvas.script.contentStyleTitle") : t("canvas.script.contentStyleNoTable")}
+            >
+              <span>
+                {t(`canvas.contentStyle.${projectContentStyle === "photorealistic_cinema" ? "photorealistic" : "generic"}`)}
+              </span>
+            </button>
+          </div>
           {imageHasParamPanel && (
             <>
               <div className="nb-bottom-sep" />
@@ -1436,6 +1511,44 @@ export default function CanvasPromptBar({
 
   const promptVariant = isText || isTextResponse ? "text" : isImage ? "image" : isVideo ? "video" : null
 
+  const videoEnhanceBridge = isVideo && selectedNodeId
+    ? getVideoEnhanceBridge(selectedNodeId)
+    : null
+  void enhanceBridgeTick
+
+  const videoEnhancePanelSlot = (
+    <VideoEnhancePanel
+      variant="panel"
+      videoReady={!!videoEnhanceBridge?.videoReady}
+      isEnhancing={!!videoEnhanceBridge?.isEnhancing}
+      isAnalyzing={!!videoEnhanceBridge?.isAnalyzing}
+      hasEnhanced={!!videoEnhanceBridge?.hasEnhanced}
+      manualMode={videoEnhanceBridge?.manualMode ?? !!node?.data?.enhanceManualMode}
+      advancedOpen={videoEnhanceBridge?.advancedOpen ?? false}
+      reasoning={videoEnhanceBridge?.reasoning ?? node?.data?.enhanceReasoning ?? ""}
+      upscaleFactor={videoEnhanceBridge?.upscaleFactor ?? node?.data?.enhanceUpscaleFactor ?? 2}
+      strength={videoEnhanceBridge?.strength ?? node?.data?.enhanceStrength ?? "normal"}
+      inputNoiseScale={
+        videoEnhanceBridge?.inputNoiseScale ?? node?.data?.enhanceInputNoiseScale ?? 0.25
+      }
+      batchSize={videoEnhanceBridge?.batchSize ?? node?.data?.enhanceBatchSize ?? 8}
+      colorCorrection={
+        videoEnhanceBridge?.colorCorrection ?? node?.data?.enhanceColorCorrection ?? "lab"
+      }
+      modelSize={videoEnhanceBridge?.modelSize ?? node?.data?.enhanceModelSize ?? "7b"}
+      error={videoEnhanceBridge?.error ?? node?.data?.enhanceError ?? null}
+      onManualModeChange={videoEnhanceBridge?.onManualModeChange}
+      onAdvancedOpenChange={videoEnhanceBridge?.onAdvancedOpenChange}
+      onUpscaleChange={videoEnhanceBridge?.onUpscaleChange}
+      onStrengthChange={videoEnhanceBridge?.onStrengthChange}
+      onInputNoiseScaleChange={videoEnhanceBridge?.onInputNoiseScaleChange}
+      onBatchSizeChange={videoEnhanceBridge?.onBatchSizeChange}
+      onColorCorrectionChange={videoEnhanceBridge?.onColorCorrectionChange}
+      onModelSizeChange={videoEnhanceBridge?.onModelSizeChange}
+      onOneClick={() => videoEnhanceBridge?.onOneClick?.()}
+    />
+  )
+
   return (
     <PromptBarShell
       visible={visible}
@@ -1445,30 +1558,25 @@ export default function CanvasPromptBar({
       style={{ position: "absolute", left, top, width: BANNER_WIDTH, marginLeft: 0 }}
       onBannerPointerDown={(e) => { sp(e); exitPickerIfActive() }}
       showTopbar={isImage || isVideo}
-      expandInField={isText}
+      expandInField={isText || isVideo}
       topbarSlot={
         isImage ? renderImageTopbar() : (
           isVideo && selectedNodeId && node ? (
             <VideoReferencePanel
               nodeId={selectedNodeId}
               data={node.data}
-              section="topbar"
+              section="promptbar"
               projectId={projectId}
               readOnly={readOnly}
+              slotsExpanded={referenceSlotsExpanded}
+              onSlotsExpandedChange={setReferenceSlotsExpanded}
+              enhancePanelSlot={videoEnhancePanelSlot}
             />
           ) : null
         )
       }
       mediaSlot={
-        isVideo && selectedNodeId && node ? (
-          <VideoReferencePanel
-            nodeId={selectedNodeId}
-            data={node.data}
-            section="slots"
-            projectId={projectId}
-            readOnly={readOnly}
-          />
-        ) : null
+        isVideo ? null : null
       }
       isExpanded={isExpanded}
       onToggleExpand={handleToggleExpand}

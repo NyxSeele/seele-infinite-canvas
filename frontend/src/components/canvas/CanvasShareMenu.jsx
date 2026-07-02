@@ -75,15 +75,24 @@ export default function CanvasShareMenu({
   const [pos, setPos] = useState({ top: 0, left: 0 })
 
   useLayoutEffect(() => {
-    if (!open || !anchorRef?.current) return
-    const rect = anchorRef.current.getBoundingClientRect()
-    const panelW = 220
-    let left = rect.right - panelW
-    left = Math.max(12, Math.min(left, window.innerWidth - panelW - 12))
-    setPos({
-      top: rect.bottom + 8,
-      left,
-    })
+    if (!open || !anchorRef?.current) return undefined
+
+    const updatePos = () => {
+      const anchor = anchorRef.current
+      if (!anchor) return
+      const rect = anchor.getBoundingClientRect()
+      const panelW = panelRef.current?.offsetWidth ?? rect.width
+      let left = rect.left
+      left = Math.max(12, Math.min(left, window.innerWidth - panelW - 12))
+      setPos({
+        top: rect.bottom + 8,
+        left,
+      })
+    }
+
+    updatePos()
+    const raf = requestAnimationFrame(updatePos)
+    return () => cancelAnimationFrame(raf)
   }, [open, anchorRef])
 
   useEffect(() => {

@@ -17,6 +17,7 @@ import {
 } from "../../utils/canvas/nodeNormalize"
 import { migrateCanvasBeatCards } from "../../utils/canvas/scriptBeatCard"
 import { readDisplayName } from "../../utils/canvas/commentUserDisplay"
+import { parseServerTimestamp } from "../../utils/datetime"
 
 const LAST_MOD_KEY = "canvas-last-modified"
 
@@ -151,8 +152,8 @@ export function useCanvasSave({
         setProjectTeamId(null)
       }
       if (meta.updated_at) {
-        const ts = Date.parse(meta.updated_at)
-        if (!Number.isNaN(ts)) {
+        const ts = parseServerTimestamp(meta.updated_at)
+        if (ts != null) {
           writeLastModified(projectId, ts)
           setLastModifiedAt(ts)
         }
@@ -237,9 +238,11 @@ export function useCanvasSave({
         applyCanvasData(res.canvas_data || { nodes: [], edges: [] }, res)
         onProjectLoaded?.(res)
         const stored = readLastModified(projectId)
-        const apiTs = res.updated_at ? Date.parse(res.updated_at) : null
-        if (apiTs) setLastModifiedAt(apiTs)
-        else if (stored) setLastModifiedAt(stored)
+        const apiTs = parseServerTimestamp(res.updated_at)
+        if (apiTs != null) {
+          writeLastModified(projectId, apiTs)
+          setLastModifiedAt(apiTs)
+        } else if (stored) setLastModifiedAt(stored)
         if (res.last_modified_by) setLastModifiedBy(res.last_modified_by)
         setSaveStatus("idle")
       } catch (e) {
@@ -287,7 +290,7 @@ export function useCanvasSave({
           display_name: readDisplayName(),
         })
         if (res.version != null) setProjectVersion(res.version)
-        const now = res.updated_at ? Date.parse(res.updated_at) : Date.now()
+        const now = parseServerTimestamp(res.updated_at) ?? Date.now()
         writeLastModified(projectId, now)
         setLastModifiedAt(now)
         if (res.last_modified_by) {
@@ -298,7 +301,11 @@ export function useCanvasSave({
         prevSnapshotRef.current = snapshotStr
         window.dispatchEvent(
           new CustomEvent("canvas-project-saved", {
-            detail: { projectId, updated_at: res.updated_at || new Date(now).toISOString() },
+            detail: {
+              projectId,
+              updated_at: res.updated_at ?? null,
+              preview_url: res.preview_url ?? null,
+            },
           })
         )
         setSaveStatus("saved")

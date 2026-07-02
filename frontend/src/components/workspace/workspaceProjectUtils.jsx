@@ -1,22 +1,7 @@
 import { useState } from "react"
 import { LineIcon } from "../icons/LineIcons"
 import { ensureMediaUrl } from "../../utils/mediaTicket"
-
-export function parseUpdatedAt(iso) {
-  if (!iso) return null
-  const raw = String(iso)
-  const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`
-  const ts = Date.parse(normalized)
-  return Number.isFinite(ts) ? ts : null
-}
-
-export function formatProjectDate(iso, neverEditedLabel = "尚未编辑") {
-  const ts = parseUpdatedAt(iso)
-  if (!ts) return neverEditedLabel
-  const d = new Date(ts)
-  const pad = (n) => String(n).padStart(2, "0")
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
+export { formatProjectDate, parseUpdatedAt, parseServerTimestamp } from "../../utils/datetime"
 
 export function ProjectThumb({ previewUrl, empty }) {
   const [broken, setBroken] = useState(false)

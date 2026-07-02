@@ -11,6 +11,12 @@ import { ensureMediaUrl } from "../../utils/mediaTicket"
 import { downloadMediaUrl } from "../../utils/downloadMedia"
 import MediaFullscreenViewer from "./MediaFullscreenViewer"
 import GenerationStopButton from "./GenerationStopButton"
+import GenerationBrandLoader from "./GenerationBrandLoader"
+import VideoEnhancePanel from "./VideoEnhancePanel"
+import {
+  setVideoEnhanceBridge,
+  notifyVideoEnhanceBridge,
+} from "./videoEnhanceBridge"
 import { wsManager } from "../../services/ws"
 import { useCanvasActions, useReferenceSelect } from "./CanvasActionsContext"
 import EditableNodeLabel from "./EditableNodeLabel"
@@ -29,12 +35,15 @@ import useModelCapabilities from "../../hooks/useModelCapabilities"
 import { uploadImageFile } from "../../services/uploadImage"
 import { useLocale } from "../../utils/locale"
 import { appendStyleReferenceToDescription, styleReferenceSummary } from "../../utils/canvas/styleReferenceFormat"
-import { IconStyleRef } from "./CanvasTopbarIcons"
+import { IconStyleRef, IconZoom, IconEnhance } from "./CanvasTopbarIcons"
 import { useCanvasNodeWheel } from "./canvasScrollHelpers"
+import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
+import { findScriptTableNode } from "../../utils/canvas/contentStylePresets"
+import { isLutActive, submitVideoLutTask } from "../../services/lutApi"
 
 const POLL_INTERVAL_MS = 2000
-const VIDEO_MENU_WIDTH = 160
-const VIDEO_MENU_EST_HEIGHT = 180
+const VIDEO_MENU_WIDTH = 200
+const VIDEO_MENU_EST_HEIGHT = 280
 
 function computeVideoMenuPos(btnRect) {
   let x = btnRect.right - VIDEO_MENU_WIDTH
@@ -108,8 +117,47 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const [toast, setToast] = useState(null)
   const [sending, setSending] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [playbackProgress, setPlaybackProgress] = useState(0)
+  const [playbackDuration, setPlaybackDuration] = useState(0)
+  const [isScrubbing, setIsScrubbing] = useState(false)
+  const isScrubbingRef = useRef(false)
+  const wasPlayingBeforeScrubRef = useRef(false)
   const [videoMenu, setVideoMenu] = useState(null)
   const videoMenuPortalRef = useRef(null)
+  const [enhanceUpscaleFactor, setEnhanceUpscaleFactor] = useState(
+    () => data.enhanceUpscaleFactor ?? 2
+  )
+  const [enhanceStrength, setEnhanceStrength] = useState(
+    () => data.enhanceStrength || "normal"
+  )
+  const [enhanceInputNoiseScale, setEnhanceInputNoiseScale] = useState(
+    () => data.enhanceInputNoiseScale ?? 0.25
+  )
+  const [enhanceBatchSize, setEnhanceBatchSize] = useState(
+    () => data.enhanceBatchSize ?? 8
+  )
+  const [enhanceColorCorrection, setEnhanceColorCorrection] = useState(
+    () => data.enhanceColorCorrection || "lab"
+  )
+  const [enhanceModelSize, setEnhanceModelSize] = useState(
+    () => data.enhanceModelSize || "7b"
+  )
+  const [enhanceManualMode, setEnhanceManualMode] = useState(
+    () => !!data.enhanceManualMode
+  )
+  const [enhanceReasoning, setEnhanceReasoning] = useState(
+    () => data.enhanceReasoning || ""
+  )
+  const [enhanceAnalyzing, setEnhanceAnalyzing] = useState(false)
+  const [enhanceAdvancedOpen, setEnhanceAdvancedOpen] = useState(false)
+  const [enhanceMenuOpen, setEnhanceMenuOpen] = useState(false)
+  const [enhancing, setEnhancing] = useState(false)
+  const [enhanceError, setEnhanceError] = useState(data.enhanceError || null)
+  const enhanceBridgeRef = useRef({})
+  const enhancePollTimersRef = useRef(null)
+  const lutPollTimersRef = useRef(null)
+  const autoApplyLutRef = useRef(null)
+  const [videoViewTab, setVideoViewTab] = useState("graded")
   const toastTimerRef = useRef(null)
   const pollTimersRef = useRef(null)
   const staleGuardRef = useRef(null)
@@ -265,6 +313,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
             canvasName: projectName,
             teamId: getCanvasTeamId(),
           })
+          autoApplyLutRef.current?.(url)
         } else if (task.status === "failed") {
           failTask("error", parseGenerationError(null, task))
         }
@@ -467,7 +516,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
     toastTimerRef.current = setTimeout(() => setToast(null), 2000)
   }, [])
 
-  const { getNode } = useReactFlow()
+  const { getNode, getNodes } = useReactFlow()
   const canvasActions = useCanvasActions()
   const refSelect = useReferenceSelect()
   const isRefSource = refSelect?.mode?.active && refSelect?.mode?.sourceNodeId === id
@@ -660,6 +709,396 @@ export default function VideoGenerationNode({ id, data, selected }) {
     generateRef.current?.()
   }, [stopPolling, clearNodeTaskState, sending, errorMessage, data.error])
 
+  const stopEnhancePolling = useCallback(() => {
+    const timers = enhancePollTimersRef.current
+    if (!timers) return
+    if (timers.interval) clearInterval(timers.interval)
+    enhancePollTimersRef.current = null
+  }, [])
+
+  const startEnhancePolling = useCallback((activeTaskId) => {
+    stopEnhancePolling()
+    const pollOnce = async () => {
+      try {
+        const res = await api.get(`/api/tasks/${activeTaskId}`)
+        const task = res.data
+        const apiStatus = task.status
+        if (apiStatus === "completed" && task.result) {
+          stopEnhancePolling()
+          const url = resolveTaskResultUrl(task.result)
+          setEnhancing(false)
+          setEnhanceError(null)
+          data.onUpdate?.(id, {
+            enhanceStatus: "completed",
+            enhancedVideoUrl: url,
+            enhanceTaskId: activeTaskId,
+            enhanceError: null,
+          })
+          return
+        }
+        if (apiStatus === "failed") {
+          stopEnhancePolling()
+          const msg = parseGenerationError(null, task)
+          setEnhancing(false)
+          setEnhanceError(msg)
+          data.onUpdate?.(id, {
+            enhanceStatus: "failed",
+            enhanceError: msg,
+          })
+        }
+      } catch (e) {
+        if (isNetworkError(e)) return
+        stopEnhancePolling()
+        const msg = parseGenerationError(e, null)
+        setEnhancing(false)
+        setEnhanceError(msg)
+        data.onUpdate?.(id, {
+          enhanceStatus: "failed",
+          enhanceError: msg,
+        })
+      }
+    }
+    pollOnce()
+    const interval = setInterval(pollOnce, POLL_INTERVAL_MS)
+    enhancePollTimersRef.current = { interval }
+  }, [stopEnhancePolling, id, data, t])
+
+  const stopLutPolling = useCallback(() => {
+    const timers = lutPollTimersRef.current
+    if (!timers) return
+    if (timers.interval) clearInterval(timers.interval)
+    lutPollTimersRef.current = null
+  }, [])
+
+  const startLutPolling = useCallback((activeTaskId) => {
+    stopLutPolling()
+    const pollOnce = async () => {
+      try {
+        const res = await api.get(`/api/tasks/${activeTaskId}`)
+        const task = res.data
+        if (task.status === "completed" && task.result) {
+          stopLutPolling()
+          const url = resolveTaskResultUrl(task.result)
+          data.onUpdate?.(id, {
+            lutStatus: "completed",
+            lutVideoUrl: url,
+            lutTaskId: activeTaskId,
+            lutError: null,
+          })
+          setVideoViewTab("graded")
+          return
+        }
+        if (task.status === "failed") {
+          stopLutPolling()
+          const msg = parseGenerationError(null, task)
+          data.onUpdate?.(id, {
+            lutStatus: "failed",
+            lutError: msg,
+          })
+        }
+      } catch (e) {
+        if (isNetworkError(e)) return
+        stopLutPolling()
+        data.onUpdate?.(id, {
+          lutStatus: "failed",
+          lutError: parseGenerationError(e, null),
+        })
+      }
+    }
+    pollOnce()
+    const interval = setInterval(pollOnce, POLL_INTERVAL_MS)
+    lutPollTimersRef.current = { interval }
+  }, [stopLutPolling, id, data])
+
+  const autoApplyLut = useCallback(async (sourceUrl) => {
+    const st = findScriptTableNode(getNodes())
+    if (!st || !isLutActive(st.data)) return
+    if (data.lutStatus === "applying") return
+    const { canvasId } = useCanvasStore.getState()
+    if (!canvasId || !sourceUrl) return
+    data.onUpdate?.(id, { lutStatus: "applying", lutError: null })
+    try {
+      const res = await submitVideoLutTask({
+        projectId: canvasId,
+        scriptTableNodeId: st.id,
+        videoUrl: sourceUrl,
+        nodeId: id,
+        teamId: getCanvasTeamId(),
+      })
+      if (res?.task_id) startLutPolling(res.task_id)
+    } catch (e) {
+      data.onUpdate?.(id, {
+        lutStatus: "failed",
+        lutError: parseGenerationError(e, null),
+      })
+    }
+  }, [data, getNodes, id, startLutPolling])
+
+  useEffect(() => {
+    autoApplyLutRef.current = autoApplyLut
+  }, [autoApplyLut])
+
+  useEffect(() => {
+    if (!data.lutTaskId || data.lutStatus !== "applying") return undefined
+    startLutPolling(data.lutTaskId)
+    return () => stopLutPolling()
+  }, [data.lutTaskId, data.lutStatus, startLutPolling, stopLutPolling])
+
+  useEffect(() => () => stopLutPolling(), [stopLutPolling])
+
+  const applyEnhanceParams = useCallback((params, reasoning = "") => {
+    if (!params) return
+    const upscale = Number(params.upscale_factor ?? enhanceUpscaleFactor)
+    const strength = params.strength || enhanceStrength
+    const noise = Number(params.input_noise_scale ?? enhanceInputNoiseScale)
+    const batch = Number(params.batch_size ?? enhanceBatchSize)
+    const color = params.color_correction || enhanceColorCorrection
+    const modelSize = params.model_size || enhanceModelSize
+
+    setEnhanceUpscaleFactor(upscale)
+    setEnhanceStrength(strength)
+    setEnhanceInputNoiseScale(noise)
+    setEnhanceBatchSize(batch)
+    setEnhanceColorCorrection(color)
+    setEnhanceModelSize(modelSize)
+    if (reasoning) setEnhanceReasoning(reasoning)
+
+    data.onUpdate?.(id, {
+      enhanceUpscaleFactor: upscale,
+      enhanceStrength: strength,
+      enhanceInputNoiseScale: noise,
+      enhanceBatchSize: batch,
+      enhanceColorCorrection: color,
+      enhanceModelSize: modelSize,
+      enhanceReasoning: reasoning || data.enhanceReasoning,
+    })
+    notifyVideoEnhanceBridge()
+  }, [
+    id,
+    data,
+    enhanceUpscaleFactor,
+    enhanceStrength,
+    enhanceInputNoiseScale,
+    enhanceBatchSize,
+    enhanceColorCorrection,
+    enhanceModelSize,
+    data.enhanceReasoning,
+  ])
+
+  const submitEnhanceTask = useCallback(async (params) => {
+    const sourceUrl = ensureMediaUrl(videoUrl || data.videoUrl || null)
+    if (!sourceUrl || enhancing || enhanceAnalyzing) return
+    stopEnhancePolling()
+    setEnhancing(true)
+    setEnhanceError(null)
+    data.onUpdate?.(id, {
+      enhanceStatus: "enhancing",
+      enhanceError: null,
+      enhanceUpscaleFactor: params.upscale_factor,
+      enhanceStrength: params.strength,
+      enhanceInputNoiseScale: params.input_noise_scale,
+      enhanceBatchSize: params.batch_size,
+      enhanceColorCorrection: params.color_correction,
+      enhanceModelSize: params.model_size,
+    })
+    try {
+      const res = await api.post("/api/tasks/video-enhance", {
+        video_url: sourceUrl,
+        upscale_factor: params.upscale_factor,
+        strength: params.strength,
+        workflow: "auto",
+        input_noise_scale: params.input_noise_scale,
+        batch_size: params.batch_size,
+        color_correction: params.color_correction,
+        model_size: params.model_size,
+        node_id: id,
+        client_id: wsManager.getClientId(),
+        ...teamIdPayload(),
+      })
+      const tid = res.data?.task_id
+      if (!tid) throw new Error(t("canvas.gen.failed"))
+      data.onUpdate?.(id, { enhanceTaskId: tid })
+      startEnhancePolling(tid)
+    } catch (e) {
+      const status = e?.response?.status
+      const msg =
+        status === 503
+          ? t("canvas.video.enhanceUnavailable")
+          : parseGenerationError(e, null)
+      setEnhancing(false)
+      setEnhanceError(msg)
+      data.onUpdate?.(id, {
+        enhanceStatus: "failed",
+        enhanceError: msg,
+      })
+      showToast(msg)
+    }
+  }, [
+    videoUrl,
+    data.videoUrl,
+    enhancing,
+    enhanceAnalyzing,
+    stopEnhancePolling,
+    id,
+    data,
+    startEnhancePolling,
+    showToast,
+    t,
+  ])
+
+  const buildEnhancePayload = useCallback(() => ({
+    upscale_factor: enhanceUpscaleFactor,
+    strength: enhanceStrength,
+    input_noise_scale: enhanceInputNoiseScale,
+    batch_size: enhanceBatchSize,
+    color_correction: enhanceColorCorrection,
+    model_size: enhanceModelSize,
+  }), [
+    enhanceUpscaleFactor,
+    enhanceStrength,
+    enhanceInputNoiseScale,
+    enhanceBatchSize,
+    enhanceColorCorrection,
+    enhanceModelSize,
+  ])
+
+  const fetchRecommendParams = useCallback(async (sourceUrl) => {
+    const { canvasId } = useCanvasStore.getState()
+    const scriptTable = findScriptTableNode(getNodes())
+    const res = await api.post("/api/tasks/video-enhance/recommend-params", {
+      video_url: sourceUrl,
+      project_id: canvasId || undefined,
+      script_table_node_id: scriptTable?.id || undefined,
+    })
+    const params = res.data?.params
+    const reasoning = res.data?.reasoning || ""
+    if (!params) throw new Error(t("canvas.gen.failed"))
+    applyEnhanceParams(params, reasoning)
+    return params
+  }, [applyEnhanceParams, t, getNodes])
+
+  const handleSmartEnhance = useCallback(async () => {
+    const sourceUrl = ensureMediaUrl(videoUrl || data.videoUrl || null)
+    if (!sourceUrl || enhancing || enhanceAnalyzing) return
+
+    try {
+      let params = buildEnhancePayload()
+      if (!enhanceManualMode) {
+        setEnhanceAnalyzing(true)
+        try {
+          params = await fetchRecommendParams(sourceUrl)
+        } finally {
+          setEnhanceAnalyzing(false)
+        }
+      }
+      await submitEnhanceTask(params)
+    } catch (e) {
+      setEnhanceAnalyzing(false)
+      const msg = parseGenerationError(e, null)
+      setEnhanceError(msg)
+      data.onUpdate?.(id, { enhanceError: msg })
+      showToast(msg)
+    }
+  }, [
+    videoUrl,
+    data.videoUrl,
+    enhancing,
+    enhanceAnalyzing,
+    enhanceManualMode,
+    buildEnhancePayload,
+    fetchRecommendParams,
+    submitEnhanceTask,
+    id,
+    data,
+    showToast,
+  ])
+
+  const handleEnhance = handleSmartEnhance
+
+  const handleEnhanceRetry = useCallback(() => {
+    const policy = getRetryPolicy(enhanceError || data.enhanceError || "")
+    if (!policy.retryable || enhancing) return
+    handleEnhance()
+  }, [enhanceError, data.enhanceError, enhancing, handleEnhance])
+
+  const handleEnhanceUpscaleChange = useCallback((factor) => {
+    setEnhanceUpscaleFactor(factor)
+    data.onUpdate?.(id, { enhanceUpscaleFactor: factor })
+    notifyVideoEnhanceBridge()
+  }, [id, data])
+
+  const handleEnhanceStrengthChange = useCallback((next) => {
+    setEnhanceStrength(next)
+    data.onUpdate?.(id, { enhanceStrength: next })
+    notifyVideoEnhanceBridge()
+  }, [id, data])
+
+  const handleEnhanceInputNoiseScaleChange = useCallback((next) => {
+    setEnhanceInputNoiseScale(next)
+    data.onUpdate?.(id, { enhanceInputNoiseScale: next })
+    notifyVideoEnhanceBridge()
+  }, [id, data])
+
+  const handleEnhanceBatchSizeChange = useCallback((next) => {
+    setEnhanceBatchSize(next)
+    data.onUpdate?.(id, { enhanceBatchSize: next })
+    notifyVideoEnhanceBridge()
+  }, [id, data])
+
+  const handleEnhanceColorCorrectionChange = useCallback((next) => {
+    setEnhanceColorCorrection(next)
+    data.onUpdate?.(id, { enhanceColorCorrection: next })
+    notifyVideoEnhanceBridge()
+  }, [id, data])
+
+  const handleEnhanceModelSizeChange = useCallback((next) => {
+    setEnhanceModelSize(next)
+    data.onUpdate?.(id, { enhanceModelSize: next })
+    notifyVideoEnhanceBridge()
+  }, [id, data])
+
+  const handleEnhanceManualModeChange = useCallback((next) => {
+    setEnhanceManualMode(next)
+    data.onUpdate?.(id, { enhanceManualMode: next })
+    notifyVideoEnhanceBridge()
+  }, [id, data])
+
+  const handleEnhanceAdvancedOpenChange = useCallback(async (open) => {
+    setEnhanceAdvancedOpen(open)
+    if (!open || enhanceReasoning) return
+    const sourceUrl = ensureMediaUrl(videoUrl || data.videoUrl || null)
+    if (!sourceUrl) return
+    try {
+      setEnhanceAnalyzing(true)
+      await fetchRecommendParams(sourceUrl)
+    } catch {
+      // 预填失败时保留默认值，不阻断高级面板
+    } finally {
+      setEnhanceAnalyzing(false)
+    }
+  }, [enhanceReasoning, videoUrl, data.videoUrl, fetchRecommendParams])
+
+  const handleDownloadEnhanced = useCallback(async () => {
+    const url = ensureMediaUrl(data.enhancedVideoUrl || null)
+    if (!url) return
+    try {
+      await downloadMediaUrl(url, "video-enhanced")
+    } catch (err) {
+      console.error("[video-gen] enhanced download failed:", err)
+      showToast(t("canvas.video.downloadFail"))
+    }
+  }, [data.enhancedVideoUrl, showToast, t])
+
+  useEffect(() => () => stopEnhancePolling(), [stopEnhancePolling])
+
+  useEffect(() => {
+    if (!data.enhanceTaskId || data.enhanceStatus !== "enhancing") return undefined
+    if (enhancing) return undefined
+    setEnhancing(true)
+    startEnhancePolling(data.enhanceTaskId)
+    return undefined
+  }, [data.enhanceTaskId, data.enhanceStatus, enhancing, startEnhancePolling])
+
   const handleStopGeneration = useCallback(async () => {
     const activeId = taskId || data.taskId
     stopPolling()
@@ -745,6 +1184,82 @@ export default function VideoGenerationNode({ id, data, selected }) {
     () => getRetryPolicy(errorMessage || data.error || ""),
     [errorMessage, data.error]
   )
+  const enhancedPlaybackUrl = data.enhancedVideoUrl
+    ? ensureMediaUrl(data.enhancedVideoUrl)
+    : null
+  const lutPlaybackUrl = data.lutVideoUrl
+    ? ensureMediaUrl(data.lutVideoUrl)
+    : null
+  const displayPlaybackUrl =
+    videoViewTab === "graded" && lutPlaybackUrl ? lutPlaybackUrl : playbackUrl
+  const enhanceStatus = data.enhanceStatus || "idle"
+  const enhanceRetryPolicy = useMemo(
+    () => getRetryPolicy(enhanceError || data.enhanceError || ""),
+    [enhanceError, data.enhanceError]
+  )
+  const isEnhancing = enhancing || enhanceStatus === "enhancing"
+  const showEnhanceFailed =
+    enhanceStatus === "failed" || (!!enhanceError && !enhancedPlaybackUrl)
+
+  useEffect(() => {
+    enhanceBridgeRef.current = {
+      videoReady: isDone && !!playbackUrl,
+      isEnhancing,
+      isAnalyzing: enhanceAnalyzing,
+      hasEnhanced: !!enhancedPlaybackUrl,
+      manualMode: enhanceManualMode,
+      advancedOpen: enhanceAdvancedOpen,
+      reasoning: enhanceReasoning,
+      upscaleFactor: enhanceUpscaleFactor,
+      strength: enhanceStrength,
+      inputNoiseScale: enhanceInputNoiseScale,
+      batchSize: enhanceBatchSize,
+      colorCorrection: enhanceColorCorrection,
+      modelSize: enhanceModelSize,
+      error: enhanceError || data.enhanceError || null,
+      onUpscaleChange: handleEnhanceUpscaleChange,
+      onStrengthChange: handleEnhanceStrengthChange,
+      onInputNoiseScaleChange: handleEnhanceInputNoiseScaleChange,
+      onBatchSizeChange: handleEnhanceBatchSizeChange,
+      onColorCorrectionChange: handleEnhanceColorCorrectionChange,
+      onModelSizeChange: handleEnhanceModelSizeChange,
+      onManualModeChange: handleEnhanceManualModeChange,
+      onAdvancedOpenChange: handleEnhanceAdvancedOpenChange,
+      onOneClick: handleSmartEnhance,
+      onCancel: () => {},
+    }
+    setVideoEnhanceBridge(id, enhanceBridgeRef)
+    notifyVideoEnhanceBridge()
+  }, [
+    id,
+    isDone,
+    playbackUrl,
+    isEnhancing,
+    enhancedPlaybackUrl,
+    enhanceUpscaleFactor,
+    enhanceStrength,
+    enhanceInputNoiseScale,
+    enhanceBatchSize,
+    enhanceColorCorrection,
+    enhanceModelSize,
+    enhanceManualMode,
+    enhanceReasoning,
+    enhanceAnalyzing,
+    enhanceAdvancedOpen,
+    enhanceError,
+    data.enhanceError,
+    handleEnhanceUpscaleChange,
+    handleEnhanceStrengthChange,
+    handleEnhanceInputNoiseScaleChange,
+    handleEnhanceBatchSizeChange,
+    handleEnhanceColorCorrectionChange,
+    handleEnhanceModelSizeChange,
+    handleEnhanceManualModeChange,
+    handleEnhanceAdvancedOpenChange,
+    handleSmartEnhance,
+  ])
+
+  useEffect(() => () => setVideoEnhanceBridge(id, null), [id])
 
   const handleDownloadVideo = useCallback(async () => {
     if (!playbackUrl) return
@@ -761,13 +1276,18 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const [fullscreenSrc, setFullscreenSrc] = useState(null)
   const [leftVisible, setLeftVisible] = useState(false)
   const [rightVisible, setRightVisible] = useState(false)
+  const plusPinned = selected
 
-  const closeVideoMenu = useCallback(() => setVideoMenu(null), [])
+  const closeVideoMenu = useCallback(() => {
+    setVideoMenu(null)
+    setEnhanceMenuOpen(false)
+  }, [])
 
   useEffect(() => {
     if (!videoMenu) return undefined
     const onDocDown = (e) => {
       if (videoMenuPortalRef.current?.contains(e.target)) return
+      markSuppressPaneMenu()
       closeVideoMenu()
     }
     document.addEventListener("mousedown", onDocDown)
@@ -794,6 +1314,55 @@ export default function VideoGenerationNode({ id, data, selected }) {
     } else {
       el.pause()
       setIsPlaying(false)
+    }
+  }, [])
+
+  const seekFromClientX = useCallback((clientX, barEl) => {
+    const el = videoRef.current
+    if (!el || !barEl || !playbackDuration || !Number.isFinite(playbackDuration)) return
+    const rect = barEl.getBoundingClientRect()
+    if (!rect.width) return
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    el.currentTime = ratio * playbackDuration
+    setPlaybackProgress(el.currentTime)
+  }, [playbackDuration])
+
+  const handlePlaybackBarPointerDown = useCallback((e) => {
+    stopFlowPointer(e)
+    e.preventDefault()
+    const barEl = e.currentTarget
+    const el = videoRef.current
+    if (!el || !playbackDuration) return
+    wasPlayingBeforeScrubRef.current = !el.paused
+    if (!el.paused) {
+      el.pause()
+      setIsPlaying(false)
+    }
+    isScrubbingRef.current = true
+    setIsScrubbing(true)
+    barEl.setPointerCapture(e.pointerId)
+    seekFromClientX(e.clientX, barEl)
+  }, [playbackDuration, seekFromClientX])
+
+  const handlePlaybackBarPointerMove = useCallback((e) => {
+    if (!isScrubbingRef.current) return
+    stopFlowPointer(e)
+    seekFromClientX(e.clientX, e.currentTarget)
+  }, [seekFromClientX])
+
+  const handlePlaybackBarPointerUp = useCallback((e) => {
+    if (!isScrubbingRef.current) return
+    stopFlowPointer(e)
+    isScrubbingRef.current = false
+    setIsScrubbing(false)
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* already released */
+    }
+    const el = videoRef.current
+    if (el && wasPlayingBeforeScrubRef.current) {
+      el.play().then(() => setIsPlaying(true)).catch(() => {})
     }
   }, [])
 
@@ -839,15 +1408,15 @@ export default function VideoGenerationNode({ id, data, selected }) {
 
         {/* Source handles: large hit area centered on card edge */}
         <Handle type="source" position={Position.Left}  id="src-left"  className="gn2-edge-handle gn2-edge-handle--left"
-          onMouseEnter={() => setLeftVisible(true)} onMouseLeave={() => setLeftVisible(false)} />
+          onMouseEnter={() => setLeftVisible(true)} onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }} />
         <Handle type="source" position={Position.Right} id="src-right" className="gn2-edge-handle gn2-edge-handle--right"
-          onMouseEnter={() => setRightVisible(true)} onMouseLeave={() => setRightVisible(false)} />
+          onMouseEnter={() => setRightVisible(true)} onMouseLeave={() => { if (!plusPinned) setRightVisible(false) }} />
 
         {/* Left zone: hover container + sliding visual button */}
         <div
-          className={`gn2-plus-left-zone nodrag${leftVisible ? ' gn2-plus-zone--visible' : ''}`}
+          className={`gn2-plus-left-zone nodrag${leftVisible || plusPinned ? ' gn2-plus-zone--visible' : ''}`}
           onMouseEnter={() => setLeftVisible(true)}
-          onMouseLeave={() => setLeftVisible(false)}
+          onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }}
           onClick={(e) => { e.stopPropagation(); canvasActions?.openPickerAt(e.clientX - 20, e.clientY, { toLeft: true, targetNodeId: id }) }}
         >
           <div className="gn2-plus-btn-visual">+</div>
@@ -855,9 +1424,9 @@ export default function VideoGenerationNode({ id, data, selected }) {
 
         {/* Right zone: hover container + sliding visual button */}
         <div
-          className={`gn2-plus-right-zone nodrag${rightVisible ? ' gn2-plus-zone--visible' : ''}`}
+          className={`gn2-plus-right-zone nodrag${rightVisible || plusPinned ? ' gn2-plus-zone--visible' : ''}`}
           onMouseEnter={() => setRightVisible(true)}
-          onMouseLeave={() => setRightVisible(false)}
+          onMouseLeave={() => { if (!plusPinned) setRightVisible(false) }}
           onClick={(e) => { e.stopPropagation(); canvasActions?.openPickerAt(e.clientX + 20, e.clientY, { fromEdge: true, sourceNodeId: id, sourceNodeType: 'video-gen' }) }}
         >
           <div className="gn2-plus-btn-visual">+</div>
@@ -883,19 +1452,37 @@ export default function VideoGenerationNode({ id, data, selected }) {
             <div className="gn2-generating">
               <div className="gn2-progress-fill" style={{ height: `${progress}%` }} />
               <div className="gn2-generating-info">
+                <GenerationBrandLoader />
                 <span className="gn2-pct">{progress}%</span>
-                <span className="gn2-gen-label">{t("canvas.gen.generating")}</span>
                 <GenerationStopButton onStop={handleStopGeneration} />
               </div>
             </div>
           )}
-          {isDone && playbackUrl && (
+          {isDone && displayPlaybackUrl && (
             <div className="gn2-video-wrap">
+              {lutPlaybackUrl && (
+                <div className="gn2-lut-tabs nodrag nopan" onPointerDown={stopFlowPointer}>
+                  <button
+                    type="button"
+                    className={`gn2-lut-tab${videoViewTab === "graded" ? " gn2-lut-tab--active" : ""}`}
+                    onClick={() => setVideoViewTab("graded")}
+                  >
+                    {t("canvas.video.lutGraded")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`gn2-lut-tab${videoViewTab === "original" ? " gn2-lut-tab--active" : ""}`}
+                    onClick={() => setVideoViewTab("original")}
+                  >
+                    {t("canvas.video.lutOriginal")}
+                  </button>
+                </div>
+              )}
               <video
-                key={`${mediaRevision}:${playbackUrl}`}
+                key={`${mediaRevision}:${displayPlaybackUrl}`}
                 ref={videoRef}
                 className="gn2-result-video"
-                src={playbackUrl}
+                src={displayPlaybackUrl}
                 loop
                 muted
                 playsInline
@@ -908,6 +1495,14 @@ export default function VideoGenerationNode({ id, data, selected }) {
                 onEnded={() => setIsPlaying(false)}
                 onLoadedData={() => {
                   console.log("[video-gen] video loaded:", playbackUrl)
+                }}
+                onLoadedMetadata={(e) => {
+                  setPlaybackDuration(e.currentTarget.duration || 0)
+                  setPlaybackProgress(0)
+                }}
+                onTimeUpdate={(e) => {
+                  if (isScrubbingRef.current) return
+                  setPlaybackProgress(e.currentTarget.currentTime || 0)
                 }}
                 onError={(e) => {
                   const el = e.currentTarget
@@ -950,6 +1545,22 @@ export default function VideoGenerationNode({ id, data, selected }) {
                     </svg>
                   )}
                 </button>
+              </div>
+              <div
+                className={`gn2-video-playback-bar nodrag nopan${isScrubbing ? " gn2-video-playback-bar--scrubbing" : ""}`}
+                onPointerDown={handlePlaybackBarPointerDown}
+                onPointerMove={handlePlaybackBarPointerMove}
+                onPointerUp={handlePlaybackBarPointerUp}
+                onPointerCancel={handlePlaybackBarPointerUp}
+              >
+                <div
+                  className="gn2-video-playback-fill"
+                  style={{
+                    width: playbackDuration
+                      ? `${(playbackProgress / playbackDuration) * 100}%`
+                      : "0%",
+                  }}
+                />
               </div>
               <div
                 className="gn2-video-dots-wrap nodrag nopan"
@@ -1001,6 +1612,54 @@ export default function VideoGenerationNode({ id, data, selected }) {
           )}
         </div>
 
+        {isDone && (showEnhanceFailed || enhancedPlaybackUrl) && (
+          <div
+            className="gn2-enhance-section nodrag nopan"
+            onPointerDown={stopFlowPointer}
+            onMouseDown={stopFlowPointer}
+          >
+            {showEnhanceFailed && (
+              <div className="gn2-enhance-error">
+                <span>{enhanceError || data.enhanceError}</span>
+                <button
+                  type="button"
+                  className="gn2-retry-btn nodrag nopan"
+                  onClick={handleEnhanceRetry}
+                  disabled={isEnhancing || !enhanceRetryPolicy.retryable}
+                >
+                  {t("canvas.video.enhanceRetry")}
+                </button>
+              </div>
+            )}
+            {enhancedPlaybackUrl && (
+              <div className="gn2-enhance-compare">
+                <div className="gn2-enhance-compare-col">
+                  <span className="gn2-enhance-compare-label">{t("canvas.video.originalLabel")}</span>
+                  <video
+                    className="gn2-enhance-compare-video"
+                    src={playbackUrl}
+                    muted
+                    playsInline
+                    controls
+                    preload="metadata"
+                  />
+                </div>
+                <div className="gn2-enhance-compare-col">
+                  <span className="gn2-enhance-compare-label">{t("canvas.video.enhancedLabel")}</span>
+                  <video
+                    className="gn2-enhance-compare-video"
+                    src={enhancedPlaybackUrl}
+                    muted
+                    playsInline
+                    controls
+                    preload="metadata"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
 
       {toast && (
@@ -1051,7 +1710,8 @@ export default function VideoGenerationNode({ id, data, selected }) {
                 closeVideoMenu()
               }}
             >
-              <span>🔍</span>{t("canvas.image.zoom")}
+              <IconZoom />
+              {t("canvas.image.zoom")}
             </button>
             <button
               type="button"
@@ -1064,6 +1724,73 @@ export default function VideoGenerationNode({ id, data, selected }) {
             >
               <span>⬇</span>{t("canvas.video.download")}
             </button>
+            {isDone && (
+              <>
+                {!enhancedPlaybackUrl && (
+                  <div className="gn2-dots-item-row">
+                    <button
+                      type="button"
+                      className={`gn2-dots-item nodrag nopan${enhanceMenuOpen ? " gn2-dots-item--submenu-open" : ""}`}
+                      onClick={(e) => {
+                        stopFlowPointer(e)
+                        setEnhanceMenuOpen((v) => !v)
+                      }}
+                    >
+                      <IconEnhance />
+                      {t("canvas.video.enhance")}
+                    </button>
+                    {enhanceMenuOpen && (
+                      <div className="cell-dots-submenu gn2-dots-enhance-submenu nodrag nopan">
+                        <VideoEnhancePanel
+                          variant="menu"
+                          videoReady={isDone && !!playbackUrl}
+                          isEnhancing={isEnhancing}
+                          isAnalyzing={enhanceAnalyzing}
+                          hasEnhanced={!!enhancedPlaybackUrl}
+                          manualMode={enhanceManualMode}
+                          advancedOpen={enhanceAdvancedOpen}
+                          reasoning={enhanceReasoning}
+                          upscaleFactor={enhanceUpscaleFactor}
+                          strength={enhanceStrength}
+                          inputNoiseScale={enhanceInputNoiseScale}
+                          batchSize={enhanceBatchSize}
+                          colorCorrection={enhanceColorCorrection}
+                          modelSize={enhanceModelSize}
+                          error={enhanceError}
+                          onManualModeChange={handleEnhanceManualModeChange}
+                          onAdvancedOpenChange={handleEnhanceAdvancedOpenChange}
+                          onUpscaleChange={handleEnhanceUpscaleChange}
+                          onStrengthChange={handleEnhanceStrengthChange}
+                          onInputNoiseScaleChange={handleEnhanceInputNoiseScaleChange}
+                          onBatchSizeChange={handleEnhanceBatchSizeChange}
+                          onColorCorrectionChange={handleEnhanceColorCorrectionChange}
+                          onModelSizeChange={handleEnhanceModelSizeChange}
+                          onOneClick={() => {
+                            handleSmartEnhance()
+                            setEnhanceMenuOpen(false)
+                            closeVideoMenu()
+                          }}
+                          onCancel={() => setEnhanceMenuOpen(false)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+                {enhancedPlaybackUrl && (
+                  <button
+                    type="button"
+                    className="gn2-dots-item nodrag nopan"
+                    onClick={(e) => {
+                      stopFlowPointer(e)
+                      handleDownloadEnhanced()
+                      closeVideoMenu()
+                    }}
+                  >
+                    <span>⬇</span>{t("canvas.video.downloadEnhanced")}
+                  </button>
+                )}
+              </>
+            )}
             <button
               type="button"
               className="gn2-dots-item nodrag nopan"

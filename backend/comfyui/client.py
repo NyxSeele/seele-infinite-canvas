@@ -103,6 +103,12 @@ VIDEO_WORKFLOW_CLASS = VIDEO_SAVE_CLASS | {
     "EmptyHunyuanLatentVideo",
     "HunyuanVideoModelLoader",
     "HunyuanVideoSampler",
+    "SeedVR2LoadDiTModel",
+    "SeedVR2LoadVAEModel",
+    "SeedVR2VideoUpscaler",
+    "UpscaleModelLoader",
+    "ImageUpscaleWithModel",
+    "VHS_LoadVideo",
 }
 
 STYLE_SUFFIXES = {
@@ -725,6 +731,8 @@ def build_ltx_video_workflow(
     height: int = 512,
     duration_sec: int = 5,
     seed: int | None = None,
+    *,
+    model_filename: str | None = None,
 ) -> dict:
     """
     LTX-Video 官方节点链（LTXVLoader + SamplerCustomAdvanced + LTXVDecoder + VHS_VideoCombine）。
@@ -736,12 +744,13 @@ def build_ltx_video_workflow(
     length = ltx_video_length(duration_sec)
     positive = str(positive_prompt).strip()
     negative = str(negative_prompt).strip()
+    ckpt = (model_filename or LTX_CKPT).strip() or LTX_CKPT
 
     return {
         V_LOADER: {
             "class_type": "LTXVLoader",
             "inputs": {
-                "ckpt_name": LTX_CKPT,
+                "ckpt_name": ckpt,
                 "dtype": "bfloat16",
             },
         },
@@ -839,6 +848,8 @@ def build_ltx_video_workflow_compat(
     duration_sec: int = 5,
     seed: int | None = None,
     info: dict | None = None,
+    *,
+    model_filename: str | None = None,
 ) -> dict:
     """
     当前 ComfyUI 桌面版可用链：Checkpoint + CLIPLoader(T5) + SamplerCustomAdvanced。
@@ -850,12 +861,13 @@ def build_ltx_video_workflow_compat(
     length = ltx_video_length(duration_sec)
     positive = str(positive_prompt).strip()
     negative = str(negative_prompt).strip()
+    ckpt = (model_filename or LTX_CKPT).strip() or LTX_CKPT
 
     node_info = info if info is not None else (_object_info_cache or {})
     workflow = {
         VC_CKPT: {
             "class_type": "CheckpointLoaderSimple",
-            "inputs": {"ckpt_name": LTX_CKPT},
+            "inputs": {"ckpt_name": ckpt},
         },
         VC_CLIP: {
             "class_type": "CLIPLoader",
@@ -955,9 +967,18 @@ def build_ltx_image2video_workflow_compat(
     duration_sec: int = 5,
     seed: int | None = None,
     info: dict | None = None,
+    *,
+    model_filename: str | None = None,
 ) -> dict:
     workflow = build_ltx_video_workflow_compat(
-        positive_prompt, negative_prompt, width, height, duration_sec, seed, info=info
+        positive_prompt,
+        negative_prompt,
+        width,
+        height,
+        duration_sec,
+        seed,
+        info=info,
+        model_filename=model_filename,
     )
     length = workflow[VC_LATENT]["inputs"]["length"]
     del workflow[VC_LATENT]
@@ -1233,7 +1254,10 @@ async def _resolve_video_workflow(
     duration_sec: int,
     mode: str,
     image_filename: str | None,
+    *,
+    model_filename: str | None = None,
 ) -> dict:
+    ckpt = (model_filename or LTX_CKPT).strip() or LTX_CKPT
     global _object_info_cache
     info = await _fetch_object_info()
 
@@ -1247,7 +1271,12 @@ async def _resolve_video_workflow(
         if mode == "image2video" and image_filename:
             raise ValueError("官方 LTXVLoader 工作流暂不支持图生视频，请使用兼容模式")
         return build_ltx_video_workflow(
-            positive_prompt, negative_prompt, width, height, duration_sec
+            positive_prompt,
+            negative_prompt,
+            width,
+            height,
+            duration_sec,
+            model_filename=ckpt,
         )
 
     if not _t5_encoder_installed():
@@ -1264,10 +1293,17 @@ async def _resolve_video_workflow(
             height,
             duration_sec,
             info=info,
+            model_filename=ckpt,
         )
 
     return build_ltx_video_workflow_compat(
-        positive_prompt, negative_prompt, width, height, duration_sec, info=info
+        positive_prompt,
+        negative_prompt,
+        width,
+        height,
+        duration_sec,
+        info=info,
+        model_filename=ckpt,
     )
 
 
@@ -1392,6 +1428,8 @@ async def submit_video_prompt(
     image_b64: str | None = None,
     client_id: str | None = None,
     raw_prompt: bool = False,
+    *,
+    model_filename: str | None = None,
 ) -> tuple[str, str, dict]:
     positive = prompt.strip()
     if raw_prompt:
@@ -1420,7 +1458,14 @@ async def submit_video_prompt(
         len(positive or ""),
     )
     workflow = await _resolve_video_workflow(
-        positive, negative, width, height, duration, mode, image_filename
+        positive,
+        negative,
+        width,
+        height,
+        duration,
+        mode,
+        image_filename,
+        model_filename=model_filename,
     )
     prompt_id, used_client, workflow = await _log_and_post_video_workflow(
         workflow,
@@ -1622,8 +1667,32 @@ def _history_error_message(entry: dict) -> str:
             and len(msg) >= 2
             and msg[0] == "execution_error"
         ):
-            return str(msg[1])
+            return map_enhance_execution_error(str(msg[1]))
     return "ComfyUI 执行失败"
+
+
+def map_enhance_submit_error(message: str) -> str:
+    """将提交阶段异常映射为面向用户的画质增强错误文案。"""
+    raw = (message or "").strip()
+    lower = raw.lower()
+    if not raw:
+        return "画质增强提交失败，请稍后重试"
+    if "非法上传路径" in raw or "视频源无效" in raw:
+        return "视频源无效或无权访问"
+    if "vhs" in lower or "video helper suite" in lower:
+        return "缺少 Video Helper Suite 插件，无法处理视频"
+    if "not found" in lower or "does not exist" in lower or "找不到" in raw:
+        if "seedvr" in lower or "realesrgan" in lower or "safetensors" in lower or ".pth" in lower:
+            return f"缺少画质增强模型或插件：{raw}"
+        return f"缺少所需模型或节点：{raw}"
+    if "node_errors" in lower or "工作流节点错误" in raw:
+        return f"画质增强工作流配置错误：{raw}"
+    return raw
+
+
+def map_enhance_execution_error(message: str) -> str:
+    """将 ComfyUI 执行错误映射为友好文案。"""
+    return map_enhance_submit_error(message)
 
 
 def _execution_status_failed(
@@ -1954,3 +2023,309 @@ async def get_tasks() -> list:
         )
 
         return tasks
+
+
+# ── Video enhance (SeedVR2 / Real-ESRGAN) ─────────────────────────────────────
+
+SEEDVR2_DIT_NORMAL = "seedvr2_ema_7b_fp16.safetensors"
+SEEDVR2_DIT_SHARP = "seedvr2_ema_7b_sharp_fp16.safetensors"
+SEEDVR2_DIT_3B = "seedvr2_ema_3b_fp16.safetensors"
+SEEDVR2_DIT_3B_SHARP = "seedvr2_ema_3b_sharp_fp16.safetensors"
+SEEDVR2_VAE = "seedvr2_vae_fp16.safetensors"
+REALESRGAN_MODEL = "RealESRGAN_x4plus.pth"
+
+VE_LOAD = "1"
+VE_DIT = "2"
+VE_VAE = "3"
+VE_UPSCALE = "4"
+VE_SAVE = "5"
+
+RE_LOAD = "1"
+RE_UPMODEL = "2"
+RE_UPSCALE = "3"
+RE_SAVE = "4"
+
+
+def _seedvr2_dit_model(strength: str, model_size: str = "7b") -> str:
+    size = (model_size or "7b").strip().lower()
+    sharp = (strength or "").strip().lower() == "sharp"
+    if size == "3b":
+        return SEEDVR2_DIT_3B_SHARP if sharp else SEEDVR2_DIT_3B
+    return SEEDVR2_DIT_SHARP if sharp else SEEDVR2_DIT_NORMAL
+
+
+def _clamp_upscale_factor(value: float) -> float:
+    try:
+        factor = float(value)
+    except (TypeError, ValueError):
+        factor = 2.0
+    if factor <= 1.0:
+        return 1.0
+    if factor <= 1.5:
+        return 1.5
+    if factor >= 3.0:
+        return 3.0
+    if factor <= 2.0:
+        return 2.0
+    return factor
+
+
+def _seedvr2_target_resolution(upscale_factor: float, source_height: int | None = None) -> int:
+    factor = _clamp_upscale_factor(upscale_factor)
+    if factor <= 1.0:
+        base = int(source_height) if source_height and source_height > 0 else 480
+        return max(480, base)
+    return int(480 * factor)
+
+
+def build_seedvr2_enhance_workflow(
+    video_filename: str,
+    *,
+    upscale_factor: float = 2.0,
+    model_variant: str | None = None,
+    batch_size: int = 8,
+    block_swap: int = 0,
+    input_noise_scale: float = 0.25,
+    color_correction: str = "lab",
+    strength: str = "normal",
+    model_size: str = "7b",
+    source_height: int | None = None,
+) -> dict:
+    """SeedVR2 视频画质增强 workflow（ComfyUI-SeedVR2_VideoUpscaler 自定义节点）。"""
+    factor = _clamp_upscale_factor(upscale_factor)
+    dit_model = model_variant or _seedvr2_dit_model(strength, model_size)
+    target_resolution = _seedvr2_target_resolution(factor, source_height)
+    color_mode = (color_correction or "lab").strip().lower()
+    if color_mode not in ("lab", "none"):
+        color_mode = "lab"
+    return {
+        VE_LOAD: {
+            "class_type": "VHS_LoadVideo",
+            "inputs": {
+                "video": video_filename,
+                "force_rate": float(VIDEO_FPS),
+                "custom_width": 0,
+                "custom_height": 0,
+                "frame_load_cap": 0,
+                "skip_first_frames": 0,
+                "select_every_nth": 1,
+            },
+        },
+        VE_DIT: {
+            "class_type": "SeedVR2LoadDiTModel",
+            "inputs": {
+                "model": dit_model,
+                "device": "cuda",
+                "blocks_to_swap": int(block_swap),
+                "swap_io": False,
+            },
+        },
+        VE_VAE: {
+            "class_type": "SeedVR2LoadVAEModel",
+            "inputs": {
+                "model": SEEDVR2_VAE,
+                "device": "cuda",
+                "encode_tiled": True,
+                "encode_tile_size": 1024,
+                "decode_tiled": True,
+                "decode_tile_size": 1024,
+            },
+        },
+        VE_UPSCALE: {
+            "class_type": "SeedVR2VideoUpscaler",
+            "inputs": {
+                "image": [VE_LOAD, 0],
+                "dit": [VE_DIT, 0],
+                "vae": [VE_VAE, 0],
+                "seed": 42,
+                "resolution": target_resolution,
+                "batch_size": int(batch_size),
+                "color_correction": color_mode,
+                "input_noise_scale": float(input_noise_scale),
+                "uniform_batch_size": False,
+                "temporal_overlap": 0,
+                "prepend_frames": 0,
+            },
+        },
+        VE_SAVE: {
+            "class_type": "VHS_VideoCombine",
+            "inputs": {
+                **_vhs_video_combine_inputs(VE_UPSCALE),
+                "audio": [VE_LOAD, 2],
+            },
+        },
+    }
+
+
+def build_realesrgan_enhance_workflow(
+    video_filename: str,
+    *,
+    upscale_factor: float = 2.0,
+) -> dict:
+    """Real-ESRGAN 逐帧视频超分 fallback workflow。"""
+    _clamp_upscale_factor(upscale_factor)
+    return {
+        RE_LOAD: {
+            "class_type": "VHS_LoadVideo",
+            "inputs": {
+                "video": video_filename,
+                "force_rate": float(VIDEO_FPS),
+                "custom_width": 0,
+                "custom_height": 0,
+                "frame_load_cap": 0,
+                "skip_first_frames": 0,
+                "select_every_nth": 1,
+            },
+        },
+        RE_UPMODEL: {
+            "class_type": "UpscaleModelLoader",
+            "inputs": {"model_name": REALESRGAN_MODEL},
+        },
+        RE_UPSCALE: {
+            "class_type": "ImageUpscaleWithModel",
+            "inputs": {
+                "upscale_model": [RE_UPMODEL, 0],
+                "image": [RE_LOAD, 0],
+            },
+        },
+        RE_SAVE: {
+            "class_type": "VHS_VideoCombine",
+            "inputs": {
+                **_vhs_video_combine_inputs(RE_UPSCALE),
+                "audio": [RE_LOAD, 2],
+            },
+        },
+    }
+
+
+async def upload_video_from_url(
+    video_url: str,
+    *,
+    db=None,
+    user=None,
+) -> str:
+    """将服务器本地路径或 http URL 的视频上传到 ComfyUI input，返回 filename。"""
+    raw = (video_url or "").strip()
+    if not raw:
+        raise ValueError("视频地址为空")
+
+    data: bytes
+    fname = "input.mp4"
+
+    if raw.startswith("http://") or raw.startswith("https://"):
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            res = await client.get(raw)
+            res.raise_for_status()
+            data = res.content
+            fname = raw.split("/")[-1].split("?", 1)[0] or "input.mp4"
+    elif db is not None and user is not None:
+        from services.media_access import resolve_video_source_for_enhance
+
+        local_path = resolve_video_source_for_enhance(db, user, raw)
+        if local_path is None:
+            raise ValueError("视频源无效或无权访问")
+        data = local_path.read_bytes()
+        fname = local_path.name or "input.mp4"
+    else:
+        local_path = Path(raw.replace("/api/uploads/", "/uploads/").lstrip("/"))
+        if not local_path.is_file():
+            local_path = Path(raw.lstrip("/"))
+        if not local_path.is_file():
+            raise ValueError(f"视频文件不存在: {local_path}")
+        data = local_path.read_bytes()
+        fname = local_path.name or "input.mp4"
+
+    if not fname.lower().endswith(".mp4"):
+        fname = f"{Path(fname).stem}.mp4"
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        res = await client.post(
+            f"{COMFYUI_URL}/upload/image",
+            files={"image": (fname, data, "video/mp4")},
+        )
+        res.raise_for_status()
+        name = res.json().get("name")
+    if not name:
+        raise ValueError("视频上传 ComfyUI 失败")
+    return name
+
+
+async def _submit_video_enhance_workflow(
+    workflow: dict,
+    *,
+    backend: str,
+    client_id: str | None = None,
+) -> tuple[str, str, dict]:
+    await ensure_video_mp4_capable()
+    return await _log_and_post_video_workflow(
+        workflow,
+        client_id=client_id,
+        backend=backend,
+        width=0,
+        height=0,
+        duration=0,
+        mode="enhance",
+    )
+
+
+async def submit_seedvr2_enhance_prompt(
+    video_url: str,
+    *,
+    db,
+    user,
+    upscale_factor: float = 2.0,
+    strength: str = "normal",
+    input_noise_scale: float = 0.25,
+    batch_size: int = 8,
+    color_correction: str = "lab",
+    model_size: str = "7b",
+    client_id: str | None = None,
+) -> tuple[str, str, dict]:
+    source_height: int | None = None
+    try:
+        from services.media_access import resolve_video_source_for_enhance
+        from services.video_enhance_probe import probe_video_info
+
+        local_path = resolve_video_source_for_enhance(db, user, video_url)
+        if local_path is not None:
+            info = probe_video_info(local_path)
+            source_height = int(info.get("height") or 0) or None
+    except Exception:
+        source_height = None
+
+    video_filename = await upload_video_from_url(video_url, db=db, user=user)
+    workflow = build_seedvr2_enhance_workflow(
+        video_filename,
+        upscale_factor=upscale_factor,
+        strength=strength,
+        input_noise_scale=input_noise_scale,
+        batch_size=batch_size,
+        color_correction=color_correction,
+        model_size=model_size,
+        source_height=source_height,
+    )
+    return await _submit_video_enhance_workflow(
+        workflow,
+        backend="seedvr2_enhance",
+        client_id=client_id,
+    )
+
+
+async def submit_realesrgan_enhance_prompt(
+    video_url: str,
+    *,
+    db,
+    user,
+    upscale_factor: float = 2.0,
+    client_id: str | None = None,
+) -> tuple[str, str, dict]:
+    video_filename = await upload_video_from_url(video_url, db=db, user=user)
+    workflow = build_realesrgan_enhance_workflow(
+        video_filename,
+        upscale_factor=upscale_factor,
+    )
+    return await _submit_video_enhance_workflow(
+        workflow,
+        backend="realesrgan_enhance",
+        client_id=client_id,
+    )

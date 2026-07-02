@@ -119,6 +119,11 @@
   margin-top: 4px;
 }
 
+.nb-banner--prompt-video .nb-textarea-wrap--in-field-expand .nb-textarea,
+.nb-banner--prompt-video .nb-textarea-wrap--in-field-expand .mention-editor {
+  padding-right: 32px;
+}
+
 .nb-topbar--video .video-top-bar {
   flex: 1;
   min-width: 0;
@@ -264,6 +269,12 @@
   color: var(--text-secondary);
   background: transparent;
   font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+
+.nb-text-mode-btn:hover:not(.nb-text-mode-btn--active) {
+  background: var(--tl-toolbar-btn-hover, rgba(128, 128, 128, 0.12));
+  color: var(--text-primary);
 }
 
 .nb-text-mode-btn--active {
@@ -704,6 +715,7 @@
 .nb-param-chip:hover {
   border-color: var(--tl-card-border-hover);
   color: var(--text-primary);
+  background: var(--tl-toolbar-btn-hover, rgba(128, 128, 128, 0.12));
 }
 
 .nb-param-chip--active {
@@ -970,7 +982,8 @@
 .rf-page--light .nb-banner .nb-ratio-btn:hover,
 .rf-page--light .nb-banner .nb-bottom-icon-btn:hover,
 .rf-page--light .nb-banner .nb-speed-btn:hover,
-.rf-page--light .nb-banner .nb-model-btn:hover {
+.rf-page--light .nb-banner .nb-model-btn:hover,
+.rf-page--light .nb-banner .add-ref-btn:hover {
   background: rgba(0, 0, 0, 0.05) !important;
 }
 

@@ -144,3 +144,61 @@ class CanvasVideoRequest(BaseModel):
         default=None,
         description="与前端 WebSocket 一致的 clientId，用于接收 ComfyUI 进度推送",
     )
+
+
+class VideoEnhanceRequest(BaseModel):
+    team_id: str | None = Field(default=None, description="团队上下文")
+    video_url: str = Field(..., description="待增强视频 URL（/api/uploads/videos/... 或带 ticket）")
+    upscale_factor: float = Field(
+        default=2.0,
+        description="超分倍数：1.0（仅增强）/ 1.5 / 2.0 / 3.0",
+    )
+    workflow: Literal["auto", "seedvr2", "realesrgan"] = Field(
+        default="auto",
+        description="增强 workflow；auto 时 SeedVR2 优先",
+    )
+    strength: Literal["normal", "sharp"] = Field(
+        default="normal",
+        description="增强强度（SeedVR2 模型变体）",
+    )
+    input_noise_scale: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="SeedVR2 输入噪点强度",
+    )
+    batch_size: int = Field(default=8, description="SeedVR2 时序批次：4 / 8 / 16")
+    color_correction: Literal["lab", "none"] = Field(
+        default="lab",
+        description="SeedVR2 色彩校正",
+    )
+    model_size: Literal["3b", "7b"] = Field(
+        default="7b",
+        description="SeedVR2 DiT 模型规模",
+    )
+    node_id: str | None = Field(default=None, description="前端 video-gen 节点 ID")
+    client_id: Optional[str] = Field(
+        default=None,
+        description="与前端 WebSocket 一致的 clientId",
+    )
+
+
+class VideoEnhanceRecommendRequest(BaseModel):
+    video_url: str = Field(..., description="待分析视频 URL")
+    project_id: Optional[str] = Field(default=None, description="画布项目 ID")
+    script_table_node_id: Optional[str] = Field(
+        default=None, description="分镜表节点 ID（读取 contentStyle）"
+    )
+
+
+class VideoEnhanceRecommendResponse(BaseModel):
+    params: dict
+    reasoning: str
+
+
+class VideoLutRequest(BaseModel):
+    video_url: str = Field(..., description="原始视频 URL")
+    node_id: Optional[str] = Field(default=None, description="视频生成节点 ID")
+    project_id: str = Field(..., description="画布项目 ID")
+    script_table_node_id: str = Field(..., description="分镜表节点 ID")
+    team_id: Optional[str] = Field(default=None)

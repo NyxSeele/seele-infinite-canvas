@@ -28,6 +28,18 @@ _CAMERA_RE = re.compile(
 )
 
 # 常见中文风格 → 英文 tag（供 SD 系模型识别）
+CINEMATIC_POSITIVE_SUFFIX = (
+    "photorealistic, cinematic photography, 35mm film, natural lighting, "
+    "film grain, shallow depth of field, professional color grading, "
+    "ultra detailed skin texture, realistic facial features, "
+    "anamorphic lens, movie still"
+)
+CINEMATIC_NEGATIVE_SUFFIX = (
+    "anime, cartoon, illustration, painting, drawing, 3d render, "
+    "cgi, artificial, plastic skin, oversaturated, neon colors, "
+    "watermark, signature, blurry, low quality, deformed face"
+)
+
 STYLE_EN_TAGS: dict[str, str] = {
     "二次元": "anime style, 2D illustration, cel shading",
     "动漫": "anime style, 2D illustration",
@@ -78,6 +90,12 @@ def _merge_style(field_style: str, global_style: str) -> str:
         if cleaned and cleaned not in parts:
             parts.append(cleaned)
     return ", ".join(parts)
+
+
+def normalize_content_style(value: str | None) -> str:
+    if (value or "").strip() == "generic":
+        return "generic"
+    return "photorealistic_cinema"
 
 
 def resolve_style_en_tags(global_style: str) -> str:
@@ -170,6 +188,7 @@ def _build_negative(
     workflow_type: str,
     *,
     global_style: str = "",
+    content_style: str = "generic",
 ) -> str:
     if workflow_type == "flux":
         return ""
@@ -184,6 +203,9 @@ def _build_negative(
     field_style = _clean(fields.get("style"))
     if _is_anime_style(global_style) or _is_anime_style(field_style):
         parts.append(ANIME_NEGATIVE_EN)
+
+    if normalize_content_style(content_style) == "photorealistic_cinema":
+        parts.append(CINEMATIC_NEGATIVE_SUFFIX)
 
     return ", ".join(parts)
 
@@ -221,6 +243,7 @@ def build_script_shot_prompt(
     shot_number: int | None = None,
     continuity_mode: bool = True,
     style_reference: dict | None = None,
+    content_style: str = "generic",
 ) -> BuiltPrompt:
     """
     分镜单行 prompt：UI 只展示用户描述，生成用简洁中文 + 英文风格 tag。
@@ -270,8 +293,17 @@ def build_script_shot_prompt(
     if style_en:
         positive = f"{positive}，{style_en}" if positive else style_en
 
+    if normalize_content_style(content_style) == "photorealistic_cinema":
+        positive = (
+            f"{positive}, {CINEMATIC_POSITIVE_SUFFIX}"
+            if positive
+            else CINEMATIC_POSITIVE_SUFFIX
+        )
+
     positive, truncated = _truncate_positive(positive, MAX_POSITIVE_LENGTH[wt])
-    negative = _build_negative({}, wt, global_style=style)
+    negative = _build_negative(
+        {}, wt, global_style=style, content_style=content_style
+    )
 
     return BuiltPrompt(
         positive=positive,

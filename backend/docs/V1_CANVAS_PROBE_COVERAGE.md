@@ -66,6 +66,8 @@
 | `_task_records_probe.py` | 团队生成历史 `GET /api/tasks/records` |
 | `_admin_llm_routing_probe.py` | Admin LLM 路由 GET/PUT + set-default-text |
 | `_real_media_pipeline_probe.py` | 真实 GPU 出图（默认 SKIP） |
+| `_video_enhance_probe.py` | 视频画质增强 API + mock 端到端；workflow 注册 enabled=False |
+| `_lut_probe.py` | LUT 内置资产 + GET/PUT lut + mock `video-lut` 产出非空 mp4 |
 
 ### 2.3 pytest 补充（`backend/tests/`，41 passed）
 
@@ -109,6 +111,8 @@
 | 功能点 | 探针 | 说明 |
 |--------|------|------|
 | 真实 GPU completed | `_real_media_pipeline_probe.py` | `AGENT_MOCK_GENERATION=false` + ComfyUI |
+| 视频画质增强 | `_video_enhance_probe.py` | mock 全链路；GPU 前 workflow `enabled=False` |
+| 全片 LUT 调色 | `_lut_probe.py` | 内置 .cube + mock `video-lut`；需 ffmpeg |
 | 风格参考 VL 上传 | `_style_reference_probe --with-upload` | 已有，文档化前置 |
 
 ### 浏览器必手测（不写后端探针）
@@ -145,6 +149,8 @@ cd d:\Xiaobuding\Xiaobuding\AIStudio\backend
 .\.venv\Scripts\python.exe scripts\_collab_api_probe.py
 .\.venv\Scripts\python.exe scripts\_task_records_probe.py
 .\.venv\Scripts\python.exe scripts\_admin_llm_routing_probe.py
+.\.venv\Scripts\python.exe scripts\_video_enhance_probe.py
+.\.venv\Scripts\python.exe scripts\_lut_probe.py
 
 # 真实 GPU（默认 SKIP exit 2）
 .\.venv\Scripts\python.exe scripts\_real_media_pipeline_probe.py

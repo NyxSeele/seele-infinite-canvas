@@ -80,6 +80,26 @@ def get_video_node_style_reference(canvas_data: dict, node_id: str) -> dict | No
     return ref if isinstance(ref, dict) else None
 
 
+def get_script_table_content_style(
+    canvas_data: dict,
+    script_table_node_id: str | None = None,
+) -> str:
+    """读取项目级内容风格；默认写实电影。"""
+
+    def _read(table: dict) -> str:
+        cs = _node_data(table).get("contentStyle")
+        return "generic" if cs == "generic" else "photorealistic_cinema"
+
+    if script_table_node_id:
+        node = find_node(canvas_data, script_table_node_id)
+        if node and node.get("type") == "script-table":
+            return _read(node)
+    for node in canvas_data.get("nodes") or []:
+        if isinstance(node, dict) and node.get("type") == "script-table":
+            return _read(node)
+    return "photorealistic_cinema"
+
+
 def _sync_row_style_reference(
     canvas_data: dict,
     *,

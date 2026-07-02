@@ -82,6 +82,7 @@ import { useTextGeneration } from "../hooks/canvas/useTextGeneration"
 import { useScreenplay } from "../hooks/canvas/useScreenplay"
 import { useScriptTableGenerate } from "../hooks/canvas/useScriptTableGenerate"
 import { useCanvasInteraction } from "../hooks/canvas/useCanvasInteraction"
+import { useCanvasHistory, isCanvasShortcutTarget } from "../hooks/canvas/useCanvasHistory"
 import { useCanvasDragPlace } from "../hooks/canvas/useCanvasDragPlace"
 import { useRefSelectMode } from "../hooks/canvas/useRefSelectMode"
 import CanvasDragGhost from "../components/canvas/CanvasDragGhost"
@@ -415,6 +416,28 @@ function CanvasInner() {
   runTextGenerationRef.current = _runTextGeneration
   updateResponseNodeDataRef.current = _updateResponseNodeData
 
+  const {
+    pushHistory,
+    undo,
+    redo,
+    resetHistory,
+    onNodeDragStart: historyDragStart,
+    onNodeDragStop: historyDragStop,
+    wrapOnNodesChange,
+    wrapOnEdgesChange,
+  } = useCanvasHistory({
+    nodesRef,
+    edgesRef,
+    setNodes,
+    setEdges,
+    buildData,
+    buildOutlineData,
+    textRetryRef,
+    zIndexCounterRef,
+    readOnlyRef,
+    projectId,
+  })
+
   useScreenplay({
     setNodes,
     setEdges,
@@ -549,6 +572,7 @@ function CanvasInner() {
     },
     onProjectLoaded: (res) => {
       if (res?.id) setCanvasId(res.id)
+      resetHistory()
     },
     onVersionConflict: (detail) => {
       if (detail?.merged) {
@@ -873,7 +897,57 @@ function CanvasInner() {
     raiseNodeToFront,
     commentMode,
     onCommentNodeClick: handleCommentNodeClick,
+    pushHistory,
   })
+
+  const handleNodesChange = useCallback(
+    (changes) => wrapOnNodesChange(changes, onNodesChange),
+    [wrapOnNodesChange, onNodesChange]
+  )
+
+  const handleEdgesChangeWrapped = useCallback(
+    (changes) => wrapOnEdgesChange(changes, onEdgesChange),
+    [wrapOnEdgesChange, onEdgesChange]
+  )
+
+  const handleNodeDragStartCombined = useCallback(
+    (e, node) => {
+      historyDragStart()
+      handleNodeDragStart(e, node)
+    },
+    [historyDragStart, handleNodeDragStart]
+  )
+
+  const handleNodeDragStopCombined = useCallback(
+    (e, node) => {
+      handleNodeDragStop(e, node)
+      historyDragStop()
+    },
+    [handleNodeDragStop, historyDragStop]
+  )
+
+  useEffect(() => {
+    if (readOnly) return undefined
+    const onKeyDown = (e) => {
+      if (isCanvasShortcutTarget(e.target)) return
+      const mod = e.ctrlKey || e.metaKey
+      if (!mod) return
+      const key = e.key.toLowerCase()
+      if (key === "z") {
+        e.preventDefault()
+        if (e.shiftKey) {
+          if (redo()) setSelectedNodeId(null)
+        } else if (undo()) {
+          setSelectedNodeId(null)
+        }
+      } else if (key === "y") {
+        e.preventDefault()
+        if (redo()) setSelectedNodeId(null)
+      }
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [readOnly, undo, redo, setSelectedNodeId])
 
   useEffect(() => {
     if (localStorage.getItem("access_token")) {
@@ -1385,9 +1459,9 @@ function CanvasInner() {
       <ReactFlow
         nodes={flowNodes}
         edges={edges}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onConnect={onConnect}
-        onEdgesChange={onEdgesChange}
+        onEdgesChange={handleEdgesChangeWrapped}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
         nodeTypes={NODE_TYPES}
@@ -1403,8 +1477,8 @@ function CanvasInner() {
         onDragOver={handleFlyoutDragOver}
         onDrop={handleFlyoutDrop}
         onNodeClick={handleNodeClick}
-        onNodeDragStart={handleNodeDragStart}
-        onNodeDragStop={handleNodeDragStop}
+        onNodeDragStart={handleNodeDragStartCombined}
+        onNodeDragStop={handleNodeDragStopCombined}
         onContextMenu={handlePaneContextMenu}
         minZoom={0.15}
         maxZoom={2.5}
@@ -1711,12 +1785,13 @@ function CanvasInner() {
           x={contextMenu.x}
           y={contextMenu.y}
           onCreateNode={(type) => {
+            pushHistory()
             createNode(type, { x: contextMenu.x, y: contextMenu.y })
             setContextMenu(null)
           }}
           onUploadImage={() => { setContextMenu(null); handleUploadImage() }}
-          onUndo={() => {}}
-          onRedo={() => {}}
+          onUndo={() => { if (undo()) setSelectedNodeId(null) }}
+          onRedo={() => { if (redo()) setSelectedNodeId(null) }}
           onPaste={() => document.execCommand("paste")}
           onClose={() => setContextMenu(null)}
         />

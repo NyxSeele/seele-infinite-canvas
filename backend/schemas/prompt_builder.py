@@ -63,6 +63,10 @@ class BuildScriptShotRequest(BaseModel):
         default=None,
         description="项目级视频风格参考（结构化 JSON）",
     )
+    content_style: Literal["photorealistic_cinema", "generic"] = Field(
+        default="generic",
+        description="项目级内容风格：写实电影 / 通用",
+    )
 
 
 class ShotLinkingMeta(BaseModel):

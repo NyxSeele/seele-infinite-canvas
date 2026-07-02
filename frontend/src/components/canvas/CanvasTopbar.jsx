@@ -12,7 +12,7 @@ import CanvasPresenceBar from "./CanvasPresenceBar"
 import WorkspaceNotifyPanel from "../workspace/WorkspaceNotifyPanel"
 import CanvasShareMenu from "./CanvasShareMenu"
 import ExportProjectModal from "./ExportProjectModal"
-import { IconCollabScreen, IconAgent, IconShare } from "./CanvasTopbarIcons"
+import { IconCollabScreen, IconAgent, IconShare, IconCredit } from "./CanvasTopbarIcons"
 import { LineIcon } from "../icons/LineIcons"
 import { useNotificationUnread, emitNotificationUnread } from "../../hooks/useNotificationUnread"
 import { showDevNotice } from "../common/ProductNoticeModal"
@@ -209,16 +209,6 @@ export default function CanvasTopbar({
           </>
         )}
 
-        {quotaText && (
-          <>
-            <div className="ctb-credit-pill" title={t("canvas.topbar.quota")}>
-              <span className="ctb-credit-icon">✦</span>
-              <span className="ctb-credit-num">{quotaText}</span>
-            </div>
-            <div className="ctb-capsule-sep" />
-          </>
-        )}
-
         {(onToggleAgent || agentReadOnly) && (
           <>
             <button
@@ -234,6 +224,16 @@ export default function CanvasTopbar({
             >
               <IconAgent />
             </button>
+            <div className="ctb-capsule-sep" />
+          </>
+        )}
+
+        {quotaText && (
+          <>
+            <div className="ctb-credit-pill" title={t("canvas.topbar.quota")}>
+              <IconCredit />
+              <span className="ctb-credit-num">{quotaText}</span>
+            </div>
             <div className="ctb-capsule-sep" />
           </>
         )}

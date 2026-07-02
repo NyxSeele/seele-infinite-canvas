@@ -6,6 +6,7 @@ import { normalizeOutlineScene } from "../../utils/canvas/outlineSceneMeta"
 import { parseTargetDurationSec } from "../../utils/canvas/videoDurationIntent"
 import { useLocale } from "../../utils/locale"
 import GenerationStopButton from "./GenerationStopButton"
+import GenerationBrandLoader from "./GenerationBrandLoader"
 import NodeCardDotsMenu from "./NodeCardDotsMenu"
 import TextWorkflowEdgePlugs from "./TextWorkflowEdgePlugs"
 import { useCanvasNodeWheel } from "./canvasScrollHelpers"
@@ -273,7 +274,7 @@ export default function TextResponseNode({ id, data, selected }) {
       style={{ zIndex: nodeZIndex }}
       ref={wrapperRef}
     >
-      <TextWorkflowEdgePlugs nodeId={id} nodeType="text-response" disabled={readOnly} />
+      <TextWorkflowEdgePlugs nodeId={id} nodeType="text-response" disabled={readOnly} selected={selected} />
       <div className="tr-card" onDoubleClick={sp}>
         <div className="tr-header">
           <span className="tr-label-icon">✦</span>
@@ -291,9 +292,7 @@ export default function TextResponseNode({ id, data, selected }) {
         <div className="tr-body">
           {status === "generating" && (
             <div className="tr-generating nowheel">
-              <div className="generating-dots" aria-hidden>
-                <span /><span /><span />
-              </div>
+              <GenerationBrandLoader />
               <span className="tr-generating-text">
                 {screenplayMode ? t("canvas.text.genScriptReply") : t("canvas.common.generating")}
               </span>

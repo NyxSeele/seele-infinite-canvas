@@ -8,6 +8,7 @@ import {
   parseFlyoutDrop,
 } from "../../utils/canvas/genHistoryDrag"
 import { getT } from "../../utils/locale"
+import { isPaneMenuSuppressed } from "../../utils/canvas/suppressPaneMenu"
 
 export function useCanvasInteraction({
   nodes,
@@ -28,6 +29,7 @@ export function useCanvasInteraction({
   raiseNodeToFront,
   commentMode = false,
   onCommentNodeClick,
+  pushHistory,
 }) {
   const draggingRef = useRef(null)
 
@@ -36,6 +38,7 @@ export function useCanvasInteraction({
 
   const onConnect = useCallback(
     (params) => {
+      pushHistory?.()
       setEdges((es) => addEdge({ ...params, type: "ghost", animated: false }, es))
       setNodes((ns) =>
         ns.map((n) => {
@@ -53,7 +56,7 @@ export function useCanvasInteraction({
         })
       )
     },
-    [setEdges, setNodes]
+    [setEdges, setNodes, pushHistory]
   )
 
   const onEdgesChange = useCallback(
@@ -105,6 +108,7 @@ export function useCanvasInteraction({
         if (droppedNodeId && droppedNodeId !== connecting.nodeId) {
           // Direct connection to existing node
           if (isRightSourceHandle(connecting.handleId)) {
+            pushHistory?.()
             setEdges((es) => addEdge({ id: `e-${connecting.nodeId}-${droppedNodeId}-${Date.now()}`, source: connecting.nodeId, target: droppedNodeId, sourceHandle: connecting.handleId === "src" ? "src" : "src-right", targetHandle: 'tgt', type: "ghost", animated: false }, es))
           }
           return
@@ -129,11 +133,12 @@ export function useCanvasInteraction({
         })
       }
     },
-    [nodes, setEdges, connectingNodeRef, setPickerMenu]
+    [nodes, setEdges, connectingNodeRef, setPickerMenu, pushHistory]
   )
 
   const handleCreateNode = useCallback(
     (typeOrObj) => {
+      pushHistory?.()
       const type = typeof typeOrObj === "string" ? typeOrObj : typeOrObj.type
       const pm = pickerMenuRef.current
 
@@ -190,17 +195,19 @@ export function useCanvasInteraction({
       }
       setPickerMenu(null)
     },
-    [createNode, nodes, setEdges, setNodes, buildData, pickerMenuRef, setPickerMenu]
+    [createNode, nodes, setEdges, setNodes, buildData, pickerMenuRef, setPickerMenu, pushHistory]
   )
 
   const handlePaneDblClick = useCallback((e) => {
     if (commentMode) return
+    if (isPaneMenuSuppressed()) return
     if (
       e.target.closest(".react-flow__node")
       || e.target.closest(
         ".nb-banner, .tl-picker-menu, .tl-context-menu, .tl-topbar, .tl-left-toolbar, " +
         ".ctb-bar, .clt-toolbar, .cbt-bar, .wf-inspector, .rf-overlay, " +
-        ".ghf-flyout, .alf-flyout, .agent-panel"
+        ".ghf-flyout, .alf-flyout, .agent-panel, " +
+        ".cell-menu-portal, .gn2-dots-menu, .cell-dots-submenu"
       )
     ) {
       return
@@ -213,7 +220,11 @@ export function useCanvasInteraction({
     if (e.target.closest(".react-flow__node")) return
     e.preventDefault()
     if (commentMode) return
-    if (e.target.closest(".ctb-bar, .clt-toolbar, .cbt-bar, .tl-topbar, .tl-left-toolbar, .wf-inspector")) return
+    if (isPaneMenuSuppressed()) return
+    if (e.target.closest(
+      ".ctb-bar, .clt-toolbar, .cbt-bar, .tl-topbar, .tl-left-toolbar, .wf-inspector, " +
+      ".cell-menu-portal, .gn2-dots-menu, .cell-dots-submenu"
+    )) return
     setContextMenu({ x: e.clientX, y: e.clientY })
     setPickerMenu(null)
   }, [commentMode, setPickerMenu, setContextMenu])
@@ -241,6 +252,7 @@ export function useCanvasInteraction({
         const { uploadImageFile } = await import("../../services/uploadImage")
         const url = await uploadImageFile(file)
         const screenPos = { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+        pushHistory?.()
         createNode("image-gen", screenPos, {
           uploadedImage: url,
           imageSource: "upload",
@@ -251,19 +263,23 @@ export function useCanvasInteraction({
       }
     }
     input.click()
-  }, [createNode])
+  }, [createNode, pushHistory])
 
   const handleAddNodeOfType = useCallback(
     (type) => {
       if (type === "image-upload") { handleUploadImage(); return }
+      pushHistory?.()
       createNode(type, { x: window.innerWidth / 2, y: window.innerHeight / 2 })
     },
-    [createNode, handleUploadImage]
+    [createNode, handleUploadImage, pushHistory]
   )
 
   const handleQuickCreate = useCallback(
-    (type) => createNode(type, { x: window.innerWidth / 2, y: window.innerHeight / 2 }),
-    [createNode]
+    (type) => {
+      pushHistory?.()
+      createNode(type, { x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    },
+    [createNode, pushHistory]
   )
 
   const handleNodeDragStart = useCallback((_e, node) => {
@@ -303,6 +319,7 @@ export function useCanvasInteraction({
       if (!item) return
       e.preventDefault()
       e.stopPropagation()
+      pushHistory?.()
       const screenPos = { x: e.clientX, y: e.clientY }
       let id
       if (item.source === "asset") {
@@ -329,7 +346,7 @@ export function useCanvasInteraction({
       setSelectedNodeId(id)
       raiseNodeToFront(id)
     },
-    [createNode, setSelectedNodeId, raiseNodeToFront]
+    [createNode, setSelectedNodeId, raiseNodeToFront, pushHistory]
   )
 
   return {

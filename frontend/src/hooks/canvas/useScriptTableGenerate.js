@@ -12,6 +12,9 @@ import {
   resolveSceneRefsForRow,
 } from "../../utils/canvas/entityRefs"
 import { useAssetStore } from "../../stores/assetStore"
+import {
+  getScriptTableContentStyle,
+} from "../../utils/canvas/contentStylePresets"
 import { appendDirectorFieldsToDescription } from "../../utils/canvas/shotDirectorFields"
 import {
   BEAT_CARD_NODE_TYPE,
@@ -209,6 +212,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           description: rowDesc,
           model_id: modelId,
           global_style: "",
+          content_style: getScriptTableContentStyle(scriptNode.data),
           theme_context: castContext || scriptNode.data.themeContext || "",
           prior_shots: priorShots,
           shot_number: row.shotNumber ?? rowIndex + 1,
@@ -463,6 +467,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           description: rowDesc,
           model_id: modelId,
           global_style: "",
+          content_style: getScriptTableContentStyle(scriptNode.data),
           theme_context: castContext || scriptNode.data.themeContext || "",
           prior_shots: priorShots,
           shot_number: row.shotNumber ?? rowIndex + 1,

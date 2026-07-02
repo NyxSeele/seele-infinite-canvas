@@ -8,6 +8,7 @@ import { pushGenHistory, readGenHistory } from "../../utils/canvas/genHistory"
 import { AVATAR_CHANGED_EVENT, readUserAvatar } from "../../utils/canvas/userAvatar"
 import pkg from "../../../package.json"
 import { LineIcon } from "../icons/LineIcons"
+import { IconCredit } from "./CanvasTopbarIcons"
 import { useLocale } from "../../utils/locale"
 import { useThemeTransition } from "../../hooks/useThemeTransition"
 
@@ -92,7 +93,6 @@ const FullscreenIcon = ({ exit = false }) => (
 const TOOLBAR_ITEMS = [
   { id: "assets",    Icon: AssetLibIcon, labelKey: "canvas.toolbar.assets",       action: "open-assets" },
   { id: "history",   Icon: HistoryIcon,  labelKey: "canvas.toolbar.history",     action: "open-history" },
-  { id: "nav",       Icon: NavModeIcon,  labelKey: "canvas.toolbar.nav", panel: "nav" },
   { id: "comment",   Icon: CommentIcon,  labelKey: "canvas.toolbar.comment",     action: "toggle-comment" },
   { id: "fullscreen", Icon: FullscreenIcon, labelKey: "canvas.toolbar.fullscreen", action: "toggle-fullscreen", dynamicLabel: true },
 ]
@@ -203,7 +203,7 @@ export default function CanvasLeftToolbar({
   }, [user?.username])
 
   useEffect(() => {
-    if (activePanel === "avatar") {
+    if (activePanel === "avatar" || activePanel === "nav") {
       setDisplayName(readDisplayName(user?.username))
     }
   }, [activePanel, user?.username])
@@ -240,6 +240,51 @@ export default function CanvasLeftToolbar({
     navigate("/login")
   }, [logout, navigate])
 
+  const avatarMenuOpen = activePanel === "avatar" || activePanel === "nav"
+
+  const navHoverOpenTimer = useRef(null)
+  const navHoverCloseTimer = useRef(null)
+  const NAV_HOVER_OPEN_MS = 140
+  const NAV_HOVER_CLOSE_MS = 200
+
+  const clearNavHoverTimers = useCallback(() => {
+    if (navHoverOpenTimer.current) {
+      clearTimeout(navHoverOpenTimer.current)
+      navHoverOpenTimer.current = null
+    }
+    if (navHoverCloseTimer.current) {
+      clearTimeout(navHoverCloseTimer.current)
+      navHoverCloseTimer.current = null
+    }
+  }, [])
+
+  useEffect(() => () => clearNavHoverTimers(), [clearNavHoverTimers])
+
+  const toggleAvatarMenu = useCallback(() => {
+    setActivePanel((cur) => (cur === "avatar" || cur === "nav" ? null : "avatar"))
+  }, [])
+
+  const toggleNavFlyout = useCallback(() => {
+    clearNavHoverTimers()
+    setActivePanel((cur) => (cur === "nav" ? "avatar" : "nav"))
+  }, [clearNavHoverTimers])
+
+  const handleNavItemEnter = useCallback(() => {
+    clearNavHoverTimers()
+    if (activePanel === "nav") return
+    navHoverOpenTimer.current = setTimeout(() => {
+      setActivePanel((cur) => (cur === "avatar" || cur === "nav" ? "nav" : cur))
+    }, NAV_HOVER_OPEN_MS)
+  }, [activePanel, clearNavHoverTimers])
+
+  const handleNavItemLeave = useCallback(() => {
+    clearNavHoverTimers()
+    if (activePanel !== "nav") return
+    navHoverCloseTimer.current = setTimeout(() => {
+      setActivePanel((cur) => (cur === "nav" ? "avatar" : cur))
+    }, NAV_HOVER_CLOSE_MS)
+  }, [activePanel, clearNavHoverTimers])
+
   return (
     <div className="clt-toolbar" ref={toolbarRef} onPointerDown={(e) => e.stopPropagation()}>
       <div className="clt-top">
@@ -255,7 +300,7 @@ export default function CanvasLeftToolbar({
           )}
         </CltItemWrap>
 
-        {TOOLBAR_ITEMS.map(({ id, Icon, labelKey, panel, action, dynamicLabel }) => (
+        {TOOLBAR_ITEMS.map(({ id, Icon, labelKey, action, dynamicLabel }) => (
           <CltItemWrap
             key={id}
             label={dynamicLabel && isFullscreen ? t("canvas.toolbar.exitFullscreen") : t(labelKey)}
@@ -271,23 +316,13 @@ export default function CanvasLeftToolbar({
                   ? " clt-btn--active"
                   : ""
               }`}
-              onClick={() => (panel ? toggle(id) : handleAction(action))}
+              onClick={() => handleAction(action)}
             >
               {id === "fullscreen" ? <Icon exit={isFullscreen} /> : <Icon />}
               {id === "comment" && hasUnreadComments && (
                 <span className="clt-comment-unread-dot" aria-hidden />
               )}
             </button>
-            {activePanel === id && panel === "nav" && (
-              <CanvasNavModePanel
-                t={t}
-                mode={canvasNavMode}
-                onSelect={(next) => {
-                  setCanvasNavMode(next)
-                  setActivePanel(null)
-                }}
-              />
-            )}
           </CltItemWrap>
         ))}
       </div>
@@ -295,14 +330,14 @@ export default function CanvasLeftToolbar({
       <div className="clt-bottom">
         <CltItemWrap label={t("canvas.toolbar.account")}>
           <button
-            className={`clt-avatar-btn${activePanel === "avatar" ? " clt-avatar-btn--open" : ""}`}
-            onClick={() => toggle("avatar")}
+            className={`clt-avatar-btn${avatarMenuOpen ? " clt-avatar-btn--open" : ""}`}
+            onClick={toggleAvatarMenu}
           >
             {avatarUrl ? (
               <span className="clt-avatar-img" style={{ backgroundImage: `url(${avatarUrl})` }} />
             ) : avatarLetter}
           </button>
-          {activePanel === "avatar" && (
+          {avatarMenuOpen && (
             <div className="clt-avatar-menu clt-avatar-menu--rich">
               <div className="clt-menu-profile">
                 <div
@@ -317,13 +352,17 @@ export default function CanvasLeftToolbar({
                 </div>
               </div>
               {quotaText && (
-                <div className="clt-menu-quota">
-                  <div className="clt-menu-quota-row">
-                    <span className="clt-menu-quota-icon"><LineIcon name="sparkle" size={14} /></span>
+                <button
+                  type="button"
+                  className="clt-menu-quota nodrag nopan"
+                  title={t("canvas.toolbar.quota")}
+                >
+                  <span className="clt-menu-quota-main">
+                    <IconCredit />
                     <span className="clt-menu-quota-num">{quotaText}</span>
-                    <span className="clt-menu-quota-badge">{t("canvas.toolbar.quota")}</span>
-                  </div>
-                </div>
+                  </span>
+                  <span className="clt-menu-quota-upgrade">{t("canvas.toolbar.upgradePro")}</span>
+                </button>
               )}
               <div className="clt-menu-divider" />
               <button
@@ -344,6 +383,30 @@ export default function CanvasLeftToolbar({
                   {t("canvas.toolbar.admin")}
                 </button>
               )}
+              <div
+                className="clt-menu-item--has-flyout"
+                onMouseEnter={handleNavItemEnter}
+                onMouseLeave={handleNavItemLeave}
+              >
+                <button
+                  type="button"
+                  className={`clt-menu-item${activePanel === "nav" ? " clt-menu-item--active" : ""}`}
+                  onClick={toggleNavFlyout}
+                >
+                  <span className="clt-menu-icon"><NavModeIcon /></span>
+                  {t("canvas.toolbar.nav")}
+                </button>
+                {activePanel === "nav" && (
+                  <CanvasNavModePanel
+                    t={t}
+                    mode={canvasNavMode}
+                    onSelect={(next) => {
+                      setCanvasNavMode(next)
+                      setActivePanel(null)
+                    }}
+                  />
+                )}
+              </div>
               <button
                 type="button"
                 className="clt-menu-item"

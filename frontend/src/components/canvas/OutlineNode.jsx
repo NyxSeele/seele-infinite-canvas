@@ -28,7 +28,7 @@ function initialExpanded(scenes) {
   return { [firstId]: true }
 }
 
-export default function OutlineNode({ id, data }) {
+export default function OutlineNode({ id, data, selected }) {
   const { t } = useLocale()
   const { setNodes } = useReactFlow()
   const rootRef = useRef(null)
@@ -321,7 +321,7 @@ export default function OutlineNode({ id, data }) {
 
   return (
     <div className="outline-node" style={ROOT_STYLE} ref={rootRef}>
-      <TextWorkflowEdgePlugs nodeId={id} nodeType="outline" disabled={readOnly} />
+      <TextWorkflowEdgePlugs nodeId={id} nodeType="outline" disabled={readOnly} selected={selected} />
       <div className={`outline-card${readOnly ? " outline-card--readonly" : ""}`} onDoubleClick={(e) => e.stopPropagation()}>
         {data.loading ? (
           <>

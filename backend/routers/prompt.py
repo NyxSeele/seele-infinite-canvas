@@ -162,6 +162,7 @@ async def build_script_shot(
         shot_number=body.shot_number,
         continuity_mode=body.continuity_mode,
         style_reference=body.style_reference,
+        content_style=body.content_style,
     )
     prior_desc = prior[-1].get("description") if prior else None
     visual_decision = evaluate_visual_reference(

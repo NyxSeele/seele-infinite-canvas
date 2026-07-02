@@ -471,6 +471,23 @@
   transform: translateY(-50%) translateX(-18px);
 }
 
+.gn2-root--selected .gn2-plus-left-zone,
+.gn2-root--selected .gn2-plus-right-zone,
+.tn-wrapper--selected .gn2-plus-left-zone,
+.tn-wrapper--selected .gn2-plus-right-zone {
+  opacity: 1;
+}
+
+.gn2-root--selected .gn2-plus-left-zone.gn2-plus-zone--visible,
+.tn-wrapper--selected .gn2-plus-left-zone.gn2-plus-zone--visible {
+  transform: translateY(-50%) translateX(-18px);
+}
+
+.gn2-root--selected .gn2-plus-right-zone.gn2-plus-zone--visible,
+.tn-wrapper--selected .gn2-plus-right-zone.gn2-plus-zone--visible {
+  transform: translateY(-50%) translateX(18px);
+}
+
 .gn2-plus-btn-visual {
   width: 22px;
   height: 22px;

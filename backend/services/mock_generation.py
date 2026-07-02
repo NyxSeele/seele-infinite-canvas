@@ -158,3 +158,134 @@ async def run_mock_video_task(task_id: str, failure_rate: float) -> None:
             db.commit()
     finally:
         db.close()
+
+
+async def run_mock_video_enhance_task(
+    task_id: str,
+    source_video_url: str | None,
+    failure_rate: float,
+) -> None:
+    """异步执行 mock 视频画质增强（复制源视频或占位视频）。"""
+    await asyncio.sleep(random.uniform(3, 8))
+    db = SessionLocal()
+    try:
+        task = db.get(Task, task_id)
+        if not task:
+            return
+        if random.random() < max(0.0, min(1.0, failure_rate)):
+            task.status = "failed"
+            task.error = MOCK_FAILURE_MESSAGE
+            _release_task_slots(task)
+            db.commit()
+            logger.info("mock video enhance task failed task_id=%s", task_id)
+            return
+        _ensure_upload_dirs()
+        src: Path | None = None
+        if source_video_url:
+            try:
+                from services.media_access import ref_url_to_rel_path, resolve_upload_file_path
+
+                rel = ref_url_to_rel_path(source_video_url)
+                candidate = resolve_upload_file_path(rel)
+                if candidate.is_file() and rel.startswith("videos/"):
+                    src = candidate
+            except Exception:
+                src = None
+        if src is None:
+            src = _pick_video_asset()
+        dst_name = f"{uuid.uuid4()}.mp4"
+        shutil.copy(src, UPLOADS_VIDEOS / dst_name)
+        task.status = "completed"
+        task.result = f"/api/uploads/videos/{dst_name}"
+        task.error = None
+        _release_task_slots(task)
+        db.commit()
+        logger.info(
+            "mock video enhance task completed task_id=%s src=%s",
+            task_id,
+            src.name,
+        )
+    except Exception:
+        db.rollback()
+        logger.exception("mock video enhance task error task_id=%s", task_id)
+        task = db.get(Task, task_id)
+        if task and task.status not in ("completed", "failed"):
+            task.status = "failed"
+            task.error = "Mock 视频画质增强内部错误"
+            _release_task_slots(task)
+            db.commit()
+    finally:
+        db.close()
+
+
+async def run_mock_video_lut_task(
+    task_id: str,
+    source_video_url: str | None,
+    *,
+    lut_preset: str | None = None,
+    lut_custom_url: str | None = None,
+    failure_rate: float,
+) -> None:
+    """Mock LUT：优先 ffmpeg，失败则复制源视频。"""
+    await asyncio.sleep(random.uniform(2, 5))
+    db = SessionLocal()
+    try:
+        task = db.get(Task, task_id)
+        if not task:
+            return
+        if random.random() < max(0.0, min(1.0, failure_rate)):
+            task.status = "failed"
+            task.error = MOCK_FAILURE_MESSAGE
+            _release_task_slots(task)
+            db.commit()
+            return
+
+        _ensure_upload_dirs()
+        src: Path | None = None
+        if source_video_url:
+            try:
+                from services.media_access import ref_url_to_rel_path, resolve_upload_file_path
+
+                rel = ref_url_to_rel_path(source_video_url)
+                candidate = resolve_upload_file_path(rel)
+                if candidate.is_file() and rel.startswith("videos/"):
+                    src = candidate
+            except Exception:
+                src = None
+        if src is None:
+            src = _pick_video_asset()
+
+        from services.video_lut_service import apply_lut_to_video_file, resolve_lut_file_path
+
+        lut_path = resolve_lut_file_path(
+            lut_preset=lut_preset, lut_custom_url=lut_custom_url
+        )
+        dst_name = f"{uuid.uuid4()}.mp4"
+        dst = UPLOADS_VIDEOS / dst_name
+        if lut_path and src:
+            try:
+                apply_lut_to_video_file(src, lut_path, dst)
+            except Exception:
+                shutil.copy(src, dst)
+        else:
+            shutil.copy(src, dst)
+
+        task.status = "completed"
+        task.result = f"/api/uploads/videos/{dst_name}"
+        task.error = None
+        if hasattr(task, "lut_applied"):
+            task.lut_applied = True
+        _release_task_slots(task)
+        db.commit()
+        logger.info("mock video_lut task completed task_id=%s", task_id)
+    except Exception:
+        db.rollback()
+        logger.exception("mock video_lut task error task_id=%s", task_id)
+        task = db.get(Task, task_id)
+        if task and task.status not in ("completed", "failed"):
+            task.status = "failed"
+            task.error = "Mock LUT 处理内部错误"
+            _release_task_slots(task)
+            db.commit()
+    finally:
+        db.close()

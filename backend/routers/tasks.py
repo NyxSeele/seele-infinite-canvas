@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from comfyui import client as comfyui
-from core.config import settings
+from core.datetime_utils import to_utc_iso
 from db.session import get_db
 from core.dependencies import get_current_user
 from models import RegisteredModel, Task, User
@@ -26,6 +26,10 @@ from schemas.tasks import (
     CanvasTextRequest,
     CanvasImageRequest,
     CanvasVideoRequest,
+    VideoEnhanceRequest,
+    VideoEnhanceRecommendRequest,
+    VideoEnhanceRecommendResponse,
+    VideoLutRequest,
 )
 from services.generation_guard import (
     check_concurrent_generations,
@@ -38,12 +42,22 @@ from services.quota_service import (
     check_and_consume,
     create_task_record,
 )
-from model_registry import MODEL_MAP, resolve_image_dimensions_for_model, resolve_video_backend
+from model_registry import (
+    MODEL_MAP,
+    resolve_image_dimensions_for_model,
+    resolve_video_backend,
+    resolve_video_enhance_workflow,
+    VIDEO_ENHANCE_REALESRGAN_ID,
+    VIDEO_ENHANCE_SEEDVR2_ID,
+)
 from services import mock_generation
 from services import tasks_cache
 from services.mention_context import enrich_prompt, resolve_mentions, strip_mention_tokens
 from core.logging_setup import studio_print
 from trace_bus import extract_workflow_trace, push_trace
+
+
+_MEDIA_TASK_TYPES = ("image", "video", "video_enhance", "video_lut")
 
 
 def _merge_negative_prompt(built: str, optimized: str) -> str:
@@ -101,9 +115,7 @@ def _release_stale_node_tasks(
         .all()
     )
     for task in rows:
-        task.status = "failed"
-        task.error = reason[:2000]
-        task.result = None
+        _mark_task_terminal(task, status="failed", error=reason)
     if rows:
         logger.info(
             "released %s stale task(s) for node_id=%s user_id=%s",
@@ -147,6 +159,19 @@ def _mark_task_terminal(
         from services.generation_slots import release_slots
 
         release_slots(task.user_id, team_id=task.team_id)
+
+
+def _release_acquired_slots(
+    user_id: int,
+    *,
+    team_id: str | None,
+    slots: int,
+) -> None:
+    if slots <= 0:
+        return
+    from services.generation_slots import release_slots
+
+    release_slots(user_id, team_id=team_id, slots=slots)
 
 
 @router.post("/api/optimize-prompt")
@@ -377,11 +402,11 @@ def list_task_records(
                 "team_name": team.name if team else None,
                 "user_id": task.user_id,
                 "username": owner.username if owner else None,
-                "created_at": task.created_at.isoformat() if task.created_at else None,
+                "created_at": to_utc_iso(task.created_at),
                 "result": (
                     _sign_result_url_for_user(task.result, user.id)
                     if task.status == "completed"
-                    and task.task_type in ("image", "video")
+                    and task.task_type in _MEDIA_TASK_TYPES
                     and task.result
                     else None
                 ),
@@ -404,7 +429,7 @@ async def get_task_by_id(
     if task.user_id is not None and task.user_id != user.id and user.role != "admin":
         raise HTTPException(status_code=403, detail="无权访问该任务")
 
-    if task.task_type in ("image", "video") and task.status == "completed" and task.result:
+    if task.task_type in _MEDIA_TASK_TYPES and task.status == "completed" and task.result:
         return {
             "task_id": task.id,
             "status": "completed",
@@ -431,10 +456,10 @@ async def get_task_by_id(
         }
 
     comfy_prompt_id = task.comfyui_prompt_id or (
-        task.id if task.task_type in ("image", "video") else None
+        task.id if task.task_type in _MEDIA_TASK_TYPES else None
     )
 
-    if comfy_prompt_id and task.task_type in ("image", "video"):
+    if comfy_prompt_id and task.task_type in _MEDIA_TASK_TYPES:
         if task.status in ("pending", "queued", "running"):
             exec_info = await comfyui.get_prompt_execution_status(comfy_prompt_id)
             api_status = exec_info.get("status") or task.status
@@ -447,12 +472,14 @@ async def get_task_by_id(
             )
 
             if api_status == "completed" and exec_info.get("result"):
-                task.status = "completed"
-                task.result = _sign_result_url_for_user(
-                    exec_info["result"],
-                    task.user_id or user.id,
+                _mark_task_terminal(
+                    task,
+                    status="completed",
+                    result=_sign_result_url_for_user(
+                        exec_info["result"],
+                        task.user_id or user.id,
+                    ),
                 )
-                task.error = None
                 db.commit()
                 studio_print(
                     task.task_type,
@@ -492,9 +519,11 @@ async def get_task_by_id(
                     task.user_id or user.id,
                 )
                 if fallback_result:
-                    task.status = "completed"
-                    task.result = fallback_result
-                    task.error = None
+                    _mark_task_terminal(
+                        task,
+                        status="completed",
+                        result=fallback_result,
+                    )
                     db.commit()
                     studio_print(
                         "poll",
@@ -571,8 +600,11 @@ async def cancel_task(
     task = db.get(Task, task_id)
     if task and task.comfyui_prompt_id:
         comfy_id = task.comfyui_prompt_id
-        task.status = "cancelled"
-        task.error = "用户已停止生成"
+        _mark_task_terminal(
+            task,
+            status="cancelled",
+            error="用户已停止生成",
+        )
         db.commit()
     try:
         await comfyui.cancel_task(comfy_id)
@@ -918,6 +950,7 @@ async def canvas_image_task(
         try:
             check_and_consume(db, user.id, "image")
         except QuotaExceededError as e:
+            _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
             raise HTTPException(status_code=429, detail=e.message) from e
 
         await push_trace(
@@ -1058,6 +1091,11 @@ async def canvas_image_task(
             except Exception as exc:
                 studio_print("image", f"ComfyUI 提交失败: {exc}")
                 logger.exception("canvas_image_task comfyui submit failed")
+                _release_acquired_slots(
+                    user.id,
+                    team_id=body.team_id,
+                    slots=max(0, batch_count - len(task_ids)),
+                )
                 raise
             task_id = str(uuid.uuid4())
             studio_print(
@@ -1248,6 +1286,7 @@ async def canvas_video_task(
     try:
         check_and_consume(db, user.id, "video")
     except QuotaExceededError as e:
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
         raise HTTPException(status_code=429, detail=e.message) from e
 
     prompt_before_optimize = prompt
@@ -1327,6 +1366,9 @@ async def canvas_video_task(
 
     try:
         model_ckpt = (model_entry or {}).get("comfyui_model_file")
+        if video_backend == "ltx":
+            # 以启动时从 ComfyUI 扫描到的权重为准，避免注册表占位名与磁盘不一致
+            model_ckpt = comfyui.LTX_CKPT or model_ckpt
         video_submit_kwargs = dict(
             prompt=positive,
             negative_prompt=negative,
@@ -1359,21 +1401,25 @@ async def canvas_video_task(
         studio_print("trace", f"L4 WORKFLOW {workflow_trace}")
     except ValueError as e:
         db.rollback()
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
         raise HTTPException(status_code=400, detail=str(e)) from e
     except httpx.ConnectError:
         db.rollback()
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
         raise HTTPException(
             status_code=503,
             detail="ComfyUI 服务未启动，请先启动 ComfyUI（端口 8000）",
         )
     except httpx.HTTPStatusError as e:
         db.rollback()
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
         raise HTTPException(
             status_code=502,
             detail=f"ComfyUI 返回错误: {e.response.status_code}",
         ) from e
     except Exception as e:
         db.rollback()
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
         raise HTTPException(status_code=500, detail=f"提交失败: {e}") from e
 
     task_id = str(uuid.uuid4())
@@ -1402,3 +1448,270 @@ async def canvas_video_task(
         "comfy_prompt_id": comfy_prompt_id,
         "status": "pending",
     }
+
+
+# ── Canvas: video enhance ─────────────────────────────────────────────────────
+
+
+@router.post(
+    "/api/tasks/video-enhance/recommend-params",
+    response_model=VideoEnhanceRecommendResponse,
+)
+async def canvas_video_enhance_recommend_params(
+    body: VideoEnhanceRecommendRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """分析视频属性并推荐画质增强参数（智能模式）。"""
+    video_url = (body.video_url or "").strip()
+    if not video_url:
+        raise HTTPException(status_code=400, detail="视频地址不能为空")
+
+    from services.media_access import resolve_video_source_for_enhance
+    from services.video_enhance_probe import probe_video_info_from_url
+    from services.video_enhance_recommend import recommend_enhance_params
+
+    try:
+        resolve_video_source_for_enhance(db, user, video_url)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="视频源无效或无权访问") from e
+
+    try:
+        video_info = await probe_video_info_from_url(db, user, video_url)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="无法分析视频属性") from e
+
+    content_style = "photorealistic_cinema"
+    if body.project_id:
+        from services.canvas_access import get_accessible_project
+        from services.canvas_style_ref import (
+            get_script_table_content_style,
+            load_canvas_data,
+        )
+
+        project = get_accessible_project(db, user, body.project_id)
+        if project:
+            canvas_data = load_canvas_data(project)
+            content_style = get_script_table_content_style(
+                canvas_data, body.script_table_node_id
+            )
+
+    use_llm = not settings.agent_mock_generation
+    params, reasoning = await recommend_enhance_params(
+        video_info,
+        use_llm=use_llm,
+        content_style=content_style,
+    )
+    return VideoEnhanceRecommendResponse(params=params, reasoning=reasoning)
+
+
+@router.post("/api/tasks/video-enhance")
+async def canvas_video_enhance_task(
+    body: VideoEnhanceRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """画布视频画质增强后处理（SeedVR2 优先，Real-ESRGAN fallback）。"""
+    video_url = (body.video_url or "").strip()
+    if not video_url:
+        raise HTTPException(status_code=400, detail="视频地址不能为空")
+
+    from services.media_access import resolve_video_source_for_enhance
+
+    try:
+        resolve_video_source_for_enhance(db, user, video_url)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="视频源无效或无权访问") from e
+
+    upscale_factor = body.upscale_factor
+    if upscale_factor not in (1.0, 1.5, 2.0, 3.0):
+        raise HTTPException(
+            status_code=400,
+            detail="超分倍数仅支持 1.0 / 1.5 / 2.0 / 3.0",
+        )
+
+    if body.batch_size not in (4, 8, 16):
+        raise HTTPException(status_code=400, detail="时序批次仅支持 4 / 8 / 16")
+
+    from services.video_enhance_recommend import normalize_enhance_params
+
+    seedvr2_params = normalize_enhance_params(
+        {
+            "upscale_factor": upscale_factor,
+            "strength": body.strength,
+            "input_noise_scale": body.input_noise_scale,
+            "batch_size": body.batch_size,
+            "color_correction": body.color_correction,
+            "model_size": body.model_size,
+        }
+    )
+    upscale_factor = seedvr2_params["upscale_factor"]
+
+    resolved = None if settings.agent_mock_generation else resolve_video_enhance_workflow(
+        body.workflow
+    )
+    if not settings.agent_mock_generation and resolved is None:
+        raise HTTPException(
+            status_code=503,
+            detail="当前环境不支持画质增强",
+        )
+
+    _release_stale_node_tasks(db, body.node_id, user.id)
+    await reconcile_active_tasks_from_comfyui(db, user.id)
+    check_concurrent_generations(db, user, slots_needed=1, team_id=body.team_id)
+
+    try:
+        check_and_consume(db, user.id, "video")
+    except QuotaExceededError as e:
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
+        raise HTTPException(status_code=429, detail=e.message) from e
+
+    prompt_label = f"video_enhance x{upscale_factor} {body.strength}"
+
+    if settings.agent_mock_generation:
+        task_id = str(uuid.uuid4())
+        create_task_record(
+            db,
+            task_id,
+            "video_enhance",
+            "pending",
+            user_id=user.id,
+            team_id=body.team_id,
+            prompt_text=prompt_label,
+            comfyui_prompt_id=mock_generation.MOCK_PROMPT_ID,
+            node_id=body.node_id,
+        )
+        db.commit()
+        tasks_cache.invalidate_tasks_cache()
+        asyncio.create_task(
+            mock_generation.run_mock_video_enhance_task(
+                task_id,
+                video_url,
+                settings.agent_mock_failure_rate,
+            )
+        )
+        studio_print("video-enhance", f"mock 模式提交 task_id={task_id}")
+        return {
+            "task_id": task_id,
+            "comfy_prompt_id": mock_generation.MOCK_PROMPT_ID,
+            "status": "pending",
+        }
+
+    provider_id, _provider = resolved
+    try:
+        if provider_id == VIDEO_ENHANCE_SEEDVR2_ID:
+            comfy_prompt_id, _client_id, workflow = await comfyui.submit_seedvr2_enhance_prompt(
+                video_url,
+                db=db,
+                user=user,
+                upscale_factor=upscale_factor,
+                strength=seedvr2_params["strength"],
+                input_noise_scale=seedvr2_params["input_noise_scale"],
+                batch_size=seedvr2_params["batch_size"],
+                color_correction=seedvr2_params["color_correction"],
+                model_size=seedvr2_params["model_size"],
+                client_id=body.client_id,
+            )
+        else:
+            comfy_prompt_id, _client_id, workflow = await comfyui.submit_realesrgan_enhance_prompt(
+                video_url,
+                db=db,
+                user=user,
+                upscale_factor=upscale_factor,
+                client_id=body.client_id,
+            )
+        workflow_trace = extract_workflow_trace(workflow, provider_id)
+        await push_trace(4, "WORKFLOW", workflow_trace)
+        studio_print("trace", f"L4 WORKFLOW video-enhance {workflow_trace}")
+    except ValueError as e:
+        db.rollback()
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
+        from comfyui.client import map_enhance_submit_error
+
+        raise HTTPException(status_code=400, detail=map_enhance_submit_error(str(e))) from e
+    except httpx.ConnectError:
+        db.rollback()
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
+        raise HTTPException(
+            status_code=503,
+            detail="ComfyUI 服务未启动，请先启动 ComfyUI",
+        )
+    except httpx.HTTPStatusError as e:
+        db.rollback()
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
+        raise HTTPException(
+            status_code=502,
+            detail=f"ComfyUI 返回错误: {e.response.status_code}",
+        ) from e
+    except Exception as e:
+        db.rollback()
+        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
+        raise HTTPException(status_code=500, detail=f"提交失败: {e}") from e
+
+    task_id = str(uuid.uuid4())
+    create_task_record(
+        db,
+        task_id,
+        "video_enhance",
+        "pending",
+        user_id=user.id,
+        team_id=body.team_id,
+        prompt_text=prompt_label,
+        comfyui_prompt_id=comfy_prompt_id,
+        node_id=body.node_id,
+    )
+    db.commit()
+    tasks_cache.invalidate_tasks_cache()
+
+    studio_print(
+        "video-enhance",
+        f"已入库 task_id={task_id} provider={provider_id} comfy_prompt_id={comfy_prompt_id}",
+    )
+
+    return {
+        "task_id": task_id,
+        "comfy_prompt_id": comfy_prompt_id,
+        "status": "pending",
+    }
+
+
+@router.post("/api/tasks/video-lut")
+async def canvas_video_lut_task(
+    body: VideoLutRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """视频 LUT 后处理（ffmpeg lut3d）。"""
+    from services.canvas_access import get_accessible_project
+    from services.canvas_style_ref import load_canvas_data
+    from services.lut_canvas import lut_is_configured, resolve_active_lut_from_table
+    from services.lut_task_service import queue_video_lut_task
+
+    project = get_accessible_project(db, user, body.project_id, require_edit=True)
+    canvas_data = load_canvas_data(project)
+    if not lut_is_configured(canvas_data, body.script_table_node_id):
+        raise HTTPException(status_code=400, detail="项目未配置 LUT")
+
+    lut_preset, lut_custom_url = resolve_active_lut_from_table(
+        canvas_data, body.script_table_node_id
+    )
+    task_id = await queue_video_lut_task(
+        db=db,
+        user=user,
+        video_url=body.video_url,
+        node_id=body.node_id,
+        project_id=body.project_id,
+        script_table_node_id=body.script_table_node_id,
+        lut_preset=lut_preset,
+        lut_custom_url=lut_custom_url,
+        team_id=body.team_id,
+    )
+    if not task_id:
+        raise HTTPException(status_code=400, detail="无法创建 LUT 任务")
+    return {"task_id": task_id, "status": "pending"}

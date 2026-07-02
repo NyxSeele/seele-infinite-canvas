@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
 import "./ImageReferencePicker.css"
 
@@ -16,6 +17,7 @@ export default function ImageReferencePicker({
   onReset,
 }) {
   const { t } = useLocale()
+  const theme = useCanvasStore((s) => s.theme)
 
   useEffect(() => {
     if (!open) return undefined
@@ -27,7 +29,7 @@ export default function ImageReferencePicker({
 
   return (
     <div
-      className="img-ref-picker nodrag nopan"
+      className={`img-ref-picker rf-page rf-page--${theme} nodrag nopan`}
       onPointerDown={sp}
       onClick={sp}
       onMouseLeave={() => onHover?.(null)}

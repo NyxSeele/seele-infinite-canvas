@@ -41,6 +41,11 @@ import {
 } from "../../utils/canvas/scriptTableSegments"
 import { formatDurationSec } from "../../utils/canvas/videoDurationIntent"
 import {
+  CONTENT_STYLE_OPTIONS,
+  getScriptTableContentStyle,
+  normalizeContentStyle,
+} from "../../utils/canvas/contentStylePresets"
+import {
   SCRIPT_QUALITY_PRESETS,
   applyQualityPresetToRow,
   withDefaultQualityPresetRows,
@@ -52,6 +57,13 @@ import {
   splitShotBeats,
 } from "../../utils/canvas/scriptPromptApi"
 import { touchLibraryById } from "../../utils/canvas/libraryUsage"
+import {
+  LUT_PRESET_IDS,
+  applyLutToAll,
+  isLutActive,
+  updateLutPreset,
+  uploadLutCube,
+} from "../../services/lutApi"
 import ScriptShotPreviewModal from "./ScriptShotPreviewModal"
 import { useCanvasActions, useReferenceSelect } from "./CanvasActionsContext"
 import ScriptCastLibrary from "./ScriptCastLibrary"
@@ -81,6 +93,14 @@ const VideoModelIcon = () => (
   <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
     <rect x="1" y="3" width="7.5" height="7" rx="1.2" stroke="currentColor" strokeWidth="1.1"/>
     <path d="M8.5 5.5l3.5-2v7l-3.5-2v-3z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round"/>
+  </svg>
+)
+
+const ContentStyleIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+    <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.1"/>
+    <path d="M2 6.5h9" stroke="currentColor" strokeWidth="1.1"/>
+    <path d="M6.5 2v9" stroke="currentColor" strokeWidth="1.1" opacity="0.5"/>
   </svg>
 )
 
@@ -158,6 +178,7 @@ export function makeEmptyScriptRow(shotNumber = 1) {
 export default function ScriptTableNode({ id, data, selected }) {
   const { t } = useLocale()
   const theme = useCanvasStore((s) => s.theme)
+  const canvasId = useCanvasStore((s) => s.canvasId)
   const wrapperRef = useRef(null)
   const shotListRef = useRef(null)
   useBlockCtrlWheel(wrapperRef)
@@ -199,6 +220,14 @@ export default function ScriptTableNode({ id, data, selected }) {
   const [exportOpen, setExportOpen] = useState(false)
   const [splittingRowId, setSplittingRowId] = useState(null)
   const [videoModelId, setVideoModelId] = useState(data.videoModelId || "")
+  const [contentStyle, setContentStyle] = useState(() =>
+    getScriptTableContentStyle(data)
+  )
+  const [lutSettingsOpen, setLutSettingsOpen] = useState(false)
+  const [lutPreset, setLutPreset] = useState(data.lutPreset || "none")
+  const [lutCustomName, setLutCustomName] = useState(data.lutCustomName || "")
+  const [lutApplyingAll, setLutApplyingAll] = useState(false)
+  const lutUploadRef = useRef(null)
   const refSelect = useReferenceSelect()
 
   useEffect(() => {
@@ -226,6 +255,14 @@ export default function ScriptTableNode({ id, data, selected }) {
     }
   }, [data.sceneLibrary])
 
+  useEffect(() => {
+    if (data.contentStyle !== undefined) {
+      setContentStyle(getScriptTableContentStyle(data))
+    }
+    if (data.lutPreset !== undefined) setLutPreset(data.lutPreset || "none")
+    if (data.lutCustomName !== undefined) setLutCustomName(data.lutCustomName || "")
+  }, [data.contentStyle, data.lutPreset, data.lutCustomName])
+
   const updateData = useCallback(
     (patch) => {
       if (readOnly) return
@@ -233,6 +270,64 @@ export default function ScriptTableNode({ id, data, selected }) {
     },
     [id, data, readOnly]
   )
+
+  const lutSummaryLabel = useMemo(() => {
+    if (data.lutCustomUrl) {
+      return t("canvas.script.lutSummary", {
+        name: lutCustomName || t("canvas.lut.custom"),
+      })
+    }
+    const pid = lutPreset || "none"
+    return t("canvas.script.lutSummary", { name: t(`canvas.lut.${pid}`) })
+  }, [data.lutCustomUrl, lutCustomName, lutPreset, t])
+
+  const handleLutPresetSelect = useCallback(
+    async (presetId) => {
+      if (readOnly || !canvasId) return
+      setLutPreset(presetId)
+      updateData({ lutPreset: presetId, lutCustomUrl: null, lutCustomName: "" })
+      setLutCustomName("")
+      try {
+        await updateLutPreset(canvasId, id, presetId)
+      } catch (err) {
+        console.error("update lut preset failed", err)
+      }
+    },
+    [readOnly, canvasId, id, updateData]
+  )
+
+  const handleLutUpload = useCallback(
+    async (e) => {
+      const file = e.target.files?.[0]
+      e.target.value = ""
+      if (!file || readOnly || !canvasId) return
+      try {
+        const res = await uploadLutCube(canvasId, id, file)
+        setLutPreset(res.lut_preset || null)
+        setLutCustomName(res.lut_custom_name || file.name)
+        updateData({
+          lutPreset: null,
+          lutCustomUrl: res.lut_custom_url,
+          lutCustomName: res.lut_custom_name || file.name,
+        })
+      } catch (err) {
+        console.error("lut upload failed", err)
+      }
+    },
+    [readOnly, canvasId, id, updateData]
+  )
+
+  const handleLutApplyAll = useCallback(async () => {
+    if (readOnly || !canvasId || !isLutActive(data)) return
+    setLutApplyingAll(true)
+    try {
+      await applyLutToAll(canvasId, id)
+    } catch (err) {
+      console.error("lut apply-all failed", err)
+    } finally {
+      setLutApplyingAll(false)
+    }
+  }, [readOnly, canvasId, id, data])
 
   const castStripInitRef = useRef(false)
   useEffect(() => {
@@ -829,7 +924,7 @@ export default function ScriptTableNode({ id, data, selected }) {
       ref={wrapperRef}
       className={`st-wrapper st-wrapper--simple${selected ? " st-wrapper--selected" : ""}`}
     >
-      <TextWorkflowEdgePlugs nodeId={id} nodeType="script-table" disabled={readOnly} />
+      <TextWorkflowEdgePlugs nodeId={id} nodeType="script-table" disabled={readOnly} selected={selected} />
       <div className="st-header">
         <h2 className="st-header-title cn-title">{t("canvas.script.table")}</h2>
         <NodeCardDotsMenu
@@ -920,6 +1015,71 @@ export default function ScriptTableNode({ id, data, selected }) {
         </div>
         )}
 
+        <button
+          type="button"
+          className="st-project-settings-summary nodrag"
+          onClick={() => setLutSettingsOpen((v) => !v)}
+          onPointerDown={sp}
+        >
+          <span className="st-project-settings-summary-text cn-muted">{lutSummaryLabel}</span>
+          <ProjectSettingsChevron open={lutSettingsOpen} />
+        </button>
+
+        {lutSettingsOpen && (
+          <div className="st-lut-panel nodrag">
+            <h3 className="st-lib-section-title cn-param-key">{t("canvas.script.lutStyle")}</h3>
+            <div className="st-lut-panel-body">
+              <ul className="st-lut-preset-list">
+                {LUT_PRESET_IDS.map((pid) => (
+                  <li key={pid}>
+                    <button
+                      type="button"
+                      className={`st-lut-preset-btn${!data.lutCustomUrl && lutPreset === pid ? " st-lut-preset-btn--active" : ""}`}
+                      disabled={readOnly}
+                      onClick={() => handleLutPresetSelect(pid)}
+                      onPointerDown={sp}
+                    >
+                      {t(`canvas.lut.${pid}`)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="st-lut-upload-col">
+                <input
+                  ref={lutUploadRef}
+                  type="file"
+                  accept=".cube"
+                  hidden
+                  onChange={handleLutUpload}
+                />
+                <button
+                  type="button"
+                  className="st-preset-apply-btn"
+                  disabled={readOnly}
+                  onClick={() => lutUploadRef.current?.click()}
+                  onPointerDown={sp}
+                >
+                  {t("canvas.script.lutUpload")}
+                </button>
+                {data.lutCustomUrl && (
+                  <p className="st-lut-custom-name cn-muted">
+                    {lutCustomName || t("canvas.lut.custom")}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="st-preset-apply-btn st-lut-apply-all-btn"
+              disabled={readOnly || !isLutActive(data) || lutApplyingAll}
+              onClick={handleLutApplyAll}
+              onPointerDown={sp}
+            >
+              {lutApplyingAll ? t("canvas.script.lutApplying") : t("canvas.script.lutApplyAll")}
+            </button>
+          </div>
+        )}
+
         <div className="st-toolbar nodrag st-toolbar--simple">
           <div className="st-toolbar-main">
             <div className="st-toolbar-pills">
@@ -968,6 +1128,23 @@ export default function ScriptTableNode({ id, data, selected }) {
               disabled={readOnly}
               onChange={(pid) => setQualityPresetId(pid)}
               title={t("canvas.script.defaultStyleTitle")}
+            />
+            <CanvasModelDropup
+              tag={t("canvas.script.contentStyle")}
+              icon={ContentStyleIcon}
+              models={CONTENT_STYLE_OPTIONS.map((p) => ({
+                id: p.id,
+                display_name: t(`canvas.contentStyle.${p.id === "photorealistic_cinema" ? "photorealistic" : "generic"}`),
+              }))}
+              value={contentStyle}
+              direction="down"
+              disabled={readOnly}
+              onChange={(cid) => {
+                const next = normalizeContentStyle(cid)
+                setContentStyle(next)
+                updateData({ contentStyle: next })
+              }}
+              title={t("canvas.script.contentStyleTitle")}
             />
             <button
               type="button"

@@ -143,7 +143,7 @@ export default function ShotScriptNode({ id, data, selected }) {
       style={{ ...ROOT_STYLE, zIndex: nodeZIndex }}
       ref={wrapperRef}
     >
-      <TextWorkflowEdgePlugs nodeId={id} nodeType="shot-script" disabled={collabReadOnly} />
+      <TextWorkflowEdgePlugs nodeId={id} nodeType="shot-script" disabled={collabReadOnly} selected={selected} />
       <div className="ss-card" onDoubleClick={(e) => e.stopPropagation()}>
         <div className="ss-header">
           <h2 className="ss-header-title cn-title">{t("canvas.script.mergedPrompt")}</h2>

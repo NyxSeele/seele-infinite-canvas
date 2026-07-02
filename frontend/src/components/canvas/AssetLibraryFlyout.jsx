@@ -44,6 +44,7 @@ export default function AssetLibraryFlyout({ open, onClose, getCardPointerHandle
   const { user } = useAuth()
   const canvasId = useCanvasStore((s) => s.canvasId)
   const projectName = useCanvasStore((s) => s.projectName)
+  const projectTeamId = useCanvasStore((s) => s.projectTeamId)
   const assets = useAssetStore((s) => s.assets)
   const teamAssets = useAssetStore((s) => s.teamAssets)
   const loading = useAssetStore((s) => s.loading)
@@ -72,14 +73,28 @@ export default function AssetLibraryFlyout({ open, onClose, getCardPointerHandle
   const dragRef = useRef({ x: 0, y: 0, top: 0 })
   const panelRef = useRef(null)
   const fileRef = useRef(null)
+  const openRef = useRef(false)
 
   useEffect(() => {
-    if (!open || !assetLibraryPref) return
-    if (assetLibraryPref.contentTab) setContentTab(assetLibraryPref.contentTab)
-    if (assetLibraryPref.filter) setFilter(assetLibraryPref.filter)
-    if (assetLibraryPref.scopeTab) setScopeTab(assetLibraryPref.scopeTab)
-    setAssetLibraryPref(null)
-  }, [open, assetLibraryPref, setAssetLibraryPref])
+    const justOpened = open && !openRef.current
+    openRef.current = open
+    if (!justOpened) return
+
+    if (assetLibraryPref) {
+      if (assetLibraryPref.contentTab) setContentTab(assetLibraryPref.contentTab)
+      if (assetLibraryPref.filter) setFilter(assetLibraryPref.filter)
+      const prefScope = assetLibraryPref.scopeTab
+      setScopeTab(
+        prefScope === "team" || prefScope === "mine"
+          ? prefScope
+          : (projectTeamId ? "team" : "mine")
+      )
+      setAssetLibraryPref(null)
+      return
+    }
+
+    setScopeTab(projectTeamId ? "team" : "mine")
+  }, [open, assetLibraryPref, projectTeamId, setAssetLibraryPref])
 
   const canvasImages = useStore(
     useCallback((s) => {

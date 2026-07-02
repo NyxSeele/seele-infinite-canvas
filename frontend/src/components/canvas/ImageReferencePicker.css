@@ -11,9 +11,9 @@
   gap: 10px;
   padding: 12px;
   border-radius: 14px;
-  background: rgba(24, 24, 24, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  background: var(--tl-menu-bg, rgba(24, 24, 24, 0.96));
+  border: 1px solid var(--tl-menu-border, rgba(255, 255, 255, 0.12));
+  box-shadow: var(--tl-menu-shadow, 0 16px 48px rgba(0, 0, 0, 0.55));
   pointer-events: all;
 }
 
@@ -27,13 +27,13 @@
 .img-ref-picker-title {
   font-size: 13px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--tl-text-primary, rgba(255, 255, 255, 0.92));
 }
 
 .img-ref-picker-cancel {
   border: none;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.75);
+  background: var(--tl-toolbar-btn-bg, rgba(255, 255, 255, 0.08));
+  color: var(--tl-text-secondary, rgba(255, 255, 255, 0.75));
   border-radius: 999px;
   padding: 4px 12px;
   font-size: 12px;
@@ -41,15 +41,15 @@
 }
 
 .img-ref-picker-cancel:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: #fff;
+  background: var(--tl-menu-hover, rgba(255, 255, 255, 0.14));
+  color: var(--tl-text-primary, #fff);
 }
 
 .img-ref-picker-empty {
   padding: 28px 12px;
   text-align: center;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--tl-text-secondary, rgba(255, 255, 255, 0.45));
 }
 
 .img-ref-picker-grid {
@@ -67,7 +67,7 @@
   border-radius: 10px;
   overflow: hidden;
   padding: 0;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--tl-toolbar-btn-bg, rgba(255, 255, 255, 0.04));
   cursor: pointer;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
@@ -114,8 +114,8 @@
   padding: 6px 16px;
   font-size: 12px;
   font-weight: 600;
-  color: #111;
-  background: rgba(255, 255, 255, 0.92);
+  color: var(--tl-text-primary, #111);
+  background: var(--tl-accent, rgba(255, 255, 255, 0.92));
   cursor: pointer;
 }
 
@@ -125,5 +125,20 @@
 }
 
 .img-ref-picker-confirm:not(:disabled):hover {
-  background: #fff;
+  filter: brightness(1.06);
+}
+
+.rf-page--light.img-ref-picker {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.12);
+}
+
+.rf-page--light .img-ref-picker-confirm {
+  color: #fff;
+  background: var(--tl-accent, #3b82f6);
+}
+
+.rf-page--light .img-ref-picker-cell {
+  background: rgba(0, 0, 0, 0.04);
 }

@@ -227,7 +227,7 @@ export default function ScriptBeatCardNode({ id, data, selected }) {
         </button>
       </div>
 
-      <TextWorkflowEdgePlugs nodeId={id} nodeType={BEAT_CARD_NODE_TYPE} disabled={readOnly} />
+      <TextWorkflowEdgePlugs nodeId={id} nodeType={BEAT_CARD_NODE_TYPE} disabled={readOnly} selected={selected} />
     </div>
   )
 }

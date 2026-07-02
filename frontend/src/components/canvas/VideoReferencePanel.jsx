@@ -86,53 +86,103 @@ export default function VideoReferencePanel({
   section = "all",
   projectId = null,
   readOnly = false,
+  slotsExpanded = false,
+  onSlotsExpandedChange,
+  enhancePanelSlot = null,
 }) {
   const { t } = useLocale()
   const refSelect = useReferenceSelect()
   const { assetEntries, ensureLoaded } = useRefAssetEntries()
   const [styleRefOpen, setStyleRefOpen] = useState(false)
 
-  useEffect(() => {
-    ensureLoaded()
-  }, [ensureLoaded])
+  const onUpdate = data?.onUpdate
+  const referenceModeFromData = data?.referenceMode || "keyframe"
+  const panelModeFromData = data?.panelMode || referenceModeFromData
+  const [localPanelMode, setLocalPanelMode] = useState(panelModeFromData)
+  const referenceMode = localPanelMode === "enhance" ? referenceModeFromData : localPanelMode
 
-  const referenceMode = data.referenceMode || "keyframe"
-  const [keyframes, setKeyframes] = useState(data.keyframes || DEFAULT_KEYFRAMES)
-  const [freeRefs, setFreeRefs] = useState(data.freeRefs || [])
+  useEffect(() => {
+    const next = data?.panelMode || data?.referenceMode || "keyframe"
+    setLocalPanelMode(next)
+  }, [data?.panelMode, data?.referenceMode, nodeId])
+
+  const [keyframes, setKeyframes] = useState(data?.keyframes || DEFAULT_KEYFRAMES)
+  const [freeRefs, setFreeRefs] = useState(data?.freeRefs || [])
 
   const [keyframePick, setKeyframePick] = useState(null)
 
   useEffect(() => {
-    setKeyframes(data.keyframes || DEFAULT_KEYFRAMES)
-    setFreeRefs(data.freeRefs || [])
-  }, [data.keyframes, data.freeRefs])
+    setKeyframes(data?.keyframes || DEFAULT_KEYFRAMES)
+    setFreeRefs(data?.freeRefs || [])
+  }, [data?.keyframes, data?.freeRefs])
 
-  const persist = useCallback((patch) => {
-    data.onUpdate?.(nodeId, patch)
-  }, [data, nodeId])
+  useEffect(() => {
+    if (slotsExpanded) ensureLoaded()
+  }, [slotsExpanded, ensureLoaded])
 
-  const setMode = useCallback((mode) => {
+  const persist = useCallback((patch, { rememberSlots = false } = {}) => {
+    const next = rememberSlots ? { ...patch, referenceSlotsOpen: true } : patch
+    onUpdate?.(nodeId, next)
+  }, [onUpdate, nodeId])
+
+  const handleModeClick = useCallback((mode) => {
+    if (localPanelMode === mode) {
+      const nextExpanded = !slotsExpanded
+      onSlotsExpandedChange?.(nextExpanded)
+      if (!nextExpanded) {
+        if (data?.referenceSlotsOpen) {
+          persist({ referenceSlotsOpen: false })
+        }
+        if (mode === "enhance") {
+          const refMode = referenceModeFromData || "keyframe"
+          setLocalPanelMode(refMode)
+          persist({ panelMode: refMode, referenceSlotsOpen: false })
+        }
+      }
+      return
+    }
+    setLocalPanelMode(mode)
+    if (mode === "enhance") {
+      persist({ panelMode: "enhance" }, { rememberSlots: true })
+      onSlotsExpandedChange?.(true)
+      return
+    }
     persist({
+      panelMode: mode,
       referenceMode: mode,
       vidMode: mode === "freeref" ? "参考" : "首尾帧",
     })
-  }, [persist])
+    onSlotsExpandedChange?.(true)
+  }, [
+    localPanelMode,
+    slotsExpanded,
+    onSlotsExpandedChange,
+    persist,
+    data?.referenceSlotsOpen,
+    referenceModeFromData,
+  ])
+
+  const setMode = useCallback((mode) => {
+    handleModeClick(mode)
+  }, [handleModeClick])
 
   const updateKeyframes = useCallback((updater) => {
     setKeyframes((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater
-      persist({ keyframes: next })
+      persist({ keyframes: next }, { rememberSlots: true })
+      onSlotsExpandedChange?.(true)
       return next
     })
-  }, [persist])
+  }, [persist, onSlotsExpandedChange])
 
   const updateFreeRefs = useCallback((updater) => {
     setFreeRefs((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater
-      persist({ freeRefs: next })
+      persist({ freeRefs: next }, { rememberSlots: true })
+      onSlotsExpandedChange?.(true)
       return next
     })
-  }, [persist])
+  }, [persist, onSlotsExpandedChange])
 
   const openCanvasPickerFor = useCallback((target) => {
     refSelect?.enter(nodeId, target)
@@ -248,9 +298,10 @@ export default function VideoReferencePanel({
 
   const handleStyleReferenceChange = useCallback(
     (ref) => {
-      data.onUpdate?.(nodeId, { styleReference: ref ?? null })
+      onUpdate?.(nodeId, { styleReference: ref ?? null, referenceSlotsOpen: true })
+      onSlotsExpandedChange?.(true)
     },
-    [nodeId, data]
+    [nodeId, onUpdate, onSlotsExpandedChange]
   )
 
   const styleRefModal = projectId ? (
@@ -266,65 +317,78 @@ export default function VideoReferencePanel({
     />
   ) : null
 
+  const tabExpandedClass = slotsExpanded ? " expanded" : ""
+
   const topBar = (
     <div className="video-top-bar nodrag nopan">
       <div className="mode-tabs nodrag nopan">
         <button
           type="button"
-          className={`mode-tab nodrag nopan${referenceMode === "keyframe" ? " active" : ""}`}
+          className={`mode-tab nodrag nopan${localPanelMode === "keyframe" ? ` active${tabExpandedClass}` : ""}`}
           onClick={() => setMode("keyframe")}
         >
           {t("canvas.prompt.keyframe")}
         </button>
         <button
           type="button"
-          className={`mode-tab nodrag nopan${referenceMode === "freeref" ? " active" : ""}`}
+          className={`mode-tab nodrag nopan${localPanelMode === "freeref" ? ` active${tabExpandedClass}` : ""}`}
           onClick={() => setMode("freeref")}
         >
           {t("canvas.image.slotFreeref")}
         </button>
-      </div>
-      <div className="video-top-divider" aria-hidden />
-      <div className="add-ref-wrapper">
-        <RefPickerTrigger
-          label={t("canvas.video.addRef")}
-          labelWithCount={
-            referenceMode === "freeref" ? t("canvas.video.addRefWithCount") : undefined
-          }
-          count={referenceMode === "freeref" ? freeRefs.length : 0}
-          max={referenceMode === "freeref" ? 5 : undefined}
-          disabled={referenceMode === "freeref" && freeRefs.length >= 5}
-          showUpload={true}
-          assetEntries={assetEntries}
-          onAssetPick={handleTopBarAssetPick}
-          onQuickSelect={handleTopBarQuickSelect}
-          onCanvasPick={openCanvasPicker}
-          onUpload={handleTopBarUpload}
-        />
-      </div>
-      {projectId && (
         <button
           type="button"
-          className={`video-style-ref-btn nodrag nopan${hasStyleRef ? " video-style-ref-btn--active" : ""}`}
-          title={
-            hasStyleRef
-              ? styleReferenceSummary(styleReference)
-              : t("canvas.styleRef.videoBtn")
-          }
-          onClick={(e) => {
-            sp(e)
-            setStyleRefOpen(true)
-          }}
+          className={`mode-tab nodrag nopan${localPanelMode === "enhance" ? ` active${tabExpandedClass}` : ""}`}
+          onClick={() => setMode("enhance")}
         >
-          <IconStyleRef />
-          <span className="video-style-ref-btn-label">{t("canvas.styleRef.videoBtnShort")}</span>
-          {hasStyleRef ? <span className="video-style-ref-dot" aria-hidden /> : null}
+          {t("canvas.video.enhance")}
         </button>
+      </div>
+      {localPanelMode !== "enhance" && (
+        <>
+          <div className="video-top-divider" aria-hidden />
+          <div className="add-ref-wrapper">
+            <RefPickerTrigger
+              label={t("canvas.video.addRef")}
+              labelWithCount={
+                referenceMode === "freeref" ? t("canvas.video.addRefWithCount") : undefined
+              }
+              count={referenceMode === "freeref" ? freeRefs.length : 0}
+              max={referenceMode === "freeref" ? 5 : undefined}
+              disabled={referenceMode === "freeref" && freeRefs.length >= 5}
+              showUpload={true}
+              assetEntries={slotsExpanded ? assetEntries : []}
+              onAssetPick={handleTopBarAssetPick}
+              onQuickSelect={handleTopBarQuickSelect}
+              onCanvasPick={openCanvasPicker}
+              onUpload={handleTopBarUpload}
+            />
+          </div>
+          {projectId && (
+            <button
+              type="button"
+              className={`video-style-ref-btn nodrag nopan${hasStyleRef ? " video-style-ref-btn--active" : ""}`}
+              title={
+                hasStyleRef
+                  ? styleReferenceSummary(styleReference)
+                  : t("canvas.styleRef.videoBtn")
+              }
+              onClick={(e) => {
+                sp(e)
+                setStyleRefOpen(true)
+              }}
+            >
+              <IconStyleRef />
+              <span className="video-style-ref-btn-label">{t("canvas.styleRef.videoBtnShort")}</span>
+              {hasStyleRef ? <span className="video-style-ref-dot" aria-hidden /> : null}
+            </button>
+          )}
+        </>
       )}
     </div>
   )
 
-  const slotsSection = referenceMode === "keyframe" ? (
+  const slotsSection = !slotsExpanded ? null : referenceMode === "keyframe" ? (
         <div className="keyframe-slots nodrag nopan">
           <KeyframeSlot
             slotLabel={t("canvas.image.slotFirst")}
@@ -424,7 +488,36 @@ export default function VideoReferencePanel({
     )
   }
 
+  if (section === "promptbar") {
+    return (
+      <div className="video-ref-promptbar nodrag nopan">
+        {topBar}
+        {slotsExpanded ? (
+          <div className="video-ref-promptbar-media">
+            {localPanelMode === "enhance" ? (
+              enhancePanelSlot
+            ) : (
+              <div className="video-ref-panel video-ref-panel--slots">
+                {slotsSection}
+                {keyframePickPop}
+              </div>
+            )}
+          </div>
+        ) : null}
+        {styleRefModal}
+      </div>
+    )
+  }
+
   if (section === "slots") {
+    if (!slotsExpanded) return null
+    if (localPanelMode === "enhance") {
+      return enhancePanelSlot ? (
+        <div className="video-ref-panel video-ref-panel--slots nodrag nopan" onPointerDown={sp} onClick={sp}>
+          {enhancePanelSlot}
+        </div>
+      ) : null
+    }
     return (
       <div className="video-ref-panel video-ref-panel--slots nodrag nopan" onPointerDown={sp} onClick={sp}>
         {slotsSection}

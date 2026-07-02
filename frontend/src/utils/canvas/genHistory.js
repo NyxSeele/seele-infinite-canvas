@@ -1,4 +1,5 @@
 import { stripMediaTicket } from "../mediaTicket"
+import { parseServerTimestamp } from "../datetime"
 import {
   getImageNodeImages,
   normalizePersistentImageUrl,
@@ -16,16 +17,7 @@ try {
 
 /** 统一时间戳：毫秒、秒级 Unix、ISO 字符串 */
 export function normalizeTimestamp(raw) {
-  if (raw == null || raw === "") return null
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return raw < 1e12 ? Math.round(raw * 1000) : Math.round(raw)
-  }
-  const n = Number(raw)
-  if (Number.isFinite(n) && n > 0) {
-    return n < 1e12 ? Math.round(n * 1000) : Math.round(n)
-  }
-  const parsed = Date.parse(String(raw))
-  return Number.isFinite(parsed) ? parsed : null
+  return parseServerTimestamp(raw)
 }
 
 function stableUrl(url) {

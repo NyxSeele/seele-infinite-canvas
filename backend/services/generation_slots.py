@@ -11,6 +11,10 @@ _USER_KEY = "gen:active:user:{user_id}"
 _TEAM_KEY = "gen:active:team:{team_id}"
 _SLOT_TTL = 600
 
+# 与 generation_guard.ACTIVE_TASK_STATUSES 保持一致
+ACTIVE_TASK_STATUSES = ("pending", "queued", "running", "processing")
+TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "cancelled", "timeout"})
+
 
 def _user_key(user_id: int) -> str:
     return _USER_KEY.format(user_id=user_id)
@@ -63,6 +67,22 @@ def acquire_slots(
     pipe.execute()
 
 
+def set_slot_counts(
+    user_id: int,
+    user_active: int,
+    *,
+    team_id: str | None = None,
+    team_active: int = 0,
+) -> None:
+    """将 Redis 计数与数据库活跃任务数对齐。"""
+    r = get_redis()
+    if r is None:
+        return
+    r.set(_user_key(user_id), max(0, int(user_active)), ex=_SLOT_TTL)
+    if team_id:
+        r.set(_team_key(team_id), max(0, int(team_active)), ex=_SLOT_TTL)
+
+
 def release_slots(
     user_id: int | None,
     *,
@@ -85,3 +105,11 @@ def release_slots(
         r.set(uk, 0, ex=_SLOT_TTL)
     if team_id and len(results) > 1 and int(results[1] or 0) < 0:
         r.set(_team_key(team_id), 0, ex=_SLOT_TTL)
+
+
+def release_slot_for_task(task) -> None:
+    """任务从进行中进入终态时释放一个槽位。"""
+    if task is None or task.user_id is None:
+        return
+    if getattr(task, "status", None) in ACTIVE_TASK_STATUSES:
+        release_slots(task.user_id, team_id=getattr(task, "team_id", None))

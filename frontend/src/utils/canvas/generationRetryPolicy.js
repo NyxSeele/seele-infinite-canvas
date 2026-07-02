@@ -20,10 +20,30 @@ const CONFIG_PATTERNS = [
   /填写/i,
 ]
 
+const ENHANCE_NON_RETRY_PATTERNS = [
+  /非法上传路径/i,
+  /视频源无效/i,
+  /不支持画质增强/i,
+  /缺少画质增强模型/i,
+  /缺少所需模型/i,
+  /not found/i,
+  /does not exist/i,
+  /seedvr/i,
+  /realesrgan/i,
+  /video helper suite/i,
+  /\bvhs\b/i,
+]
+
 export function classifyGenerationError(errorText, httpStatus) {
   const msg = String(errorText || "").trim()
   if (!msg && !httpStatus) {
     return { kind: "unknown", retryable: true, reason: "" }
+  }
+  if (httpStatus === 503 || /不支持画质增强/i.test(msg)) {
+    return { kind: "enhance_unavailable", retryable: false, reason: msg }
+  }
+  if (ENHANCE_NON_RETRY_PATTERNS.some((p) => p.test(msg))) {
+    return { kind: "enhance_config", retryable: false, reason: msg }
   }
   if (httpStatus === 400 && CONFIG_PATTERNS.some((p) => p.test(msg))) {
     return { kind: "config", retryable: false, reason: msg }

@@ -59,4 +59,36 @@ function IconStyleRef() {
   )
 }
 
-export { IconCollabScreen, IconAgent, IconShare, IconStyleRef }
+function IconZoom() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden>
+      <circle cx="6.5" cy="6.5" r="3.6" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M9.2 9.2L12.5 12.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function IconCredit() {
+  return (
+    <span className="canvas-credit-icon" aria-hidden>
+      ✦
+    </span>
+  )
+}
+
+function IconEnhance() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden>
+      <path
+        d="M7.5 2.2l.9 2.8 2.8.9-2.8.9-.9 2.8-.9-2.8-2.8-.9 2.8-.9.9-2.8z"
+        stroke="currentColor"
+        strokeWidth="1.1"
+        strokeLinejoin="round"
+      />
+      <path d="M11.8 2.4v1.6M12.6 3.2h-1.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M3 11.2h2.2M4.1 10.1v2.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+export { IconCollabScreen, IconAgent, IconShare, IconStyleRef, IconZoom, IconEnhance, IconCredit }

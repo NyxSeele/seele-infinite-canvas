@@ -895,3 +895,60 @@
 .st-row--failed {
   background: rgba(255, 100, 100, 0.03);
 }
+
+.st-lut-panel {
+  margin: 8px 0 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--st-surface-muted, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--st-border, rgba(255, 255, 255, 0.08));
+}
+
+.st-lut-panel-body {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.st-lut-preset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.st-lut-preset-btn {
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.st-lut-preset-btn--active {
+  background: var(--tl-toolbar-btn-hover, rgba(255, 255, 255, 0.08));
+  border-color: var(--tl-border, rgba(255, 255, 255, 0.12));
+}
+
+.st-lut-upload-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+}
+
+.st-lut-custom-name {
+  font-size: 12px;
+  margin: 0;
+  word-break: break-all;
+}
+
+.st-lut-apply-all-btn {
+  margin-top: 10px;
+}

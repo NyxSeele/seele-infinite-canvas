@@ -1,0 +1,67 @@
+{
+  "1": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "video": "input.mp4",
+      "force_rate": 24.0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    }
+  },
+  "2": {
+    "class_type": "SeedVR2LoadDiTModel",
+    "inputs": {
+      "model": "seedvr2_ema_7b_fp16.safetensors",
+      "device": "cuda",
+      "blocks_to_swap": 0,
+      "swap_io": false
+    }
+  },
+  "3": {
+    "class_type": "SeedVR2LoadVAEModel",
+    "inputs": {
+      "model": "seedvr2_vae_fp16.safetensors",
+      "device": "cuda",
+      "encode_tiled": true,
+      "encode_tile_size": 1024,
+      "decode_tiled": true,
+      "decode_tile_size": 1024
+    }
+  },
+  "4": {
+    "class_type": "SeedVR2VideoUpscaler",
+    "inputs": {
+      "image": ["1", 0],
+      "dit": ["2", 0],
+      "vae": ["3", 0],
+      "seed": 42,
+      "resolution": 960,
+      "batch_size": 8,
+      "color_correction": "lab",
+      "input_noise_scale": 0.25,
+      "uniform_batch_size": false,
+      "temporal_overlap": 0,
+      "prepend_frames": 0
+    }
+  },
+  "5": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["4", 0],
+      "audio": ["1", 2],
+      "frame_rate": 24.0,
+      "loop_count": 0,
+      "filename_prefix": "AIStudio_video_enhance",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}

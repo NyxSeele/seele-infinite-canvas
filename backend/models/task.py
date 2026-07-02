@@ -27,6 +27,7 @@ class Task(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     comfyui_prompt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     node_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lut_applied: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped["User | None"] = relationship("User", back_populates="tasks")

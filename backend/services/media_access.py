@@ -23,7 +23,9 @@ _OUTPUT_GRANT_TTL = 7200
 _memory_output_grants: dict[str, float] = {}
 
 _FILENAME_SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
-_UPLOAD_PATH = re.compile(r"^(?:images|videos)/[A-Za-z0-9._-]+$")
+_UPLOAD_PATH = re.compile(
+    r"^(?:images|videos)/[A-Za-z0-9._-]+$|^luts/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.cube$"
+)
 
 
 def _signing_key() -> bytes:
@@ -354,6 +356,65 @@ def resolve_upload_file_path(rel: str) -> Path:
     if not str(full).startswith(str(root)):
         raise HTTPException(status_code=400, detail="非法上传路径")
     return full
+
+
+def _resolve_comfy_output_path(filename: str, subfolder: str = "") -> Path | None:
+    """解析 Comfy 输出文件磁盘路径（与 export_service 逻辑一致）。"""
+    from pathlib import Path as _Path
+
+    safe_name = sanitize_filename(filename)
+    sub = (subfolder or "").strip().replace("\\", "/").strip("/")
+    backend_dir = _Path(__file__).resolve().parent.parent
+    search_roots = [
+        backend_dir / "output",
+        backend_dir.parent / "output",
+        UPLOAD_ROOT,
+    ]
+    for root in search_roots:
+        if sub:
+            candidate = root / sub / safe_name
+            if candidate.is_file():
+                return candidate.resolve()
+        candidate = root / safe_name
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def resolve_video_source_for_enhance(db: Session, user: User, video_url: str) -> Path | None:
+    """
+    解析画质增强可用的本地视频路径。
+    - /api/view?filename=...：校验 Comfy 输出访问权后返回磁盘路径
+    - /api/uploads/videos/...：沿用上传校验
+    - http(s)://：返回 None，由 upload_video_from_url 下载
+    """
+    raw = (video_url or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="视频地址不能为空")
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return None
+    if "filename=" in raw or raw.startswith("/api/view"):
+        from urllib.parse import parse_qs, urlparse
+
+        query = parse_qs(urlparse(raw).query)
+        names = query.get("filename") or []
+        if not names or not names[0]:
+            raise HTTPException(status_code=400, detail="视频源无效或无权访问")
+        filename = names[0]
+        subfolders = query.get("subfolder") or [""]
+        subfolder = (subfolders[0] or "").strip()
+        if not user_can_access_comfy_output(db, user, filename, subfolder=subfolder):
+            raise HTTPException(status_code=403, detail="视频源无效或无权访问")
+        path = _resolve_comfy_output_path(filename, subfolder)
+        if not path or not path.is_file():
+            raise HTTPException(status_code=404, detail="视频文件不存在，请重新生成后再试")
+        return path
+    try:
+        return assert_user_can_read_upload_url(db, user, raw)
+    except HTTPException as exc:
+        if exc.status_code == 400 and exc.detail == "非法上传路径":
+            raise HTTPException(status_code=400, detail="视频源无效或无权访问") from exc
+        raise
 
 
 def assert_user_can_read_upload_url(db: Session, user: User, image_url: str) -> Path:

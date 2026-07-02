@@ -80,6 +80,28 @@ def test_script_shot_continuity_chinese():
     assert "same story" not in built.positive
 
 
+def test_script_shot_photorealistic_cinema_content_style():
+    built = build_script_shot_prompt(
+        "雨夜街道，少女回头",
+        "sd15",
+        content_style="photorealistic_cinema",
+    )
+    assert "photorealistic" in built.positive
+    assert "35mm film" in built.positive
+    assert "anime" in built.negative
+    assert "cartoon" in built.negative
+
+
+def test_script_shot_generic_content_style_unchanged():
+    built = build_script_shot_prompt(
+        "雨夜街道，少女回头",
+        "sd15",
+        content_style="generic",
+    )
+    assert "35mm film" not in built.positive
+    assert "anime" not in built.negative or "模糊" in built.negative
+
+
 def test_script_shot_style_reference():
     ref = {
         "color_tone": "muted teal",
