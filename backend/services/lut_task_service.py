@@ -22,6 +22,7 @@ from services.video_lut_service import (
     new_lut_output_path,
     resolve_lut_file_path,
 )
+from trace_bus import build_lut_trace, push_trace
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ async def queue_video_lut_task(
     lut_preset: str | None = None,
     lut_custom_url: str | None = None,
     team_id: str | None = None,
+    trace_id: str | None = None,
 ) -> str | None:
     from services.media_access import resolve_video_source_for_enhance
 
@@ -69,6 +71,7 @@ async def queue_video_lut_task(
         raise HTTPException(status_code=429, detail=e.message) from e
 
     task_id = str(uuid.uuid4())
+    session_trace_id = (trace_id or "").strip() or str(uuid.uuid4())
     label = f"video_lut {lut_preset or 'custom'}"
     create_task_record(
         db,
@@ -85,6 +88,28 @@ async def queue_video_lut_task(
     )
     db.commit()
     tasks_cache.invalidate_tasks_cache()
+
+    await push_trace(
+        1,
+        "SUBMIT",
+        {
+            "trace_id": session_trace_id,
+            "task_type": "video_lut",
+            "video_url": url,
+            "lut_preset": lut_preset,
+            "lut_custom_url": lut_custom_url,
+        },
+    )
+    await push_trace(
+        4,
+        "WORKFLOW",
+        build_lut_trace(
+            trace_id=session_trace_id,
+            lut_preset=lut_preset,
+            cube_path=str(lut_path) if lut_path else None,
+            source_url=url,
+        ),
+    )
 
     if settings.agent_mock_generation:
         asyncio.create_task(

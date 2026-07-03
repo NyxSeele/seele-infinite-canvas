@@ -133,9 +133,41 @@ export function getMentionQueryAtSelection(root) {
   const match = before.match(/@([^\s@]*)$/)
   if (!match) return null
 
+  let anchorRect = null
+  try {
+    const caretRange = range.cloneRange()
+    caretRange.collapse(true)
+    const rects = caretRange.getClientRects()
+    const rect = rects.length > 0 ? rects[0] : caretRange.getBoundingClientRect()
+    if (rect && (rect.width || rect.height || rect.top || rect.left)) {
+      anchorRect = {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  if (!anchorRect && root) {
+    const er = root.getBoundingClientRect()
+    anchorRect = {
+      left: er.left,
+      top: er.top,
+      right: er.right,
+      bottom: er.bottom,
+      width: er.width,
+      height: er.height,
+    }
+  }
+
   return {
     query: match[1],
     matchLength: match[0].length,
+    anchorRect,
   }
 }
 

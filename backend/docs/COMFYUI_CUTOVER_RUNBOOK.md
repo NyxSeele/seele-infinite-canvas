@@ -9,7 +9,7 @@
 
 - [ ] Redis 已启动（`REDIS_URL` 可连通）
 - [ ] `DASHSCOPE_API_KEY` 已配置（Agent 文本链路）
-- [ ] 数据库迁移至最新：`alembic upgrade head`（含 **001–021**；export_jobs=017、llm_routing=019、style_reference=020/021）
+- [ ] 数据库迁移至最新：`alembic upgrade head`（含 **001–022**；export_jobs=017、llm_routing=019、style_reference=020/021、**lut_applied=022**）
 - [ ] `uploads/` 目录可写且已持久化（见下文 **§ uploads 持久化**）
 - [ ] ComfyUI 服务仅内网可达；`COMFYUI_URL` 指向正确地址（见 `backend/.env.example`）
 

@@ -337,3 +337,41 @@
 .rf-page--light .st-segment-divider-label {
   color: #7c3aed;
 }
+
+/* LUT tone panel — theme alignment */
+.rf-page .st-lut-panel {
+  color: var(--tl-text-primary);
+}
+
+.rf-page .st-lut-preset-btn {
+  background: var(--tl-toolbar-btn-bg);
+  border-color: var(--tl-card-border);
+  color: var(--tl-text-secondary);
+}
+
+.rf-page .st-lut-preset-btn:hover:not(:disabled) {
+  background: var(--tl-toolbar-btn-hover);
+  color: var(--tl-text-primary);
+}
+
+.rf-page--light .st-lut-preset-btn {
+  background: var(--tl-btn-secondary-bg, #eef0f3);
+  border: 1px solid var(--tl-btn-secondary-border, #dfe3ea);
+  color: var(--tl-text-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.rf-page--light .st-lut-preset-btn:hover:not(:disabled) {
+  background: var(--tl-btn-secondary-hover, #f3f5f8);
+}
+
+.rf-page--light .st-lut-preset-btn--active {
+  background: #ffffff;
+  border-color: #b8bcc4;
+  color: var(--tl-text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.rf-page .st-lut-custom-name {
+  color: var(--tl-text-secondary);
+}

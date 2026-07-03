@@ -1,0 +1,10 @@
+/** 画布 overlay 层级常量（由内到外） */
+export const Z_NODE_CHROME = 30
+export const Z_COMMENT_MARKERS = 85
+export const Z_CANVAS_FLYOUT = 200
+export const Z_NODE_DOTS_MENU = 9999
+export const Z_DROPDOWN = 10050
+export const Z_COMMENT_MSG_MENU = 10200
+export const Z_MODAL = 12000
+export const Z_REF_HOVER = 12050
+export const Z_TOOLTIP = 13000

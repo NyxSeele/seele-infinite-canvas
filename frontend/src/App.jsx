@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "./utils/themePortalRoot"
 import api, { API_BASE } from "./services/api"
 import { appendMediaTicket } from "./utils/mediaTicket"
 import { wsManager } from "./services/ws"
@@ -248,7 +249,7 @@ function MediaPreviewOverlay({ preview, onClose }) {
         <img src={preview.url} alt="预览" onClick={(e) => e.stopPropagation()} />
       )}
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }
 
@@ -1299,7 +1300,7 @@ function TaskModal({ task, open, onClose, onPreview, onDownload, onRegenerate })
         </div>
       </div>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }
 

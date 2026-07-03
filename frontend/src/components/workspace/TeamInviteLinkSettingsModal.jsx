@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { createTeamInviteLink } from "../../services/teamApi"
+import AnimatedModal from "../common/AnimatedModal"
 import { getInviteSettings, inviteExpiryLabel, inviteUsesLabel } from "../../utils/teamInviteLink"
 import "./TeamInviteLinkSettingsModal.css"
 
@@ -85,8 +86,6 @@ export default function TeamInviteLinkSettingsModal({ open, onClose, teamId, onG
     setFixedAmount(s.fixedAmount ?? 20000)
   }, [open, teamId])
 
-  if (!open) return null
-
   const handleGenerate = async () => {
     if (!teamId || busy) return
     setBusy(true)
@@ -109,8 +108,12 @@ export default function TeamInviteLinkSettingsModal({ open, onClose, teamId, onG
   }
 
   return (
-    <div className="tils-backdrop" onClick={onClose}>
-      <div className="tils-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="链接设置">
+    <AnimatedModal
+      open={open}
+      onClose={onClose}
+      overlayClass="tils-backdrop"
+      modalClass="tils-modal"
+    >
         <header className="tils-head">
           <button type="button" className="tils-back" onClick={onClose} aria-label="返回">←</button>
           <div>
@@ -215,7 +218,6 @@ export default function TeamInviteLinkSettingsModal({ open, onClose, teamId, onG
             {busy ? "生成中…" : "生成新链接"}
           </button>
         </footer>
-      </div>
-    </div>
+    </AnimatedModal>
   )
 }

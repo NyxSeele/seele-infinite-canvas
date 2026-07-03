@@ -14,6 +14,8 @@ import {
   serializeMentionEditor,
 } from "./promptMentions"
 import { ensureMediaUrl } from "../../utils/mediaTicket"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_TOOLTIP } from "../../utils/zIndexLayers"
 import "./MentionTextarea.css"
 
 const MentionTextarea = forwardRef(function MentionTextarea(
@@ -51,7 +53,11 @@ const MentionTextarea = forwardRef(function MentionTextarea(
   const updateMentionQuery = useCallback(() => {
     const root = editorRef.current
     const q = getMentionQueryAtSelection(root)
-    onMentionQuery?.(q ? { active: true, query: q.query } : { active: false, query: "" })
+    onMentionQuery?.(
+      q
+        ? { active: true, query: q.query, anchorRect: q.anchorRect }
+        : { active: false, query: "", anchorRect: null },
+    )
   }, [onMentionQuery])
 
   useImperativeHandle(ref, () => ({
@@ -241,13 +247,13 @@ const MentionTextarea = forwardRef(function MentionTextarea(
       {hoverPreview &&
         createPortal(
           <div
-            className="mention-hover-preview nodrag nopan"
+            className={`mention-hover-preview nodrag nopan ${getThemePageClass()}`}
             style={{
               position: "fixed",
               left: hoverPreview.left,
               top: hoverPreview.top - 8,
               transform: "translate(-50%, -100%)",
-              zIndex: 13000,
+              zIndex: Z_TOOLTIP,
             }}
             onMouseLeave={() => setHoverPreview(null)}
           >
@@ -256,7 +262,7 @@ const MentionTextarea = forwardRef(function MentionTextarea(
               <span className="mention-hover-preview-label">{hoverPreview.name}</span>
             )}
           </div>,
-          document.body
+          getThemePortalRoot()
         )}
     </>
   )

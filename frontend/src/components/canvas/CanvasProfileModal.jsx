@@ -11,6 +11,7 @@ import BillingRecordsPanel from "../workspace/BillingRecordsPanel"
 import AvatarCropModal from "../workspace/AvatarCropModal"
 import { useLocale } from "../../utils/locale"
 import { useThemeTransition } from "../../hooks/useThemeTransition"
+import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import pkg from "../../../package.json"
 import "./CanvasProfileModal.css"
 
@@ -202,16 +203,36 @@ export default function CanvasProfileModal() {
     navigate("/login")
   }, [logout, navigate, setOpen])
 
-  if (!open && !cropOpen) return null
+  const { mounted, closing } = useOverlayMount(open)
+
+  if (!open && !cropOpen && !mounted) return null
 
   const avatarLetter = user?.username?.[0]?.toUpperCase() || "?"
 
+  const overlayClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: "cps-modal-backdrop nodrag nopan",
+    enterClass: open && !closing ? "motion-modal-overlay-in" : "",
+    exitClass: closing ? "motion-modal-overlay-out" : "",
+  })
+
+  const modalClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: "cps-modal",
+    enterClass: open && !closing ? "motion-modal-in" : "",
+    exitClass: closing ? "motion-modal-out" : "",
+  })
+
   return (
     <>
-    {open && (
-    <div className="cps-modal-backdrop nodrag nopan" onPointerDown={handleBackdropPointerDown}>
+    {mounted && (
+    <div className={overlayClasses} onPointerDown={handleBackdropPointerDown}>
       <div
-        className="cps-modal"
+        className={modalClasses}
         onPointerDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-label={t("profile.nav.account")}

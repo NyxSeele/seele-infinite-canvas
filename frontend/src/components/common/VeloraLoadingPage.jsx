@@ -7,7 +7,6 @@ export default function VeloraLoadingPage({ message = "正在连接服务器…"
     <div className="velora-loading-page">
       <VeloraShellBackground />
       <div className="velora-loading-page__center">
-        <div className="velora-loading-page__logo-ring" aria-hidden />
         <img
           src="/velora-logo.png"
           alt="Velora"

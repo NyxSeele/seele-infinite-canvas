@@ -1,5 +1,6 @@
 import { useEffect } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { ensureMediaUrl } from "../../utils/mediaTicket"
 import "./MediaLightbox.css"
 
@@ -33,6 +34,6 @@ export default function MediaLightbox({ url, alt = "", onClose }) {
         draggable={false}
       />
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

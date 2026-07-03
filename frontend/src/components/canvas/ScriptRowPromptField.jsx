@@ -24,6 +24,7 @@ export default function ScriptRowPromptField({
   const resolvedPlaceholder = placeholder ?? t("canvas.script.directorPh")
   const [atOpen, setAtOpen] = useState(false)
   const [atQuery, setAtQuery] = useState("")
+  const [atAnchor, setAtAnchor] = useState(null)
   const editorRef = useRef(null)
   const globalAssets = useAssetStore((s) => s.assets)
 
@@ -54,9 +55,11 @@ export default function ScriptRowPromptField({
     if (payload?.active) {
       setAtOpen(true)
       setAtQuery(payload.query || "")
+      setAtAnchor(payload.anchorRect || null)
     } else {
       setAtOpen(false)
       setAtQuery("")
+      setAtAnchor(null)
     }
   }, [])
 
@@ -131,8 +134,9 @@ export default function ScriptRowPromptField({
       <CastMentionPicker
         open={atOpen}
         items={filteredCast}
+        anchorRect={atAnchor}
         onSelect={handleCastSelect}
-        onClose={() => setAtOpen(false)}
+        onClose={() => { setAtOpen(false); setAtAnchor(null) }}
       />
       <MentionTextarea
         ref={editorRef}

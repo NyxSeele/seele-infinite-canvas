@@ -120,6 +120,17 @@
   min-width: 0;
 }
 
+.st-shot-card-meta .vsp-wrap {
+  flex-shrink: 0;
+}
+
+.st-shot-card-meta .vsp-trigger {
+  height: auto;
+  min-height: 28px;
+  font-size: 12px;
+  max-width: min(200px, 36vw);
+}
+
 .st-shot-card-shot {
   display: inline-flex;
   align-items: center;

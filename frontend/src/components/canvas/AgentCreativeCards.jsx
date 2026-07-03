@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 
 function formatFocus(focus) {
   const text = (focus || "").trim()
@@ -72,7 +73,7 @@ function CastPickPopover({ anchorEl, open, onClose, children }) {
     >
       {children}
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }
 

@@ -1,6 +1,8 @@
 import { useLayoutEffect, useState } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useCanvasStore } from "../../stores"
+import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import { MENU_FLYOUT_BRIDGE_GAP_PX } from "../../utils/menuFlyoutTiming"
 import "./MenuFlyoutPortal.css"
 
@@ -19,9 +21,10 @@ export default function MenuFlyoutPortal({
 }) {
   const theme = useCanvasStore((s) => s.theme)
   const [pos, setPos] = useState({ top: 0, left: 0, bridgeLeft: 0, bridgeWidth: 0, height: 0 })
+  const { mounted, closing } = useOverlayMount(open)
 
   useLayoutEffect(() => {
-    if (!open || !anchorRef?.current) return undefined
+    if (!mounted || !anchorRef?.current) return undefined
 
     const update = () => {
       const anchor = anchorRef.current.getBoundingClientRect()
@@ -46,11 +49,20 @@ export default function MenuFlyoutPortal({
       window.removeEventListener("scroll", update, true)
       window.removeEventListener("resize", update)
     }
-  }, [open, anchorRef, menuAlignRef, width])
+  }, [mounted, anchorRef, menuAlignRef, width])
 
-  if (!open) return null
+  if (!mounted) return null
 
   const themeClass = theme === "dark" ? "rf-page--dark" : "rf-page--light"
+
+  const portalClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: `wum-flyout-portal ${themeClass}${className ? ` ${className}` : ""}`,
+    enterClass: open && !closing ? "motion-popover-in motion-popover-in--left" : "",
+    exitClass: closing ? "motion-popover-out motion-popover-out--left" : "",
+  })
 
   return createPortal(
     <>
@@ -67,7 +79,7 @@ export default function MenuFlyoutPortal({
         aria-hidden
       />
       <div
-        className={`wum-flyout-portal ${themeClass}${className ? ` ${className}` : ""}`}
+        className={portalClasses}
         style={{ top: pos.top, left: pos.left, width }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
@@ -75,6 +87,6 @@ export default function MenuFlyoutPortal({
         {children}
       </div>
     </>,
-    document.body
+    getThemePortalRoot()
   )
 }

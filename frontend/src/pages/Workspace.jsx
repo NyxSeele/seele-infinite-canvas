@@ -288,6 +288,7 @@ export default function Workspace() {
   }, [busy, handleBlank])
 
   const selectedRatio = ratioOptions.find((o) => o.value === ratioValue)
+  const tabIndex = tab === "ai" ? 1 : 0
 
   return (
     <div className={`ws-page ws-page--scroll rf-page--${theme}`}>
@@ -302,7 +303,12 @@ export default function Workspace() {
         </section>
 
         <section className="ws-entry">
-          <div className={`ws-tab-strip ws-tab-strip--${tab}`} role="tablist">
+          <div
+            className={`ws-tab-strip ws-tab-strip--${tab}`}
+            role="tablist"
+            style={{ "--tab-index": tabIndex }}
+          >
+            <div className="ws-tab-indicator" aria-hidden />
             <button
                 type="button"
                 role="tab"
@@ -336,6 +342,7 @@ export default function Workspace() {
           </div>
 
           <div className={`ws-entry-body ws-entry-body--${tab}`}>
+            <ScopeSwitchPanel switchKey={tab} className="ws-entry-body-switch">
             {tab === "upload" && (
               <div className="ws-upload-panel">
                 <div
@@ -344,6 +351,10 @@ export default function Workspace() {
                   onDragLeave={() => setDragOver(false)}
                   onDrop={handleDrop}
                 >
+                  <ScopeSwitchPanel
+                    switchKey={uploadPasteOpen ? "paste" : "actions"}
+                    className="ws-dropzone-switch"
+                  >
                   {!uploadPasteOpen ? (
                     <>
                       <div className="ws-dropzone-actions">
@@ -403,6 +414,7 @@ export default function Workspace() {
                       </div>
                     </>
                   )}
+                  </ScopeSwitchPanel>
                   <input
                     ref={uploadInputRef}
                     type="file"
@@ -457,7 +469,7 @@ export default function Workspace() {
                   </div>
                   <button
                     type="button"
-                    className={`ws-ai-generate${aiStoryText.trim() ? "" : " ws-ai-generate--disabled"}`}
+                    className={`ws-ai-generate${aiStoryText.trim() ? " ws-ai-generate--ready" : " ws-ai-generate--disabled"}`}
                     disabled={busy || !aiStoryText.trim()}
                     onClick={() => startWithScript(aiStoryText, t("ws.default.aiScriptTitle"))}
                   >
@@ -466,6 +478,7 @@ export default function Workspace() {
                 </div>
               </>
             )}
+            </ScopeSwitchPanel>
           </div>
 
           <footer className="ws-entry-foot">

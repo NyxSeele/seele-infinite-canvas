@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
+import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import { useReactFlow } from "reactflow"
 import { useParams } from "react-router-dom"
 import { useLocale } from "../../utils/locale"
@@ -10,6 +11,7 @@ import {
 } from "../../services/exportApi"
 import api from "../../services/api"
 import { useCanvasTheme } from "./CanvasThemeContext"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import "./ExportProjectModal.css"
 
 const POLL_MS = 2000
@@ -163,14 +165,34 @@ export default function ExportProjectModal({
     onClose?.()
   }
 
-  if (!open) return null
+  const { mounted, closing } = useOverlayMount(open)
 
   const nodes = getNodes()
   const themeClass = theme === "light" ? "rf-page--light" : "rf-page--dark"
 
+  if (!mounted) return null
+
+  const overlayClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: `epm-overlay ${themeClass}`,
+    enterClass: open && !closing ? "motion-modal-overlay-in" : "",
+    exitClass: closing ? "motion-modal-overlay-out" : "",
+  })
+
+  const modalClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: "epm-modal",
+    enterClass: open && !closing ? "motion-modal-in" : "",
+    exitClass: closing ? "motion-modal-out" : "",
+  })
+
   return createPortal(
-    <div className={`epm-overlay ${themeClass}`} onClick={handleClose}>
-      <div className="epm-modal" onClick={(e) => e.stopPropagation()}>
+    <div className={overlayClasses} onClick={handleClose}>
+      <div className={modalClasses} onClick={(e) => e.stopPropagation()}>
         <div className="epm-title">{t("canvas.export.title")}</div>
 
         {phase === "select" && (
@@ -235,6 +257,6 @@ export default function ExportProjectModal({
         </div>
       </div>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

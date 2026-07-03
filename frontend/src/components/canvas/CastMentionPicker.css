@@ -1,8 +1,24 @@
+.cast-mention-picker--portal {
+  position: fixed;
+  top: auto;
+  left: auto;
+  right: auto;
+  background: var(--tl-menu-bg, #ffffff);
+  border: 1px solid var(--tl-menu-border, #e5e5e5);
+  box-shadow: var(--tl-menu-shadow, 0 12px 40px rgba(0, 0, 0, 0.12));
+}
+
+.cast-mention-picker--portal.rf-page--dark {
+  background: var(--tl-menu-bg, #161616);
+  border-color: var(--tl-menu-border, #222222);
+  box-shadow: var(--tl-menu-shadow, 0 16px 48px rgba(0, 0, 0, 0.8));
+}
+
 .cast-mention-picker {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(100% + 6px);
+  top: calc(100% + 6px);
   z-index: 40;
   max-height: 200px;
   overflow-y: auto;

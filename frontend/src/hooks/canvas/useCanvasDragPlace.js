@@ -31,10 +31,9 @@ export function useCanvasDragPlace({
         id = createNode("image-gen", screenPos, {
           prompt: payload.prompt || "",
           label: cardLabel || "Image",
-          status: "completed",
+          status: "input",
           uploadedImage: payload.mediaUrl,
           imageSource: payload.source || "flyout",
-          completedAt: Date.now(),
         })
       }
       setSelectedNodeId(id)

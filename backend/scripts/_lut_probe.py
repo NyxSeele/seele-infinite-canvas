@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -86,9 +87,16 @@ def main() -> int:
         print(f"LUT assets FAIL: {e}")
         return 3
 
+    password = (
+        os.environ.get("PROBE_PASSWORD")
+        or os.environ.get("SEED_ADMIN_PASSWORD")
+        or ""
+    ).strip()
+    if not password:
+        print("LUT probe infra FAIL: set SEED_ADMIN_PASSWORD or PROBE_PASSWORD")
+        return 1
     try:
-        with httpx.Client() as client:
-            token = login(client)
+        token = login("admin", password)
     except Exception as e:
         print(f"LUT probe infra FAIL: {e}")
         return 1

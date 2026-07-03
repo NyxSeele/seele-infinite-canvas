@@ -73,3 +73,48 @@ export function computeScriptTableGenPosition(scriptNode, rowIndex = 0, yExtra =
     y: computeScriptTableShotY(scriptNode, rowIndex) + yExtra,
   }
 }
+
+/** 新建节点落点：有选中节点时在其右侧；否则避开同位置已有节点 */
+export function resolveCreateNodePosition(flowPos, type, existingNodes, options = {}) {
+  const { anchorNode } = options
+  if (anchorNode) {
+    const anchorW =
+      NODE_WIDTHS_MAP[anchorNode.type]
+      || DEFAULT_NODE_WIDTHS[anchorNode.type]
+      || 280
+    return {
+      x: (anchorNode.position?.x ?? 0) + anchorW + 80,
+      y: anchorNode.position?.y ?? 0,
+    }
+  }
+
+  const base = {
+    x: flowPos.x - 140,
+    y: flowPos.y - 160,
+  }
+  const tol = 20
+  let candidate = { ...base }
+  for (let i = 0; i < 24; i += 1) {
+    const hit = (existingNodes || []).some((n) => {
+      if (Math.abs((n.position?.x ?? 0) - candidate.x) >= tol) return false
+      return Math.abs((n.position?.y ?? 0) - candidate.y) < tol
+    })
+    if (!hit) return candidate
+    candidate = {
+      x: base.x + 48 * (i + 1),
+      y: base.y + 36 * (i + 1),
+    }
+  }
+  return candidate
+}
+
+/** 选中 image-gen 是否适合直接写入上传图（而非再新建一张卡） */
+export function isEmptyImageGenNode(node) {
+  if (!node || node.type !== "image-gen") return false
+  const d = node.data || {}
+  if (d.uploadedImage || d.imageUrl) return false
+  if (Array.isArray(d.results) && d.results.some(Boolean)) return false
+  const st = d.status
+  if (st === "pending" || st === "generating" || st === "queued") return false
+  return true
+}

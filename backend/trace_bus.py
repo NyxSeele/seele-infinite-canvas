@@ -106,3 +106,68 @@ def extract_workflow_trace(workflow: dict, model_file: str) -> dict[str, Any]:
         "model_file": ckpt_name,
         "workflow_mode": workflow_mode,
     }
+
+
+def build_mock_workflow_trace(task_type: str, *, trace_id: str | None = None, **fields: Any) -> dict[str, Any]:
+    """为 mock / 非 KSampler workflow 合成 L4 展示字段。"""
+    out: dict[str, Any] = {"task_type": task_type, "workflow_mode": "mock", **fields}
+    if trace_id:
+        out["trace_id"] = trace_id
+    return out
+
+
+def extract_enhance_trace(workflow: dict, provider_id: str) -> dict[str, Any]:
+    """从视频画质增强 workflow 提取 L4 字段。"""
+    upscale_factor: float | None = None
+    strength: str | None = None
+    batch_size: int | None = None
+    color_correction: str | None = None
+    model_size: str | None = None
+
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        inputs = node.get("inputs") or {}
+        if class_type == "SeedVR2VideoUpscaler":
+            upscale_factor = inputs.get("upscale_factor", upscale_factor)
+            batch_size = inputs.get("batch_size", batch_size)
+            color_correction = inputs.get("color_correction", color_correction)
+            model_size = inputs.get("model_size", model_size)
+            strength = inputs.get("strength", strength)
+        elif class_type == "ImageUpscaleWithModel":
+            scale = inputs.get("scale")
+            if scale is not None:
+                upscale_factor = float(scale) if upscale_factor is None else upscale_factor
+
+    base = extract_workflow_trace(workflow, provider_id)
+    base["task_type"] = "video_enhance"
+    base["provider"] = provider_id
+    base["upscale_factor"] = upscale_factor
+    base["strength"] = strength
+    base["batch_size"] = batch_size
+    base["color_correction"] = color_correction
+    base["model_size"] = model_size
+    base["workflow_mode"] = "video_enhance"
+    return base
+
+
+def build_lut_trace(
+    *,
+    trace_id: str | None = None,
+    lut_preset: str | None = None,
+    cube_path: str | None = None,
+    source_url: str | None = None,
+) -> dict[str, Any]:
+    """LUT 任务 L4 展示字段。"""
+    out: dict[str, Any] = {
+        "task_type": "video_lut",
+        "workflow_mode": "ffmpeg_lut3d",
+        "lut_preset": lut_preset or "custom",
+        "cube_path": cube_path,
+        "source_url": source_url,
+        "ffmpeg_filter": "lut3d",
+    }
+    if trace_id:
+        out["trace_id"] = trace_id
+    return out

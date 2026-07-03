@@ -80,11 +80,11 @@ def test_script_shot_continuity_chinese():
     assert "same story" not in built.positive
 
 
-def test_script_shot_photorealistic_cinema_content_style():
+def test_script_shot_cinematic_preset_suffix():
     built = build_script_shot_prompt(
         "雨夜街道，少女回头",
         "sd15",
-        content_style="photorealistic_cinema",
+        quality_preset_id="cinematic",
     )
     assert "photorealistic" in built.positive
     assert "35mm film" in built.positive
@@ -92,14 +92,33 @@ def test_script_shot_photorealistic_cinema_content_style():
     assert "cartoon" in built.negative
 
 
-def test_script_shot_generic_content_style_unchanged():
+def test_script_shot_auto_preset_no_suffix():
     built = build_script_shot_prompt(
         "雨夜街道，少女回头",
         "sd15",
-        content_style="generic",
+        quality_preset_id="auto",
     )
     assert "35mm film" not in built.positive
     assert "anime" not in built.negative or "模糊" in built.negative
+
+
+def test_script_shot_documentary_preset_suffix():
+    built = build_script_shot_prompt(
+        "街头采访",
+        "sd15",
+        quality_preset_id="documentary",
+    )
+    assert "documentary photography" in built.positive
+    assert "anime" in built.negative
+
+
+def test_script_shot_dark_drama_preset_suffix():
+    built = build_script_shot_prompt(
+        "暗室对峙",
+        "sd15",
+        quality_preset_id="dark_drama",
+    )
+    assert "low key lighting" in built.positive
 
 
 def test_script_shot_style_reference():

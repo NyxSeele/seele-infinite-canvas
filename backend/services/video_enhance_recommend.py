@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from services.qwen import _call_llm, clean_json_response
+from services.quality_presets import is_cinematic_enhance_preset, normalize_quality_preset_id
 
 logger = logging.getLogger(__name__)
 
@@ -46,23 +47,19 @@ _RECOMMEND_SYSTEM = """你是 AI 短视频画质增强参数顾问。用户视�
 - 默认 color_correction lab、model_size 7b、strength normal"""
 
 _CINEMATIC_RECOMMEND_APPEND = (
-    "\n\n当 content_style 为 photorealistic_cinema 时："
+    "\n\n当画风预设 enhanceProfile 为 cinematic（如电影感、纪录片、暗调戏剧等）时："
     "内容为真人写实风格，优先保留皮肤纹理和自然细节，避免过度锐化或磨皮；"
     "input_noise_scale 建议 0.15；若短边 ≤1080 优先 upscale_factor 2.0（目标 4K）。"
 )
-
-
-def _is_cinematic(content_style: str | None) -> bool:
-    return (content_style or "").strip() != "generic"
 
 
 def _apply_cinematic_param_overrides(
     params: dict[str, Any],
     video_info: dict[str, Any],
     *,
-    content_style: str = "generic",
+    quality_preset_id: str = "auto",
 ) -> dict[str, Any]:
-    if not _is_cinematic(content_style):
+    if not is_cinematic_enhance_preset(quality_preset_id):
         return params
     out = dict(params)
     out["input_noise_scale"] = 0.15
@@ -135,13 +132,13 @@ def normalize_enhance_params(raw: dict[str, Any] | None) -> dict[str, Any]:
 def _rule_recommend_params(
     video_info: dict[str, Any],
     *,
-    content_style: str = "generic",
+    quality_preset_id: str = "auto",
 ) -> tuple[dict[str, Any], str]:
     width = int(video_info.get("width") or 1280)
     height = int(video_info.get("height") or 720)
     duration = float(video_info.get("duration") or 5.0)
     short_side = min(width, height)
-    cinematic = _is_cinematic(content_style)
+    cinematic = is_cinematic_enhance_preset(quality_preset_id)
 
     if cinematic and short_side <= 1080:
         upscale = 2.0
@@ -184,21 +181,22 @@ async def recommend_enhance_params(
     video_info: dict[str, Any],
     *,
     use_llm: bool = True,
-    content_style: str = "generic",
+    quality_preset_id: str = "auto",
 ) -> tuple[dict[str, Any], str]:
     """LLM 推荐参数；失败时回退规则推荐。"""
+    preset_id = normalize_quality_preset_id(quality_preset_id)
     if not use_llm:
         params, reasoning = _rule_recommend_params(
-            video_info, content_style=content_style
+            video_info, quality_preset_id=preset_id
         )
         return _apply_cinematic_param_overrides(
-            params, video_info, content_style=content_style
+            params, video_info, quality_preset_id=preset_id
         ), reasoning
 
     system = _RECOMMEND_SYSTEM
-    if _is_cinematic(content_style):
+    if is_cinematic_enhance_preset(preset_id):
         system = system + _CINEMATIC_RECOMMEND_APPEND
-    payload = {**video_info, "content_style": content_style}
+    payload = {**video_info, "quality_preset_id": preset_id}
     user_prompt = json.dumps(payload, ensure_ascii=False)
     try:
         raw, _ = await _call_llm(system, user_prompt, max_tokens=800)
@@ -206,18 +204,18 @@ async def recommend_enhance_params(
         reasoning = str(parsed.pop("reasoning", "") or "").strip()
         params = normalize_enhance_params(parsed)
         params = _apply_cinematic_param_overrides(
-            params, video_info, content_style=content_style
+            params, video_info, quality_preset_id=preset_id
         )
         if not reasoning:
             _, reasoning = _rule_recommend_params(
-                video_info, content_style=content_style
+                video_info, quality_preset_id=preset_id
             )
         return params, reasoning
     except Exception as exc:
         logger.warning("video enhance LLM recommend failed, using rules: %s", exc)
         params, reasoning = _rule_recommend_params(
-            video_info, content_style=content_style
+            video_info, quality_preset_id=preset_id
         )
         return _apply_cinematic_param_overrides(
-            params, video_info, content_style=content_style
+            params, video_info, quality_preset_id=preset_id
         ), reasoning

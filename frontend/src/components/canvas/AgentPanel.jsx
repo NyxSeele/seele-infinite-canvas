@@ -9,7 +9,7 @@ import {
 } from "../../utils/canvas/agentChatHistory"
 import { showDevNotice } from "../common/ProductNoticeModal"
 import MentionTextarea from "./MentionTextarea"
-import { VideoAtMentionList } from "./VideoReferencePanel"
+import { VideoAtMentionList } from "./VideoAtMentionList"
 import {
   appendReferenceImage,
   MAX_REFERENCE_IMAGES,
@@ -196,6 +196,7 @@ export default function AgentPanel({
   const [modeHover, setModeHover] = useState(false)
   const [atMentionOpen, setAtMentionOpen] = useState(false)
   const [atMentionQuery, setAtMentionQuery] = useState("")
+  const [atMentionAnchor, setAtMentionAnchor] = useState(null)
   const messagesEndRef = useRef(null)
   const messagesScrollRef = useRef(null)
   const modeRef = useRef(null)
@@ -626,13 +627,15 @@ export default function AgentPanel({
     setMentions(nextMentions)
   }, [])
 
-  const handleMentionQuery = useCallback(({ active, query }) => {
+  const handleMentionQuery = useCallback(({ active, query, anchorRect }) => {
     if (active) {
       setAtMentionOpen(true)
       setAtMentionQuery(query || "")
+      setAtMentionAnchor(anchorRect || null)
     } else {
       setAtMentionOpen(false)
       setAtMentionQuery("")
+      setAtMentionAnchor(null)
     }
   }, [])
 
@@ -640,6 +643,7 @@ export default function AgentPanel({
     mentionEditorRef.current?.insertMention(item)
     setAtMentionOpen(false)
     setAtMentionQuery("")
+    setAtMentionAnchor(null)
   }, [])
 
   const stopPanelDblClick = useCallback((e) => {
@@ -1053,12 +1057,14 @@ export default function AgentPanel({
             <VideoAtMentionList
               open={atMentionOpen}
               query={atMentionQuery}
+              anchorRect={atMentionAnchor}
               excludeNodeId={null}
               compact
               onSelect={handleAtMentionSelect}
               onClose={() => {
                 setAtMentionOpen(false)
                 setAtMentionQuery("")
+                setAtMentionAnchor(null)
               }}
             />
             {(!input.trim() && !mentions.length)

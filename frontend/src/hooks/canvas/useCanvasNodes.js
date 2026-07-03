@@ -13,12 +13,15 @@ import {
   normalizeOutlineNode,
   normalizeShotScriptNode,
 } from "../../utils/canvas/nodeNormalize"
-import { makeId } from "../../utils/canvas/nodeHelpers"
+import {
+  makeId,
+  resolveCreateNodePosition,
+} from "../../utils/canvas/nodeHelpers"
 import { useCanvasZIndex } from "./useCanvasZIndex"
 import { getT } from "../../utils/locale"
 
 export function useCanvasNodes({
-  project,
+  screenToFlowPosition,
   screenplayHandlersRef,
   stopPolling,
   runTextGeneration,
@@ -240,29 +243,35 @@ export function useCanvasNodes({
   )
 
   const createNode = useCallback(
-    (type, screenPos, extra = {}) => {
+    (type, screenPos, extra = {}, placement = {}) => {
       if (isCommitBlocked()) return null
-      const flowPos = project({ x: screenPos.x, y: screenPos.y })
+      const flowPos = screenToFlowPosition({ x: screenPos.x, y: screenPos.y })
       const id = makeId(type)
       const z = bumpZIndex()
       const nodeData =
         type === "outline"
           ? buildOutlineData({ ...extra, zIndex: z })
           : buildData({ ...extra, zIndex: z })
-      setNodes((ns) => [
-        ...ns,
-        {
-          id,
-          type,
-          position: { x: flowPos.x - 140, y: flowPos.y - 160 },
-          zIndex: z,
-          data: nodeData,
-          style: { zIndex: z },
-        },
-      ])
+      setNodes((ns) => {
+        const anchorNode = placement.anchorNodeId
+          ? ns.find((n) => n.id === placement.anchorNodeId)
+          : null
+        const position = resolveCreateNodePosition(flowPos, type, ns, { anchorNode })
+        return [
+          ...ns,
+          {
+            id,
+            type,
+            position,
+            zIndex: z,
+            data: nodeData,
+            style: { zIndex: z },
+          },
+        ]
+      })
       return id
     },
-    [project, setNodes, buildData, buildOutlineData, bumpZIndex, isCommitBlocked]
+    [screenToFlowPosition, setNodes, buildData, buildOutlineData, bumpZIndex, isCommitBlocked]
   )
 
   const selectedNodeType = useMemo(

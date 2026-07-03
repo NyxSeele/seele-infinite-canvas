@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
+import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import "../../pages/Canvas.css"
 import "./AvatarCropModal.css"
 
@@ -55,6 +57,7 @@ export default function AvatarCropModal({ open, imageSrc, onConfirm, onCancel })
   const dragRef = useRef(null)
   const offsetRef = useRef(offset)
   const scaleRef = useRef(scale)
+  const { mounted, closing } = useOverlayMount(open && Boolean(imageSrc))
 
   offsetRef.current = offset
   scaleRef.current = scale
@@ -223,16 +226,34 @@ export default function AvatarCropModal({ open, imageSrc, onConfirm, onCancel })
     onConfirm?.(canvas.toDataURL("image/jpeg", 0.92))
   }
 
-  if (!open || !imageSrc) return null
+  if (!mounted || !imageSrc) return null
+
+  const overlayClasses = overlayClassNames({
+    mounted,
+    closing,
+    open: open && Boolean(imageSrc),
+    base: `acm-backdrop rf-page--${theme}`,
+    enterClass: open && !closing ? "motion-modal-overlay-in" : "",
+    exitClass: closing ? "motion-modal-overlay-out" : "",
+  })
+
+  const modalClasses = overlayClassNames({
+    mounted,
+    closing,
+    open: open && Boolean(imageSrc),
+    base: "acm-modal",
+    enterClass: open && !closing ? "motion-modal-in" : "",
+    exitClass: closing ? "motion-modal-out" : "",
+  })
 
   return createPortal(
     <div
-      className={`acm-backdrop rf-page--${theme}`}
+      className={overlayClasses}
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onCancel?.()
       }}
     >
-      <div className="acm-modal" onPointerDown={(e) => e.stopPropagation()}>
+      <div className={modalClasses} onPointerDown={(e) => e.stopPropagation()}>
         <header className="acm-head">
           <h3>{t("profile.cropAvatar")}</h3>
           <button type="button" className="acm-close" onClick={onCancel} aria-label={t("profile.close")}>×</button>
@@ -270,6 +291,6 @@ export default function AvatarCropModal({ open, imageSrc, onConfirm, onCancel })
         </footer>
       </div>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

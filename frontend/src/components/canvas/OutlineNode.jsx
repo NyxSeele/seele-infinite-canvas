@@ -322,7 +322,7 @@ export default function OutlineNode({ id, data, selected }) {
   return (
     <div className="outline-node" style={ROOT_STYLE} ref={rootRef}>
       <TextWorkflowEdgePlugs nodeId={id} nodeType="outline" disabled={readOnly} selected={selected} />
-      <div className={`outline-card${readOnly ? " outline-card--readonly" : ""}`} onDoubleClick={(e) => e.stopPropagation()}>
+      <div className={`outline-card${selected ? " outline-card--selected" : ""}${readOnly ? " outline-card--readonly" : ""}`} onDoubleClick={(e) => e.stopPropagation()}>
         {data.loading ? (
           <>
             <div className="outline-node-header">

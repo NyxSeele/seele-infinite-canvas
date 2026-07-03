@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react"
 import { createPortal } from "react-dom"
 import { useStore } from "reactflow"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_REF_HOVER } from "../../utils/zIndexLayers"
 import CanvasImageQuickPicker from "./CanvasImageQuickPicker"
 
 const sp = (e) => e.stopPropagation()
@@ -277,7 +279,7 @@ export default function AddRefHoverPanel({
               position: "fixed",
               left: panelPos.left,
               top: panelPos.top,
-              zIndex: 12050,
+              zIndex: Z_REF_HOVER,
             }}
             onPointerDown={sp}
             onMouseEnter={handlePanelEnter}
@@ -293,7 +295,7 @@ export default function AddRefHoverPanel({
               onAssetPick={onAssetPick ? handleAssetPick : undefined}
             />
           </div>,
-          document.body
+          getThemePortalRoot()
         )}
     </>
   )
@@ -393,7 +395,7 @@ export function RefPickAnchor({
               position: "fixed",
               left: panelPos.left,
               top: panelPos.top,
-              zIndex: 12050,
+              zIndex: Z_REF_HOVER,
             }}
             onPointerDown={sp}
           >
@@ -413,7 +415,7 @@ export function RefPickAnchor({
               onAssetPick={onAssetPick ? handleAssetPick : undefined}
             />
           </div>,
-          document.body
+          getThemePortalRoot()
         )}
     </>
   )

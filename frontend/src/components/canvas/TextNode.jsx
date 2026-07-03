@@ -187,24 +187,7 @@ export default function TextNode({ id, data, selected }) {
         className={`tn-root${editing ? " tn-root--editing" : ""}`}
         onDoubleClick={handleDoubleClick}
       >
-        <div className="tn-mode-row nodrag" onPointerDown={sp} onClick={sp}>
-          <button
-            type="button"
-            className={`tn-mode-btn${!isScreenplay ? " tn-mode-btn--active" : ""}`}
-            onClick={() => setMode(TEXT_MODES.CHAT)}
-          >
-            {t("canvas.text.chat")}
-          </button>
-          <button
-            type="button"
-            className={`tn-mode-btn${isScreenplay ? " tn-mode-btn--active" : ""}`}
-            onClick={() => setMode(TEXT_MODES.SCREENPLAY)}
-          >
-            {t("canvas.text.script")}
-          </button>
-        </div>
-
-        {screenplayHint && !isScreenplay && (
+        {screenplayHint && !isScreenplay && !selected && (
           <div className="tn-screenplay-banner nodrag" onPointerDown={sp}>
             <p className="tn-screenplay-banner-text">
               {t("canvas.text.scriptBanner", { summary: screenplayHint.summary })}

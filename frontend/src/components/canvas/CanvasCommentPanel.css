@@ -105,6 +105,7 @@
   margin-bottom: 2px;
   min-height: 18px;
   position: relative;
+  overflow: visible;
 }
 
 .ccp-avatar {
@@ -274,8 +275,8 @@
 
 .ccp-msg-menu {
   position: absolute;
-  bottom: calc(100% + 6px);
-  top: auto;
+  top: calc(100% + 6px);
+  bottom: auto;
   right: 0;
   min-width: 120px;
   background: var(--tl-menu-bg);
@@ -284,6 +285,21 @@
   box-shadow: var(--tl-menu-shadow);
   padding: 4px;
   z-index: 200;
+}
+
+.ccp-msg-menu--portal {
+  position: fixed;
+  top: auto;
+  right: auto;
+  background: var(--tl-menu-bg, #ffffff);
+  border: 1px solid var(--tl-card-border, #e5e5e5);
+  box-shadow: var(--tl-menu-shadow, 0 12px 40px rgba(0, 0, 0, 0.12));
+  z-index: 10200;
+}
+
+.ccp-msg-menu--portal.rf-page--dark {
+  background: var(--tl-menu-bg, #161616);
+  border-color: var(--tl-card-border, #242424);
 }
 
 .ccp-msg-menu button {
@@ -351,20 +367,22 @@
   padding: 12px 14px 14px;
   background: var(--tl-input-bg);
   position: relative;
+  overflow: visible;
 }
 
 .ccp-mention-list {
   position: absolute;
   left: 14px;
   right: 14px;
-  bottom: calc(100% - 8px);
+  top: calc(100% + 8px);
+  bottom: auto;
   max-height: 160px;
   overflow: auto;
   background: var(--tl-card-bg);
   border: 1px solid var(--tl-card-border);
   border-radius: 10px;
   box-shadow: var(--tl-menu-shadow);
-  z-index: 5;
+  z-index: 300;
 }
 
 .ccp-mention-item {
@@ -500,6 +518,8 @@
   height: 0;
   pointer-events: none;
   z-index: 85;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .ccp-marker-pin {
@@ -511,6 +531,56 @@
   background: transparent;
   cursor: pointer;
   z-index: 2;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ccp-marker-pin:focus,
+.ccp-marker-pin:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.55);
+}
+
+.ccp-marker-hover-tip {
+  position: absolute;
+  left: calc(100% + 10px);
+  right: auto;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 140px;
+  max-width: 220px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--tl-card-bg, #ffffff);
+  border: 1px solid var(--tl-card-border, #e5e5e5);
+  box-shadow: var(--tl-menu-shadow, 0 12px 40px rgba(0, 0, 0, 0.12));
+  pointer-events: none;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+}
+
+.ccp-marker-hover-tip-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tl-text-primary, #111111);
+  line-height: 1.3;
+}
+
+.ccp-marker-hover-tip--left {
+  left: auto;
+  right: calc(100% + 10px);
+}
+
+.ccp-marker-hover-tip-preview {
+  font-size: 11px;
+  color: var(--tl-text-secondary, #666666);
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .ccp-marker-avatar {

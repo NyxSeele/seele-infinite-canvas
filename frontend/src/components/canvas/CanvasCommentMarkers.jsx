@@ -1,11 +1,10 @@
-import { useMemo } from "react"
+import { useMemo, useEffect, useState, useRef, useCallback } from "react"
 import { useNodes, useReactFlow, useViewport } from "reactflow"
 import { useLocale } from "../../utils/locale"
 import { AVATAR_CHANGED_EVENT } from "../../utils/canvas/userAvatar"
 import { resolveCommentAuthorName, resolveCommentAvatar } from "../../utils/canvas/commentUserDisplay"
 import { getCommentPinPosition } from "../../utils/canvas/commentMarkerLayout"
 import { isNodeCommentUnread } from "../../utils/canvas/commentReadState"
-import { useEffect, useState } from "react"
 import "./CanvasCommentPanel.css"
 
 function CommentPinAvatar({ msg, currentUserId, username }) {
@@ -38,6 +37,85 @@ function CommentPinAvatar({ msg, currentUserId, username }) {
     )
   }
   return <span className="ccp-marker-avatar-letter">{letter}</span>
+}
+
+function CommentMarkerPin({
+  marker,
+  commentMode,
+  activeNodeId,
+  currentUserId,
+  username,
+  onOpen,
+  t,
+}) {
+  const [hovered, setHovered] = useState(false)
+  const [tipFlipLeft, setTipFlipLeft] = useState(false)
+  const pinRef = useRef(null)
+  const isActive = activeNodeId === marker.nodeId
+  const authorName = resolveCommentAuthorName(marker.msg, currentUserId, username)
+  const preview = (marker.msg?.body || "").trim().slice(0, 48)
+  const unreadLabel = marker.unread ? `, ${t("canvas.comment.unread")}` : ""
+  const ariaLabel = authorName
+    ? `${authorName}: ${preview || t("canvas.comment.cardTitle")}${unreadLabel}`
+    : t("canvas.comment.cardTitle")
+
+  const updateTipFlip = useCallback(() => {
+    const el = pinRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const tipW = 220
+    setTipFlipLeft(rect.right + 10 + tipW > window.innerWidth - 8)
+  }, [])
+
+  const handleOpen = useCallback((e) => {
+    e?.stopPropagation?.()
+    onOpen(marker.nodeId)
+  }, [marker.nodeId, onOpen])
+
+  return (
+    <button
+      ref={pinRef}
+      type="button"
+      className={`ccp-marker-pin${isActive ? " is-active" : ""}${commentMode ? " ccp-marker-pin--mode" : ""}`}
+      style={{ left: marker.left, top: marker.top }}
+      aria-label={ariaLabel}
+      onMouseEnter={() => {
+        setHovered(true)
+        updateTipFlip()
+      }}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => {
+        setHovered(true)
+        updateTipFlip()
+      }}
+      onBlur={() => setHovered(false)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          handleOpen(e)
+        }
+      }}
+      onClick={handleOpen}
+    >
+      <span className="ccp-marker-avatar">
+        <CommentPinAvatar msg={marker.msg} currentUserId={currentUserId} username={username} />
+      </span>
+      {marker.unread && <span className="ccp-marker-unread-dot" aria-hidden />}
+      {hovered && (authorName || preview) && (
+        <span
+          className={`ccp-marker-hover-tip${tipFlipLeft ? " ccp-marker-hover-tip--left" : ""}`}
+          role="tooltip"
+        >
+          {authorName && (
+            <span className="ccp-marker-hover-tip-name">{authorName}</span>
+          )}
+          {preview && (
+            <span className="ccp-marker-hover-tip-preview">{preview}</span>
+          )}
+        </span>
+      )}
+    </button>
+  )
 }
 
 export default function CanvasCommentMarkers({
@@ -73,7 +151,7 @@ export default function CanvasCommentMarkers({
       })
     })
     return list
-  }, [threadsByNode, getNode, nodes, x, y, zoom, projectId, readTick])
+  }, [threadsByNode, getNode, nodes, x, y, zoom, projectId, readTick, currentUserId])
 
   if (!markers.length) return null
 
@@ -86,22 +164,16 @@ export default function CanvasCommentMarkers({
       }}
     >
       {markers.map((m) => (
-        <button
+        <CommentMarkerPin
           key={m.nodeId}
-          type="button"
-          className={`ccp-marker-pin${activeNodeId === m.nodeId ? " is-active" : ""}${commentMode ? " ccp-marker-pin--mode" : ""}`}
-          style={{ left: m.left, top: m.top }}
-          title={t("canvas.comment.cardTitle")}
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpen(m.nodeId)
-          }}
-        >
-          <span className="ccp-marker-avatar">
-            <CommentPinAvatar msg={m.msg} currentUserId={currentUserId} username={username} />
-          </span>
-          {m.unread && <span className="ccp-marker-unread-dot" aria-hidden />}
-        </button>
+          marker={m}
+          commentMode={commentMode}
+          activeNodeId={activeNodeId}
+          currentUserId={currentUserId}
+          username={username}
+          onOpen={onOpen}
+          t={t}
+        />
       ))}
     </div>
   )

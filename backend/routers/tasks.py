@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from comfyui import client as comfyui
+from core.config import settings
 from core.datetime_utils import to_utc_iso
 from db.session import get_db
 from core.dependencies import get_current_user
@@ -53,8 +54,15 @@ from model_registry import (
 from services import mock_generation
 from services import tasks_cache
 from services.mention_context import enrich_prompt, resolve_mentions, strip_mention_tokens
+from services.quality_presets import get_suffixes, normalize_quality_preset_id
 from core.logging_setup import studio_print
-from trace_bus import extract_workflow_trace, push_trace
+from trace_bus import (
+    build_lut_trace,
+    build_mock_workflow_trace,
+    extract_enhance_trace,
+    extract_workflow_trace,
+    push_trace,
+)
 
 
 _MEDIA_TASK_TYPES = ("image", "video", "video_enhance", "video_lut")
@@ -863,7 +871,7 @@ async def canvas_image_task(
         if not raw_prompt:
             raise HTTPException(status_code=400, detail="请填写画面描述")
 
-        trace_id = str(uuid.uuid4())
+        trace_id = (body.trace_id or "").strip() or str(uuid.uuid4())
 
         display_for_trace = (body.display_prompt or "").strip() or None
         await push_trace(
@@ -871,9 +879,11 @@ async def canvas_image_task(
             "SUBMIT",
             {
                 "trace_id": trace_id,
+                "task_type": "image",
                 "model": body.model.strip(),
                 "prompt": raw_prompt,
                 "display_prompt": display_for_trace,
+                "quality_preset_id": (body.quality_preset_id or "").strip() or None,
                 "denoise": body.denoise,
                 "ratio": body.ratio,
                 "resolution": body.quality,
@@ -982,6 +992,8 @@ async def canvas_image_task(
             "before": prompt_before_optimize,
             "after": positive,
             "optimized": optimized,
+            "negative_before": negative_in or None,
+            "negative_after": negative_opt or None,
         }
         if not optimized and prompt_before_optimize.strip() == positive.strip():
             l3_trace["optimize_note"] = translate_note or (
@@ -1036,11 +1048,16 @@ async def canvas_image_task(
             await push_trace(
                 4,
                 "WORKFLOW",
-                {
-                    "trace_id": trace_id,
-                    "workflow_mode": "mock",
-                    "reference_count": len(reference_images),
-                },
+                build_mock_workflow_trace(
+                    "image",
+                    trace_id=trace_id,
+                    positive_prompt=positive,
+                    reference_count=len(reference_images),
+                    width=width,
+                    height=height,
+                    denoise=body.denoise,
+                    model_file=model_filename,
+                ),
             )
             studio_print("image", f"mock 模式提交 task_ids={task_ids}")
             for task_id in task_ids:
@@ -1168,12 +1185,18 @@ async def canvas_video_task(
     if not raw_prompt:
         raise HTTPException(status_code=400, detail="请填写画面描述")
 
+    trace_id = (body.trace_id or "").strip() or str(uuid.uuid4())
+    preset_id = normalize_quality_preset_id(body.quality_preset_id)
+
     await push_trace(
         1,
         "SUBMIT",
         {
+            "trace_id": trace_id,
+            "task_type": "video",
             "model": body.model.strip(),
             "prompt": raw_prompt,
+            "quality_preset_id": preset_id if preset_id != "auto" else None,
             "ratio": body.ratio,
             "resolution": body.resolution,
             "count": body.count,
@@ -1188,6 +1211,11 @@ async def canvas_video_task(
     clean_prompt = strip_mention_tokens(raw_prompt)
     mention_ctx = resolve_mentions(db, user.id, body.mentions)
     prompt = enrich_prompt(clean_prompt, mention_ctx.get("context_parts") or [])
+
+    pos_suffix, neg_suffix = get_suffixes(preset_id)
+    if pos_suffix:
+        prompt = f"{prompt}, {pos_suffix}" if prompt.strip() else pos_suffix
+
     mention_ref_urls = mention_ctx.get("reference_image_urls") or []
 
     reference_image = body.reference_image
@@ -1273,8 +1301,11 @@ async def canvas_video_task(
         2,
         "RECEIVED",
         {
+            "trace_id": trace_id,
+            "task_type": "video",
             "model": body.model.strip(),
             "prompt": prompt,
+            "quality_preset_id": preset_id if preset_id != "auto" else None,
             "ratio": body.ratio,
             "count": batch_count,
         },
@@ -1291,9 +1322,10 @@ async def canvas_video_task(
 
     prompt_before_optimize = prompt
     positive, negative, optimized, translate_note = await maybe_optimize_prompt(
-        prompt, "", "video", True
+        prompt, neg_suffix, "video", True
     )
     l3_trace = {
+        "trace_id": trace_id,
         "before": prompt_before_optimize,
         "after": positive,
         "optimized": optimized,
@@ -1351,6 +1383,19 @@ async def canvas_video_task(
         )
         db.commit()
         tasks_cache.invalidate_tasks_cache()
+        await push_trace(
+            4,
+            "WORKFLOW",
+            build_mock_workflow_trace(
+                "video",
+                trace_id=trace_id,
+                positive_prompt=positive,
+                width=aligned_w,
+                height=aligned_h,
+                workflow_mode=mode,
+                duration=body.duration,
+            ),
+        )
         asyncio.create_task(
             mock_generation.run_mock_video_task(
                 task_id,
@@ -1485,18 +1530,18 @@ async def canvas_video_enhance_recommend_params(
     except Exception as e:
         raise HTTPException(status_code=400, detail="无法分析视频属性") from e
 
-    content_style = "photorealistic_cinema"
+    quality_preset_id = "auto"
     if body.project_id:
         from services.canvas_access import get_accessible_project
         from services.canvas_style_ref import (
-            get_script_table_content_style,
+            get_script_table_default_quality_preset,
             load_canvas_data,
         )
 
         project = get_accessible_project(db, user, body.project_id)
         if project:
             canvas_data = load_canvas_data(project)
-            content_style = get_script_table_content_style(
+            quality_preset_id = get_script_table_default_quality_preset(
                 canvas_data, body.script_table_node_id
             )
 
@@ -1504,7 +1549,7 @@ async def canvas_video_enhance_recommend_params(
     params, reasoning = await recommend_enhance_params(
         video_info,
         use_llm=use_llm,
-        content_style=content_style,
+        quality_preset_id=quality_preset_id,
     )
     return VideoEnhanceRecommendResponse(params=params, reasoning=reasoning)
 
@@ -1573,6 +1618,23 @@ async def canvas_video_enhance_task(
         raise HTTPException(status_code=429, detail=e.message) from e
 
     prompt_label = f"video_enhance x{upscale_factor} {body.strength}"
+    trace_id = (body.trace_id or "").strip() or str(uuid.uuid4())
+
+    await push_trace(
+        1,
+        "SUBMIT",
+        {
+            "trace_id": trace_id,
+            "task_type": "video_enhance",
+            "video_url": video_url,
+            "upscale_factor": upscale_factor,
+            "strength": body.strength,
+            "batch_size": seedvr2_params["batch_size"],
+            "input_noise_scale": seedvr2_params["input_noise_scale"],
+            "color_correction": seedvr2_params["color_correction"],
+            "workflow": body.workflow,
+        },
+    )
 
     if settings.agent_mock_generation:
         task_id = str(uuid.uuid4())
@@ -1589,6 +1651,19 @@ async def canvas_video_enhance_task(
         )
         db.commit()
         tasks_cache.invalidate_tasks_cache()
+        await push_trace(
+            4,
+            "WORKFLOW",
+            build_mock_workflow_trace(
+                "video_enhance",
+                trace_id=trace_id,
+                provider="mock",
+                upscale_factor=upscale_factor,
+                strength=body.strength,
+                batch_size=seedvr2_params["batch_size"],
+                color_correction=seedvr2_params["color_correction"],
+            ),
+        )
         asyncio.create_task(
             mock_generation.run_mock_video_enhance_task(
                 task_id,
@@ -1626,7 +1701,8 @@ async def canvas_video_enhance_task(
                 upscale_factor=upscale_factor,
                 client_id=body.client_id,
             )
-        workflow_trace = extract_workflow_trace(workflow, provider_id)
+        workflow_trace = extract_enhance_trace(workflow, provider_id)
+        workflow_trace["trace_id"] = trace_id
         await push_trace(4, "WORKFLOW", workflow_trace)
         studio_print("trace", f"L4 WORKFLOW video-enhance {workflow_trace}")
     except ValueError as e:
@@ -1711,6 +1787,7 @@ async def canvas_video_lut_task(
         lut_preset=lut_preset,
         lut_custom_url=lut_custom_url,
         team_id=body.team_id,
+        trace_id=body.trace_id,
     )
     if not task_id:
         raise HTTPException(status_code=400, detail="无法创建 LUT 任务")

@@ -3,6 +3,7 @@ import { createTeam } from "../../services/teamApi"
 import { useTeamStore } from "../../stores/teamStore"
 import { writeTeamAvatar } from "../../utils/teamAvatar"
 import { teamInitial } from "../../utils/teamAvatar"
+import AnimatedModal from "../common/AnimatedModal"
 import "./CreateTeamModal.css"
 
 const MAX_NAME = 50
@@ -16,8 +17,6 @@ export default function CreateTeamModal({ open, onClose }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const fileRef = useRef(null)
-
-  if (!open) return null
 
   const trimmed = name.trim()
   const canSubmit = trimmed.length > 0 && !busy
@@ -58,8 +57,12 @@ export default function CreateTeamModal({ open, onClose }) {
   }
 
   return (
-    <div className="ctm-backdrop" onClick={handleBackdrop}>
-      <div className="ctm-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="创建团队">
+    <AnimatedModal
+      open={open}
+      onClose={handleBackdrop}
+      overlayClass="ctm-backdrop"
+      modalClass="ctm-modal"
+    >
         <header className="ctm-head">
           <div>
             <h2>创建团队</h2>
@@ -125,7 +128,6 @@ export default function CreateTeamModal({ open, onClose }) {
             {busy ? "创建中…" : "确认"}
           </button>
         </footer>
-      </div>
-    </div>
+    </AnimatedModal>
   )
 }

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../../contexts/AuthContext"
 import { useCanvasStore } from "../../stores"
@@ -264,7 +265,7 @@ export default function CanvasTopbar({
       </div>
       {mentionToast && createPortal(
         <div className="ctb-toast ctb-toast--mention">{mentionToast}</div>,
-        document.body
+        getThemePortalRoot()
       )}
       <WorkspaceNotifyPanel
         open={notifyOpen}

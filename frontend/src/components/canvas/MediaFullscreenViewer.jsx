@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import "./GenerationCardNode.css"
 
 const MIN_SCALE = 0.5
@@ -167,6 +168,6 @@ export default function MediaFullscreenViewer({ src, kind, onClose }) {
         </button>
       </div>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

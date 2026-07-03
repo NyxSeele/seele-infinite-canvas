@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { createPortal } from "react-dom"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_NODE_DOTS_MENU } from "../../utils/zIndexLayers"
 import { useModelStore, useCanvasStore } from "../../stores"
 import { pushGenHistory } from "../../utils/canvas/genHistory"
 import { Handle, Position, useReactFlow, useStore } from "reactflow"
@@ -38,8 +40,12 @@ import { appendStyleReferenceToDescription, styleReferenceSummary } from "../../
 import { IconStyleRef, IconZoom, IconEnhance } from "./CanvasTopbarIcons"
 import { useCanvasNodeWheel } from "./canvasScrollHelpers"
 import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
-import { findScriptTableNode } from "../../utils/canvas/contentStylePresets"
+import { findScriptTableNode, resolveVideoQualityPresetId } from "../../utils/canvas/scriptTableNode"
 import { isLutActive, submitVideoLutTask } from "../../services/lutApi"
+import "./CanvasShared.css"
+import "./GenerationCardNode.css"
+import "./VideoGenerationNode.css"
+import "./VideoReferencePanel.css"
 
 const POLL_INTERVAL_MS = 2000
 const VIDEO_MENU_WIDTH = 200
@@ -59,12 +65,6 @@ function computeVideoMenuPos(btnRect) {
 function stopFlowPointer(e) {
   e.stopPropagation()
 }
-import "./CanvasShared.css"
-import "./GenerationCardNode.css"
-import "./VideoGenerationNode.css"
-import "./VideoReferencePanel.css"
-
-export { default as VideoReferencePanel } from "./VideoReferencePanel"
 
 const RESOLUTIONS = [
   { label: "480P", width: 848, height: 480 },
@@ -623,9 +623,19 @@ export default function VideoGenerationNode({ id, data, selected }) {
         ? mergeMentionRefsIntoFreeRefs(data.freeRefs, mentionsList, getNode)
         : (data.freeRefs || [])
 
+      const scriptTable = (() => {
+        const ref = data.scriptTableRef
+        if (ref?.nodeId) {
+          return getNodes().find((n) => n.id === ref.nodeId) || null
+        }
+        return findScriptTableNode(getNodes())
+      })()
+      const qualityPresetId = resolveVideoQualityPresetId(data, scriptTable?.data || null)
+
       const payload = {
         model:           data.modelId        || modelId || "wan-2.6",
         prompt:          promptForSubmit,
+        quality_preset_id: qualityPresetId !== "auto" ? qualityPresetId : undefined,
         mentions:        mentionsList,
         ratio:           data.vidRatio       || "16:9",
         resolution:      data.vidQuality     || "1080P",
@@ -1132,9 +1142,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
   }, [data.pendingTrigger])
 
   const isIdle = status === "input" && !data.videoUrl && !videoUrl
-  const showUploadRow =
-    (isIdle && !isRefSource && selected)
-    || isRefSource
+  const showUploadRow = isIdle && (selected || isRefSource)
   const uploadRef = useRef(null)
   const setAssetLibraryOpen = useCanvasStore((s) => s.setAssetLibraryOpen)
 
@@ -1377,15 +1385,15 @@ export default function VideoGenerationNode({ id, data, selected }) {
     >
       <div className={`gn2-upload-row${showUploadRow ? " gn2-upload-row--visible" : ""}`}>
         <div className="gn2-upload-bar">
-          <button type="button" className="gn2-upload-btn nodrag" onClick={() => uploadRef.current?.click()}>
+          <button type="button" className="gn2-upload-btn nodrag" aria-label={t("canvas.common.upload")} onClick={() => uploadRef.current?.click()}>
             <UploadIcon /> {t("canvas.common.upload")}
           </button>
           <span className="gn2-upload-divider" aria-hidden="true" />
-          <button type="button" className="gn2-upload-btn nodrag" onClick={openAssetLibrary}>
+          <button type="button" className="gn2-upload-btn nodrag" aria-label={t("canvas.image.fromLibrary")} onClick={openAssetLibrary}>
             <AssetLibraryIcon /> {t("canvas.image.fromLibrary")}
           </button>
         </div>
-        <input ref={uploadRef} type="file" accept="image/*" hidden onChange={handleTopUpload} />
+        <input ref={uploadRef} type="file" accept="image/*" hidden onChange={handleTopUpload} aria-label={t("canvas.common.upload")} />
       </div>
 
       <div className="gn2-label-row">
@@ -1678,12 +1686,12 @@ export default function VideoGenerationNode({ id, data, selected }) {
         createPortal(
           <div
             ref={videoMenuPortalRef}
-            className="cell-menu-portal gn2-dots-menu nodrag nopan"
+            className={`cell-menu-portal gn2-dots-menu nodrag nopan ${getThemePageClass()}`}
             style={{
               position: "fixed",
               top: videoMenu.menuPos.y,
               left: videoMenu.menuPos.x,
-              zIndex: 9999,
+              zIndex: Z_NODE_DOTS_MENU,
             }}
             onPointerDown={stopFlowPointer}
             onMouseDown={stopFlowPointer}
@@ -1803,7 +1811,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
               <span>↻</span>{t("canvas.gen.regenerate")}
             </button>
           </div>,
-          document.body
+          getThemePortalRoot()
         )}
     </div>
   )

@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { formatRelativeTime } from "../../utils/canvas/formatRelativeTime"
 import { useLocale } from "../../utils/locale"
-import { useCanvasStore } from "../../stores"
 import { AVATAR_CHANGED_EVENT } from "../../utils/canvas/userAvatar"
 import { resolveCommentAuthorName, resolveCommentAvatar } from "../../utils/canvas/commentUserDisplay"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
 import "./CanvasCommentPanel.css"
 
 const PANEL_WIDTH = 360
@@ -19,9 +19,7 @@ const TEAM_ROLE_KEYS = {
   member: "canvas.comment.roleMember",
 }
 
-function CommentAuthorPreview({ open, anchorRef, member, authorName, avatar, imgBroken, onImgError, isMine, t, onClose }) {
-  const theme = useCanvasStore((s) => s.theme)
-  const themeClass = theme === "dark" ? "rf-page--dark" : "rf-page--light"
+function CommentAuthorPreview({ open, anchorRef, member, authorName, avatar, imgBroken, onImgError, isMine, t, onClose, onMouseEnter, onMouseLeave }) {
   const wrapRef = useRef(null)
   const [pos, setPos] = useState({ top: 0, left: 0 })
 
@@ -41,7 +39,7 @@ function CommentAuthorPreview({ open, anchorRef, member, authorName, avatar, img
   }, [open, anchorRef])
 
   useEffect(() => {
-    if (!open) return undefined
+    if (!open || onMouseEnter) return undefined
     const close = (e) => {
       if (wrapRef.current?.contains(e.target)) return
       if (anchorRef?.current?.contains(e.target)) return
@@ -49,7 +47,7 @@ function CommentAuthorPreview({ open, anchorRef, member, authorName, avatar, img
     }
     document.addEventListener("mousedown", close)
     return () => document.removeEventListener("mousedown", close)
-  }, [open, onClose, anchorRef])
+  }, [open, onClose, anchorRef, onMouseEnter])
 
   if (!open) return null
 
@@ -58,10 +56,12 @@ function CommentAuthorPreview({ open, anchorRef, member, authorName, avatar, img
 
   return createPortal(
     <div
-      className={`ccp-author-preview ccp-author-preview--fixed ${themeClass}`}
+      className={`ccp-author-preview ccp-author-preview--fixed ${getThemePageClass()}`}
       ref={wrapRef}
       style={{ top: pos.top, left: pos.left }}
       onPointerDown={(e) => e.stopPropagation()}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <div className="ccp-author-preview-avatar">
         {avatar && !imgBroken ? (
@@ -84,35 +84,63 @@ function CommentAuthorPreview({ open, anchorRef, member, authorName, avatar, img
         )}
       </div>
     </div>,
-    document.body,
+    getThemePortalRoot(),
   )
 }
 
 function MessageMenu({ onEdit, onDelete, t }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef(null)
+  const wrapRef = useRef(null)
+  const btnRef = useRef(null)
+  const menuRef = useRef(null)
+  const [menuStyle, setMenuStyle] = useState(null)
+
+  useEffect(() => {
+    if (!open) {
+      setMenuStyle(null)
+      return undefined
+    }
+    const update = () => {
+      const r = btnRef.current?.getBoundingClientRect()
+      if (!r) return
+      const menuW = 120
+      setMenuStyle({
+        position: "fixed",
+        top: r.bottom + 6,
+        left: Math.max(8, r.right - menuW),
+        minWidth: menuW,
+        zIndex: 10200,
+      })
+    }
+    update()
+    window.addEventListener("resize", update)
+    window.addEventListener("scroll", update, true)
+    return () => {
+      window.removeEventListener("resize", update)
+      window.removeEventListener("scroll", update, true)
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return undefined
     const close = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+      const path = e.composedPath?.() || []
+      if (wrapRef.current && path.includes(wrapRef.current)) return
+      if (menuRef.current && path.includes(menuRef.current)) return
+      setOpen(false)
     }
     document.addEventListener("mousedown", close)
     return () => document.removeEventListener("mousedown", close)
   }, [open])
 
-  return (
-    <div className={`ccp-msg-menu-wrap${open ? " is-open" : ""}`} ref={ref}>
-      <button
-        type="button"
-        className="ccp-msg-menu-btn"
-        aria-label={t("canvas.common.more")}
-        onClick={() => setOpen((v) => !v)}
-      >
-        ···
-      </button>
-      {open && (
-        <div className="ccp-msg-menu">
+  const menuPortal = open && menuStyle
+    ? createPortal(
+        <div
+          ref={menuRef}
+          className={`ccp-msg-menu ccp-msg-menu--portal ${getThemePageClass()}`}
+          style={menuStyle}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
           <button type="button" onClick={() => { setOpen(false); onEdit?.() }}>
             <span className="ccp-menu-icon">✎</span>
             {t("canvas.common.edit")}
@@ -121,8 +149,24 @@ function MessageMenu({ onEdit, onDelete, t }) {
             <span className="ccp-menu-icon">🗑</span>
             {t("canvas.common.delete")}
           </button>
-        </div>
-      )}
+        </div>,
+        getThemePortalRoot(),
+      )
+    : null
+
+  return (
+    <div className={`ccp-msg-menu-wrap${open ? " is-open" : ""}`} ref={wrapRef}>
+      <button
+        ref={btnRef}
+        type="button"
+        className="ccp-msg-menu-btn"
+        aria-label={t("canvas.common.more")}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        ···
+      </button>
+      {menuPortal}
     </div>
   )
 }
@@ -135,6 +179,7 @@ function MessageItem({ msg, currentUserId, username, teamMembers, onEdit, onDele
   const [previewOpen, setPreviewOpen] = useState(false)
   const rootRef = useRef(null)
   const avatarBtnRef = useRef(null)
+  const previewLeaveTimerRef = useRef(null)
   const isMine = currentUserId != null && Number(msg.author_id) === Number(currentUserId)
   const authorName = resolveCommentAuthorName(msg, currentUserId, username)
   const member = (teamMembers || []).find((m) => Number(m.user_id) === Number(msg.author_id))
@@ -150,6 +195,15 @@ function MessageItem({ msg, currentUserId, username, teamMembers, onEdit, onDele
   useEffect(() => {
     setImgBroken(false)
   }, [msg?.id, msg?.author_avatar_url, msg?.author_id, avatarTick])
+
+  const showAuthorPreview = () => {
+    clearTimeout(previewLeaveTimerRef.current)
+    setPreviewOpen(true)
+  }
+
+  const hideAuthorPreview = () => {
+    previewLeaveTimerRef.current = setTimeout(() => setPreviewOpen(false), 120)
+  }
 
   const saveEdit = async () => {
     const text = draft.trim()
@@ -175,10 +229,8 @@ function MessageItem({ msg, currentUserId, username, teamMembers, onEdit, onDele
             type="button"
             className="ccp-avatar ccp-avatar-btn"
             aria-label={t("canvas.comment.viewProfile")}
-            onClick={(e) => {
-              e.stopPropagation()
-              setPreviewOpen((v) => !v)
-            }}
+            onMouseEnter={showAuthorPreview}
+            onMouseLeave={hideAuthorPreview}
           >
             {avatar && !imgBroken ? (
               <img
@@ -203,6 +255,8 @@ function MessageItem({ msg, currentUserId, username, teamMembers, onEdit, onDele
             isMine={isMine}
             t={t}
             onClose={() => setPreviewOpen(false)}
+            onMouseEnter={showAuthorPreview}
+            onMouseLeave={hideAuthorPreview}
           />
         </span>
       </div>

@@ -33,6 +33,7 @@ import CanvasRightClickMenu from "../components/canvas/CanvasRightClickMenu"
 import CanvasEmptyState from "../components/canvas/CanvasEmptyState"
 import CanvasCommentPanel from "../components/canvas/CanvasCommentPanel"
 import CanvasCommentMarkers from "../components/canvas/CanvasCommentMarkers"
+import { getCommentAnchorRect } from "../utils/canvas/commentMarkerLayout"
 import { useCanvasComments } from "../hooks/canvas/useCanvasComments"
 import { markNodeMentionNotificationsRead } from "../utils/notificationThread"
 import { emitNotificationUnread } from "../hooks/useNotificationUnread"
@@ -293,7 +294,7 @@ function CanvasInner() {
       setHighlightMessageIds((prev) => [...new Set([...prev, ...mentionIds])])
     }
   }, [projectId, commentTargetNodeId, threadsByNode, user?.id])
-  const { project, getNode, fitView, setCenter, getZoom } = useReactFlow()
+  const { screenToFlowPosition, getNode, fitView, setCenter, getZoom } = useReactFlow()
   const { x: vpX, y: vpY, zoom } = useViewport()
   const setCanvasId = useCanvasStore((s) => s.setCanvasId)
   const setProjectName = useCanvasStore((s) => s.setProjectName)
@@ -366,7 +367,7 @@ function CanvasInner() {
     bumpZIndex,
     raiseNodeToFront,
   } = useCanvasNodes({
-    project,
+    screenToFlowPosition,
     screenplayHandlersRef,
     stopPolling,
     runTextGeneration,
@@ -851,13 +852,13 @@ function CanvasInner() {
     if (!commentTargetNodeId) return null
     const node = getNode(commentTargetNodeId)
     if (!node) return null
-    const nodeW = node.width ?? node.measured?.width ?? node.style?.width ?? 320
-    const nodeH = node.height ?? node.measured?.height ?? 200
+    const rect = getCommentAnchorRect(node)
+    if (!rect) return null
     return {
-      left: node.position.x * zoom + vpX,
-      top: node.position.y * zoom + vpY,
-      width: nodeW * zoom,
-      height: nodeH * zoom,
+      left: rect.x * zoom + vpX,
+      top: rect.y * zoom + vpY,
+      width: rect.width * zoom,
+      height: rect.height * zoom,
     }
   }, [commentTargetNodeId, getNode, vpX, vpY, zoom])
 
@@ -883,7 +884,6 @@ function CanvasInner() {
     setNodes,
     setEdges,
     getNode,
-    project,
     createNode,
     buildData,
     selectedNodeId,

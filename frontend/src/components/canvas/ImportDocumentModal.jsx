@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useLocale } from "../../utils/locale"
+import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import {
   applyImportDocument,
   parseImportSheets,
@@ -402,16 +404,38 @@ export default function ImportDocumentModal({
 
   const outlineCharCount = parsedSheet?.text?.length || parsedSheet?.stats?.char_count || 0
 
-  if (!open) return null
+  const { mounted, closing } = useOverlayMount(open)
 
   const themeClass = theme === "light" ? "rf-page--light" : "rf-page--dark"
 
+  if (!mounted) return null
+
+  const overlayClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: `idm-overlay ${themeClass}`,
+    enterClass: open && !closing ? "motion-modal-overlay-in" : "",
+    exitClass: closing ? "motion-modal-overlay-out" : "",
+  })
+
+  const modalBase = `idm-modal idm-modal--wide${
+    step === "pickEpisode" ? " idm-modal--pick" : ""
+  }${step === "groupShots" ? " idm-modal--group" : ""}`
+
+  const modalClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: modalBase,
+    enterClass: open && !closing ? "motion-modal-in" : "",
+    exitClass: closing ? "motion-modal-out" : "",
+  })
+
   return createPortal(
-    <div className={`idm-overlay ${themeClass}`} onMouseDown={handleClose}>
+    <div className={overlayClasses} onMouseDown={handleClose}>
       <div
-        className={`idm-modal idm-modal--wide${
-          step === "pickEpisode" ? " idm-modal--pick" : ""
-        }${step === "groupShots" ? " idm-modal--group" : ""}`}
+        className={modalClasses}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="idm-title">{t("canvas.import.title")}</div>
@@ -764,6 +788,6 @@ export default function ImportDocumentModal({
         </div>
       </div>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

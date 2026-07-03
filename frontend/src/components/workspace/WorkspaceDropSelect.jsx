@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
+import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
 import "./WorkspaceDropSelect.css"
 
 function CheckIcon() {
@@ -36,38 +39,86 @@ export default function WorkspaceDropSelect({
   placement = "bottom",
 }) {
   const [open, setOpen] = useState(false)
+  const [menuStyle, setMenuStyle] = useState(null)
   const wrapRef = useRef(null)
+  const triggerRef = useRef(null)
+  const menuRef = useRef(null)
+  const { mounted, closing } = useOverlayMount(open)
+
+  const updateMenuPosition = useCallback(() => {
+    const el = triggerRef.current
+    if (!el) return false
+    const rect = el.getBoundingClientRect()
+    const style = {
+      position: "fixed",
+      left: rect.left,
+      minWidth: Math.max(rect.width, 168),
+      zIndex: 10050,
+    }
+    if (placement === "top") {
+      style.bottom = window.innerHeight - rect.top + 8
+      style.top = "auto"
+    } else {
+      style.top = rect.bottom + 8
+    }
+    setMenuStyle(style)
+    return true
+  }, [placement])
 
   useEffect(() => {
-    if (!open) return undefined
+    if (!open) {
+      setMenuStyle(null)
+      return undefined
+    }
+    updateMenuPosition()
+
     const onDoc = (e) => {
-      if (!wrapRef.current?.contains(e.target)) setOpen(false)
+      const path = e.composedPath?.() || []
+      if (wrapRef.current && path.includes(wrapRef.current)) return
+      if (menuRef.current && path.includes(menuRef.current)) return
+      setOpen(false)
     }
     const onKey = (e) => { if (e.key === "Escape") setOpen(false) }
+
+    let rafId = 0
+    const tick = () => {
+      updateMenuPosition()
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+
     document.addEventListener("mousedown", onDoc)
     window.addEventListener("keydown", onKey)
+    window.addEventListener("resize", updateMenuPosition)
+    window.addEventListener("scroll", updateMenuPosition, true)
     return () => {
+      cancelAnimationFrame(rafId)
       document.removeEventListener("mousedown", onDoc)
       window.removeEventListener("keydown", onKey)
+      window.removeEventListener("resize", updateMenuPosition)
+      window.removeEventListener("scroll", updateMenuPosition, true)
     }
-  }, [open])
+  }, [open, updateMenuPosition])
 
   const selected = options.find((o) => o.value === value)
   const label = selected?.label ?? value
 
-  return (
-    <div ref={wrapRef} className={`wds-wrap${className ? ` ${className}` : ""}`}>
-      <button
-        type="button"
-        className={`wds-trigger${open ? " wds-trigger--open" : ""}`}
-        onClick={() => setOpen((v) => !v)}
-      >
-        {prefixIcon && <span className="wds-prefix">{prefixIcon}</span>}
-        <span className="wds-label">{label}</span>
-        <Chevron open={open} />
-      </button>
-      {open && (
-        <div className={`wds-menu wds-menu--${placement}`} role="listbox">
+  const menuClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: `wds-menu wds-menu-portal wds-menu--${placement} ${getThemePageClass()}`,
+    enterClass: open && !closing
+      ? (placement === "top" ? "motion-popover-in motion-popover-in--top" : "motion-popover-in")
+      : "",
+    exitClass: closing
+      ? (placement === "top" ? "motion-popover-out motion-popover-out--top" : "motion-popover-out")
+      : "",
+  })
+
+  const menu = mounted && menuStyle
+    ? createPortal(
+        <div ref={menuRef} className={menuClasses} style={menuStyle} role="listbox">
           {options.map((opt) => {
             const active = opt.value === value
             return (
@@ -93,7 +144,6 @@ export default function WorkspaceDropSelect({
               <span className="wds-item-mark">
                 {value === "custom" ? <CheckIcon /> : <span className="wds-dot" />}
               </span>
-              <span className="wds-custom-label">自定义</span>
               <input
                 type="number"
                 className="wds-custom-input"
@@ -109,8 +159,24 @@ export default function WorkspaceDropSelect({
               <span className="wds-custom-suffix">{customOption.suffix || "集"}</span>
             </div>
           )}
-        </div>
-      )}
+        </div>,
+        getThemePortalRoot(),
+      )
+    : null
+
+  return (
+    <div ref={wrapRef} className={`wds-wrap${className ? ` ${className}` : ""}`}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`wds-trigger${open ? " wds-trigger--open" : ""}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {prefixIcon && <span className="wds-prefix">{prefixIcon}</span>}
+        <span className="wds-label">{label}</span>
+        <Chevron open={open} />
+      </button>
+      {menu}
     </div>
   )
 }

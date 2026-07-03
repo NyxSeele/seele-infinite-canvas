@@ -1,8 +1,10 @@
 import { useState } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useNavigate } from "react-router-dom"
 import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
+import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import "../../pages/Canvas.css"
 import "./JoinTeamInputModal.css"
 
@@ -26,8 +28,7 @@ export default function JoinTeamInputModal({ open, onClose }) {
   const theme = useCanvasStore((s) => s.theme)
   const [value, setValue] = useState("")
   const [error, setError] = useState("")
-
-  if (!open) return null
+  const { mounted, closing } = useOverlayMount(open)
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -40,9 +41,29 @@ export default function JoinTeamInputModal({ open, onClose }) {
     navigate(`/join-team?token=${encodeURIComponent(token)}`)
   }
 
+  if (!mounted) return null
+
+  const overlayClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: `jti-backdrop rf-page--${theme}`,
+    enterClass: open && !closing ? "motion-modal-overlay-in" : "",
+    exitClass: closing ? "motion-modal-overlay-out" : "",
+  })
+
+  const modalClasses = overlayClassNames({
+    mounted,
+    closing,
+    open,
+    base: "jti-modal",
+    enterClass: open && !closing ? "motion-modal-in" : "",
+    exitClass: closing ? "motion-modal-out" : "",
+  })
+
   return createPortal(
-    <div className={`jti-backdrop rf-page--${theme}`} onClick={onClose}>
-      <form className="jti-modal" onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
+    <div className={overlayClasses} onClick={onClose}>
+      <form className={modalClasses} onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
         <header className="jti-head">
           <h2>{t("join.title")}</h2>
           <button type="button" className="jti-close" onClick={onClose} aria-label={t("profile.close")}>×</button>
@@ -65,6 +86,6 @@ export default function JoinTeamInputModal({ open, onClose }) {
         </footer>
       </form>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

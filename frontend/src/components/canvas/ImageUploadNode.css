@@ -38,8 +38,8 @@
   flex-direction: column;
 }
 .iu-card--selected {
-  box-shadow: 0 0 0 2px #7c6ff7, 0 0 16px 4px rgba(124,111,247,0.45);
-  border-color: #7c6ff7;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.6), 0 0 18px 4px rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
 /* Drop zone (no image yet) */

@@ -85,7 +85,9 @@ html.rf-canvas-page-active .app-shell {
 }
 /* gn2-root nodes: no selection ring (tapnow style - indicator is the PromptBar appearing) */
 .rf-page .react-flow__node.selected > .gn2-root,
-.rf-page .react-flow__node.selected > .gn2-wrapper {
+.rf-page .react-flow__node.selected > .gn2-wrapper,
+.rf-page .react-flow__node.selected > .outline-node,
+.rf-page .react-flow__node.selected > .sbc-root {
   box-shadow: none !important;
   outline: none !important;
 }
@@ -183,6 +185,16 @@ html.rf-canvas-page-active .app-shell {
   --gn2-plus-bg-hover: #3a3a3a;
   --gn2-plus-border-hover: rgba(255, 255, 255, 0.6);
   --gn2-plus-fg-hover: #fff;
+  --pt-bg: var(--tl-card-bg);
+  --pt-bg-elevated: var(--tl-input-bg);
+  --pt-border: var(--tl-card-border);
+  --pt-text: var(--tl-text-primary);
+  --pt-text-muted: var(--tl-text-secondary);
+  --pt-text-dim: var(--tl-text-placeholder);
+  --pt-accent: #8ab4ff;
+  --pt-tab-active: #5b8def;
+  --pt-shadow: 0 12px 48px rgba(0, 0, 0, 0.65);
+  --pt-fab-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
 }
 
 .rf-page--light {
@@ -242,9 +254,17 @@ html.rf-canvas-page-active .app-shell {
   --gn2-plus-bg-hover: #e4e4e4;
   --gn2-plus-border-hover: rgba(0, 0, 0, 0.35);
   --gn2-plus-fg-hover: rgba(0, 0, 0, 0.85);
+  --pt-bg: var(--tl-card-bg);
+  --pt-bg-elevated: var(--tl-input-bg);
+  --pt-border: var(--tl-card-border);
+  --pt-text: var(--tl-text-primary);
+  --pt-text-muted: var(--tl-text-secondary);
+  --pt-text-dim: var(--tl-text-placeholder);
+  --pt-accent: #2563eb;
+  --pt-tab-active: #2563eb;
+  --pt-shadow: 0 12px 48px rgba(0, 0, 0, 0.12);
+  --pt-fab-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
-
-/* ── Bridge: map tl-* theme tokens → card/shared variable names ─ */
 .rf-page {
   --card-bg: var(--tl-card-bg);
   --card-border: var(--tl-card-border);
@@ -2443,8 +2463,31 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
   z-index: 120;
 }
 
-.clt-item-wrap:hover .clt-hover-pill {
+.clt-hover-pill--inline {
+  visibility: hidden;
+}
+
+.clt-hover-pill--portal {
+  position: fixed;
+  transform: translateY(-50%);
   opacity: 1;
+  z-index: 10060;
+  visibility: visible;
+  background: var(--tl-menu-bg, #ffffff);
+  border: 1px solid var(--tl-card-border, #e5e5e5);
+  box-shadow: var(--tl-menu-shadow, 0 12px 40px rgba(0, 0, 0, 0.12));
+  color: var(--tl-text-primary, #111111);
+}
+
+.clt-hover-pill--portal.rf-page--dark {
+  background: var(--tl-menu-bg, #161616);
+  border-color: var(--tl-card-border, #242424);
+  color: var(--tl-text-primary, #f0f0f0);
+  box-shadow: var(--tl-menu-shadow, 0 16px 48px rgba(0, 0, 0, 0.8));
+}
+
+.clt-item-wrap:hover .clt-hover-pill--inline {
+  opacity: 0;
 }
 
 /* Icon buttons */

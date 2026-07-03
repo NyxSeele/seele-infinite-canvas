@@ -156,7 +156,7 @@ export default function ScriptBeatCardNode({ id, data, selected }) {
 
   return (
     <div
-      className={`sbc-root canvas-node-card${selected ? " selected" : ""}${readOnly ? " sbc-root--readonly" : ""}`}
+      className={`sbc-root canvas-node-card${selected ? " sbc-root--selected" : ""}${readOnly ? " sbc-root--readonly" : ""}`}
       onWheel={handleNodeWheel}
     >
       <div className="sbc-head">

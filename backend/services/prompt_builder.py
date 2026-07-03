@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from services.quality_presets import get_suffixes, normalize_quality_preset_id
 from services.script_shot_strategy import detect_new_subject, new_subject_emphasis
 from services.style_reference_service import format_style_for_prompt
 
@@ -25,19 +26,6 @@ VALID_WORKFLOW_TYPES = frozenset(MAX_POSITIVE_LENGTH.keys())
 
 _CAMERA_RE = re.compile(
     r"(特写|近景|中景|全景|远景|俯拍|仰拍|跟拍|推拉|长镜头)"
-)
-
-# 常见中文风格 → 英文 tag（供 SD 系模型识别）
-CINEMATIC_POSITIVE_SUFFIX = (
-    "photorealistic, cinematic photography, 35mm film, natural lighting, "
-    "film grain, shallow depth of field, professional color grading, "
-    "ultra detailed skin texture, realistic facial features, "
-    "anamorphic lens, movie still"
-)
-CINEMATIC_NEGATIVE_SUFFIX = (
-    "anime, cartoon, illustration, painting, drawing, 3d render, "
-    "cgi, artificial, plastic skin, oversaturated, neon colors, "
-    "watermark, signature, blurry, low quality, deformed face"
 )
 
 STYLE_EN_TAGS: dict[str, str] = {
@@ -90,12 +78,6 @@ def _merge_style(field_style: str, global_style: str) -> str:
         if cleaned and cleaned not in parts:
             parts.append(cleaned)
     return ", ".join(parts)
-
-
-def normalize_content_style(value: str | None) -> str:
-    if (value or "").strip() == "generic":
-        return "generic"
-    return "photorealistic_cinema"
 
 
 def resolve_style_en_tags(global_style: str) -> str:
@@ -188,7 +170,7 @@ def _build_negative(
     workflow_type: str,
     *,
     global_style: str = "",
-    content_style: str = "generic",
+    quality_preset_id: str = "auto",
 ) -> str:
     if workflow_type == "flux":
         return ""
@@ -204,8 +186,9 @@ def _build_negative(
     if _is_anime_style(global_style) or _is_anime_style(field_style):
         parts.append(ANIME_NEGATIVE_EN)
 
-    if normalize_content_style(content_style) == "photorealistic_cinema":
-        parts.append(CINEMATIC_NEGATIVE_SUFFIX)
+    _, neg_suffix = get_suffixes(quality_preset_id)
+    if neg_suffix:
+        parts.append(neg_suffix)
 
     return ", ".join(parts)
 
@@ -243,7 +226,7 @@ def build_script_shot_prompt(
     shot_number: int | None = None,
     continuity_mode: bool = True,
     style_reference: dict | None = None,
-    content_style: str = "generic",
+    quality_preset_id: str = "auto",
 ) -> BuiltPrompt:
     """
     分镜单行 prompt：UI 只展示用户描述，生成用简洁中文 + 英文风格 tag。
@@ -293,16 +276,14 @@ def build_script_shot_prompt(
     if style_en:
         positive = f"{positive}，{style_en}" if positive else style_en
 
-    if normalize_content_style(content_style) == "photorealistic_cinema":
-        positive = (
-            f"{positive}, {CINEMATIC_POSITIVE_SUFFIX}"
-            if positive
-            else CINEMATIC_POSITIVE_SUFFIX
-        )
+    preset_id = normalize_quality_preset_id(quality_preset_id)
+    pos_suffix, _ = get_suffixes(preset_id)
+    if pos_suffix:
+        positive = f"{positive}, {pos_suffix}" if positive else pos_suffix
 
     positive, truncated = _truncate_positive(positive, MAX_POSITIVE_LENGTH[wt])
     negative = _build_negative(
-        {}, wt, global_style=style, content_style=content_style
+        {}, wt, global_style=style, quality_preset_id=preset_id
     )
 
     return BuiltPrompt(

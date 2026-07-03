@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useReactFlow } from "reactflow"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useModelStore, useCanvasStore } from "../../stores"
 import { uploadImageFile } from "../../services/uploadImage"
 import { useLocale } from "../../utils/locale"
@@ -30,6 +31,8 @@ import {
 } from "../../utils/canvas/scriptTableKeyframes"
 import ScriptShotCard from "./ScriptShotCard"
 import CanvasModelDropup from "./CanvasModelDropup"
+import VideoStylePicker from "./VideoStylePicker"
+import { closeActiveCanvasDropdown, closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import ScriptSegmentHeader from "./ScriptSegmentHeader"
 import NodeLoadingState from "./NodeLoadingState"
 import TextWorkflowEdgePlugs from "./TextWorkflowEdgePlugs"
@@ -41,13 +44,8 @@ import {
 } from "../../utils/canvas/scriptTableSegments"
 import { formatDurationSec } from "../../utils/canvas/videoDurationIntent"
 import {
-  CONTENT_STYLE_OPTIONS,
-  getScriptTableContentStyle,
-  normalizeContentStyle,
-} from "../../utils/canvas/contentStylePresets"
-import {
-  SCRIPT_QUALITY_PRESETS,
   applyQualityPresetToRow,
+  migrateContentStyleToPreset,
   withDefaultQualityPresetRows,
 } from "../../utils/canvas/scriptQualityPresets"
 import {
@@ -78,6 +76,7 @@ import "./NodeBanner.css"
 import "./ScriptKeyframeCard.css"
 import "./ScriptShotCard.css"
 import "./ScriptBeatTimeline.css"
+import "./VideoStylePicker.css"
 
 const SHOT_REORDER_MIME = "application/x-st-shot-reorder"
 
@@ -93,23 +92,6 @@ const VideoModelIcon = () => (
   <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
     <rect x="1" y="3" width="7.5" height="7" rx="1.2" stroke="currentColor" strokeWidth="1.1"/>
     <path d="M8.5 5.5l3.5-2v7l-3.5-2v-3z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round"/>
-  </svg>
-)
-
-const ContentStyleIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-    <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.1"/>
-    <path d="M2 6.5h9" stroke="currentColor" strokeWidth="1.1"/>
-    <path d="M6.5 2v9" stroke="currentColor" strokeWidth="1.1" opacity="0.5"/>
-  </svg>
-)
-
-const PresetIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-    <rect x="1" y="2" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
-    <rect x="7" y="2" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
-    <rect x="1" y="7" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
-    <rect x="7" y="7" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
   </svg>
 )
 
@@ -208,7 +190,9 @@ export default function ScriptTableNode({ id, data, selected }) {
   const [modelId, setModelId] = useState(data.modelId || "")
   const [batchRunning, setBatchRunning] = useState(false)
   const [lightboxUrl, setLightboxUrl] = useState(null)
-  const [qualityPresetId, setQualityPresetId] = useState("auto")
+  const [qualityPresetId, setQualityPresetId] = useState(
+    () => migrateContentStyleToPreset(data.contentStyle, data.defaultQualityPresetId)
+  )
   const [previewState, setPreviewState] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
@@ -220,9 +204,6 @@ export default function ScriptTableNode({ id, data, selected }) {
   const [exportOpen, setExportOpen] = useState(false)
   const [splittingRowId, setSplittingRowId] = useState(null)
   const [videoModelId, setVideoModelId] = useState(data.videoModelId || "")
-  const [contentStyle, setContentStyle] = useState(() =>
-    getScriptTableContentStyle(data)
-  )
   const [lutSettingsOpen, setLutSettingsOpen] = useState(false)
   const [lutPreset, setLutPreset] = useState(data.lutPreset || "none")
   const [lutCustomName, setLutCustomName] = useState(data.lutCustomName || "")
@@ -256,12 +237,28 @@ export default function ScriptTableNode({ id, data, selected }) {
   }, [data.sceneLibrary])
 
   useEffect(() => {
-    if (data.contentStyle !== undefined) {
-      setContentStyle(getScriptTableContentStyle(data))
-    }
     if (data.lutPreset !== undefined) setLutPreset(data.lutPreset || "none")
     if (data.lutCustomName !== undefined) setLutCustomName(data.lutCustomName || "")
-  }, [data.contentStyle, data.lutPreset, data.lutCustomName])
+    const migrated = migrateContentStyleToPreset(
+      data.contentStyle,
+      data.defaultQualityPresetId
+    )
+    setQualityPresetId(migrated)
+  }, [data.contentStyle, data.lutPreset, data.lutCustomName, data.defaultQualityPresetId])
+
+  useEffect(() => {
+    if (readOnly || !data.onUpdate) return
+    if (data.contentStyle === undefined) return
+    const migrated = migrateContentStyleToPreset(
+      data.contentStyle,
+      data.defaultQualityPresetId
+    )
+    const patch = { contentStyle: undefined }
+    if (migrated !== (data.defaultQualityPresetId || "auto")) {
+      patch.defaultQualityPresetId = migrated
+    }
+    data.onUpdate(id, patch)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- 一次性迁移旧 contentStyle
 
   const updateData = useCallback(
     (patch) => {
@@ -916,7 +913,36 @@ export default function ScriptTableNode({ id, data, selected }) {
   }, [castLibrary, sceneLibrary, t])
 
   const toggleProjectSettings = useCallback(() => {
-    setProjectSettingsOpen((open) => !open)
+    closeActiveCanvasDropdown()
+    setProjectSettingsOpen((open) => {
+      if (!open) {
+        setLutSettingsOpen(false)
+        setAdvancedOpen(false)
+      }
+      return !open
+    })
+  }, [])
+
+  const toggleLutSettings = useCallback(() => {
+    closeActiveCanvasDropdown()
+    setLutSettingsOpen((v) => {
+      if (!v) {
+        setProjectSettingsOpen(false)
+        setAdvancedOpen(false)
+      }
+      return !v
+    })
+  }, [])
+
+  const toggleAdvancedOpen = useCallback(() => {
+    closeActiveCanvasDropdown()
+    setAdvancedOpen((v) => {
+      if (!v) {
+        setProjectSettingsOpen(false)
+        setLutSettingsOpen(false)
+      }
+      return !v
+    })
   }, [])
 
   return (
@@ -1018,7 +1044,7 @@ export default function ScriptTableNode({ id, data, selected }) {
         <button
           type="button"
           className="st-project-settings-summary nodrag"
-          onClick={() => setLutSettingsOpen((v) => !v)}
+          onClick={toggleLutSettings}
           onPointerDown={sp}
         >
           <span className="st-project-settings-summary-text cn-muted">{lutSummaryLabel}</span>
@@ -1026,24 +1052,26 @@ export default function ScriptTableNode({ id, data, selected }) {
         </button>
 
         {lutSettingsOpen && (
-          <div className="st-lut-panel nodrag">
+          <div className="st-lut-panel st-lib-card nodrag">
             <h3 className="st-lib-section-title cn-param-key">{t("canvas.script.lutStyle")}</h3>
             <div className="st-lut-panel-body">
-              <ul className="st-lut-preset-list">
-                {LUT_PRESET_IDS.map((pid) => (
-                  <li key={pid}>
-                    <button
-                      type="button"
-                      className={`st-lut-preset-btn${!data.lutCustomUrl && lutPreset === pid ? " st-lut-preset-btn--active" : ""}`}
-                      disabled={readOnly}
-                      onClick={() => handleLutPresetSelect(pid)}
-                      onPointerDown={sp}
-                    >
-                      {t(`canvas.lut.${pid}`)}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <div className="st-lut-preset-group">
+                <ul className="st-lut-preset-list">
+                  {LUT_PRESET_IDS.map((pid) => (
+                    <li key={pid}>
+                      <button
+                        type="button"
+                        className={`st-lut-preset-btn${!data.lutCustomUrl && lutPreset === pid ? " st-lut-preset-btn--active" : ""}`}
+                        disabled={readOnly}
+                        onClick={() => handleLutPresetSelect(pid)}
+                        onPointerDown={sp}
+                      >
+                        {t(`canvas.lut.${pid}`)}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
               <div className="st-lut-upload-col">
                 <input
                   ref={lutUploadRef}
@@ -1116,35 +1144,15 @@ export default function ScriptTableNode({ id, data, selected }) {
                 title={t("canvas.script.videoModelTitle")}
               />
             )}
-            <CanvasModelDropup
-              tag={t("canvas.script.defaultStyle")}
-              icon={PresetIcon}
-              models={SCRIPT_QUALITY_PRESETS.map((p) => ({
-                id: p.id,
-                display_name: p.name,
-              }))}
+            <VideoStylePicker
               value={qualityPresetId}
-              direction="down"
-              disabled={readOnly}
-              onChange={(pid) => setQualityPresetId(pid)}
+              showUploadSection={false}
+              readOnly={readOnly}
               title={t("canvas.script.defaultStyleTitle")}
-            />
-            <CanvasModelDropup
-              tag={t("canvas.script.contentStyle")}
-              icon={ContentStyleIcon}
-              models={CONTENT_STYLE_OPTIONS.map((p) => ({
-                id: p.id,
-                display_name: t(`canvas.contentStyle.${p.id === "photorealistic_cinema" ? "photorealistic" : "generic"}`),
-              }))}
-              value={contentStyle}
-              direction="down"
-              disabled={readOnly}
-              onChange={(cid) => {
-                const next = normalizeContentStyle(cid)
-                setContentStyle(next)
-                updateData({ contentStyle: next })
+              onPresetChange={(pid) => {
+                setQualityPresetId(pid)
+                updateData({ defaultQualityPresetId: pid })
               }}
-              title={t("canvas.script.contentStyleTitle")}
             />
             <button
               type="button"
@@ -1169,7 +1177,7 @@ export default function ScriptTableNode({ id, data, selected }) {
             <button
               type="button"
               className="st-shot-edit-toggle"
-              onClick={() => setAdvancedOpen((v) => !v)}
+              onClick={toggleAdvancedOpen}
               onPointerDown={sp}
             >
               {advancedOpen ? t("canvas.script.collapseAdvanced") : t("canvas.script.advanced")}
@@ -1321,7 +1329,7 @@ export default function ScriptTableNode({ id, data, selected }) {
         <div className={`st-shot-drag-banner st-shot-drag-banner--${theme}`} role="status">
           {t("canvas.script.dragShotDropHint")}
         </div>,
-        document.body
+        getThemePortalRoot()
       )}
 
       <ScriptShotPreviewModal

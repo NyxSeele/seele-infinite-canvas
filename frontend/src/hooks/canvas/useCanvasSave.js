@@ -16,6 +16,7 @@ import {
   normalizeTextResponseNode,
 } from "../../utils/canvas/nodeNormalize"
 import { migrateCanvasBeatCards } from "../../utils/canvas/scriptBeatCard"
+import { migrateGenNodePositions } from "../../utils/canvas/migrateGenNodePositions"
 import { readDisplayName } from "../../utils/canvas/commentUserDisplay"
 import { parseServerTimestamp } from "../../utils/datetime"
 
@@ -96,7 +97,11 @@ export function useCanvasSave({
       const savedNodes = canvasData?.nodes || []
       const savedEdges = canvasData?.edges || []
       const migrated = migrateCanvasBeatCards(savedNodes, savedEdges)
-      const nodesToRestore = migrated.nodes
+      const { nodes: positionMigrated, migratedCount } = migrateGenNodePositions(migrated.nodes)
+      if (migratedCount > 0) {
+        console.info(`[canvas] migrated ${migratedCount} gen node X position(s) to new script-table layout`)
+      }
+      const nodesToRestore = positionMigrated
       const edgesToRestore = migrated.edges
       const restoredNodes = nodesToRestore.map((n) => {
         const base = normalizeCanvasNode(n)

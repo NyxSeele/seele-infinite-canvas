@@ -1,6 +1,6 @@
 # AI Studio 部署指南
 
-> 最后更新：2026-07-02 · 本地开发端口 **8173**（前端）/ **7788**（后端）
+> 最后更新：2026-07-03 · 本地开发端口 **8173**（前端）/ **7788**（后端）
 
 ## 架构概览
 
@@ -77,20 +77,37 @@ backend 容器启动时自动 `alembic upgrade head`。
 |----|------|
 | `postgres_data` | 数据库 |
 | `redis_data` | Redis |
-| `uploads_data` | 头像、出图/视频、导出 zip |
+| `uploads_data` | 头像、出图/视频、导出 zip、自定义 LUT（`uploads/luts/`） |
 
 ComfyUI 仍在宿主机或另一容器，通过 `COMFYUI_URL` 连接。
 
-### 5. Docker 与镜头级视频风格参考（ffmpeg）
+### 5. Docker 与 ffmpeg（风格参考 + 全片 LUT）
 
-**镜头级视频风格参考**（Prompt Bar → 风格参考）依赖 ffmpeg 抽帧分析（[`style_reference_service.py`](backend/services/style_reference_service.py) 优先 `imageio-ffmpeg`，否则系统 `ffmpeg`）。
+**镜头级视频风格参考**（Prompt Bar → 风格参考）与 **全片 LUT 调色**（分镜表「色调风格」→ `video-lut` 后处理）均依赖 ffmpeg（[`style_reference_service.py`](backend/services/style_reference_service.py)、[`video_lut_service.py`](backend/services/video_lut_service.py)；优先 `imageio-ffmpeg`，否则系统 `ffmpeg`）。
 
 | 项 | 说明 |
 |----|------|
 | **当前镜像** | [`backend/Dockerfile`](backend/Dockerfile) **未安装** ffmpeg，也未 `pip install imageio-ffmpeg` |
-| **Docker 部署行为** | 该功能 API 返回 **503**（`ffmpeg 不可用`）；出图/视频/Agent 其它链路不受影响 |
+| **Docker 部署行为** | 上述功能 API 可能返回 **503**（`ffmpeg 不可用`）；出图/视频/Agent 其它链路不受影响 |
 | **AutoDL / 裸机** | Runbook §5 已 `apt-get install ffmpeg`；可选 `pip install imageio-ffmpeg` |
 | **若要在 Docker 启用** | 在 Dockerfile 增加 `apt-get install -y ffmpeg` 并在 `requirements.txt` 或镜像构建步骤中 `pip install imageio-ffmpeg`，然后重建 backend 镜像 |
+
+### 6. LUT 资产与 API
+
+| 路径 | 说明 |
+|------|------|
+| `backend/assets/luts/*.cube` | **内置 LUT 预设**（随代码部署，6 个 `.cube`；[`lut_registry.py`](backend/services/lut_registry.py)） |
+| `backend/uploads/luts/{project_id}/` | **用户上传**自定义 `.cube`（须持久化；`main.py` 启动时创建 `uploads/luts/`） |
+
+LUT HTTP API（[`routers/lut.py`](backend/routers/lut.py)）：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/projects/{project_id}/lut?script_table_node_id=` | 读取分镜表 LUT 配置 |
+| PUT | `/api/projects/{project_id}/lut` | 更新预设 / 清除自定义 |
+| POST | `/api/lut/upload?project_id=&script_table_node_id=` | 上传 `.cube`（≤5MB） |
+| POST | `/api/projects/{project_id}/lut/apply-all` | 批量对已完成视频排队 LUT |
+| POST | `/api/tasks/video-lut` | 单视频 LUT 后处理任务 |
 
 ---
 
@@ -109,7 +126,7 @@ export APP_ENV=production
 # DATABASE_URL=sqlite:////path/to/aistudio.db
 # 生产多实例：postgresql+psycopg2://...
 
-alembic upgrade head    # 001–021
+alembic upgrade head    # 001–022
 uvicorn main:app --host 0.0.0.0 --port 7788
 ```
 
@@ -150,7 +167,7 @@ cd frontend && npm run dev
 数据库迁移：
 
 ```bash
-cd backend && alembic upgrade head   # 含 001–021
+cd backend && alembic upgrade head   # 含 001–022（022 = tasks.lut_applied）
 ```
 
 ---
@@ -161,8 +178,8 @@ cd backend && alembic upgrade head   # 含 001–021
 
 - [ ] `JWT_SECRET` 强随机（≥32 字符）
 - [ ] `APP_ENV=production`（关闭 debug 路由、种子账号、`create_all`）
-- [ ] `alembic upgrade head`（**001–021**）
-- [ ] `uploads/` 在持久化盘（images / videos / exports）
+- [ ] `alembic upgrade head`（**001–022**）
+- [ ] `uploads/` 在持久化盘（images / videos / exports / **luts**）；内置 LUT 在 `backend/assets/luts/`（随代码）
 - [ ] **Redis 已启动**（协作、WS 广播、生成槽位、限流）
 - [ ] `DASHSCOPE_API_KEY` 已配置
 - [ ] `COMFYUI_URL` 指向内网 ComfyUI；`AGENT_MOCK_GENERATION=false`（真实验收）
@@ -175,7 +192,7 @@ cd backend && alembic upgrade head   # 含 001–021
 - [ ] AutoDL 内测：可用平台自定义服务 URL，跳过自有证书
 - [ ] 备份 `uploads/` 与数据库
 - [ ] ComfyUI 切换日按 [COMFYUI_CUTOVER_RUNBOOK.md](backend/docs/COMFYUI_CUTOVER_RUNBOOK.md) 核对权重文件名
-- [ ] Docker 部署且需**镜头级视频风格参考**：按上文「Docker 与 ffmpeg」节扩展 backend 镜像；否则接受该功能 503
+- [ ] Docker 部署且需**风格参考 / 全片 LUT**：按上文「Docker 与 ffmpeg」节扩展 backend 镜像；否则接受相关功能 503
 
 ### 功能占位（不阻塞内测）
 
@@ -197,6 +214,8 @@ cd backend && alembic upgrade head   # 含 001–021
 | `COMFYUI_URL` | 如 `http://127.0.0.1:8000` |
 | `COMFYUI_WS_URL` | 可选 |
 | `DASHSCOPE_API_KEY` | Agent / 文本 / classify / 风格参考 |
+| `DEEPSEEK_API_KEY` | 可选；部分模型兜底 Key |
+| `AGENT_MODEL` | Agent 默认文本模型 id（默认 `deepseek-v3`） |
 | `JIMENG_API_KEY` | 仅即梦 `jimeng-5.0-lite` |
 | `GENERATION_MAX_CONCURRENT` | 默认 3；4 人内测建议 2 |
 | `GENERATION_MAX_CONCURRENT_TEAM` | 默认 10；4 人内测建议 8（见 `.env.example`） |
@@ -205,6 +224,8 @@ cd backend && alembic upgrade head   # 含 001–021
 | `AGENT_MOCK_FAILURE_RATE` | 0–1，测失败 UX |
 | `AGENT_LLM_MAX_RETRIES` | LLM 重试 |
 | `MEDIA_TOKEN_TTL_SECONDS` | 媒体票据 TTL |
+| `CANVAS_LOCK_TTL_SECONDS` / `CANVAS_HEARTBEAT_SECONDS` | 协作编辑锁 TTL / 心跳间隔 |
+| `UVICORN_ACCESS_LOG` | `off` 关闭访问日志；默认 throttle |
 | `SEED_*_PASSWORD` | 仅 `development` 时 seed 使用 |
 
 ### 前端

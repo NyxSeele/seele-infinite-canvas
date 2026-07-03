@@ -4,6 +4,7 @@ import { readLocale } from "./utils/locale"
 import "./index.css"
 import "./styles/velora-brand.css"
 import "./styles/scopeSwitchTransition.css"
+import "./styles/motion.css"
 import "./styles/themeTransition.css"
 
 document.documentElement.lang = readLocale() === "en" ? "en" : "zh-CN"

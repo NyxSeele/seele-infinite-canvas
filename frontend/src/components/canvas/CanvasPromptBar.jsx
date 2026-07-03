@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { useReactFlow, useStore } from "reactflow"
 import { useReferenceSelect } from "./CanvasActionsContext"
-import VideoReferencePanel, { VideoAtMentionList } from "./VideoReferencePanel"
+import VideoReferencePanel from "./VideoReferencePanel"
+import { VideoAtMentionList } from "./VideoAtMentionList"
 import VideoEnhancePanel from "./VideoEnhancePanel"
 import {
   getVideoEnhanceBridge,
@@ -15,6 +16,7 @@ import { Mic } from "lucide-react"
 import RefPickerTrigger from "./RefPickerTrigger"
 import PromptRefChips from "./PromptRefChips"
 import PromptBarShell from "./PromptBarShell"
+import { closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import useRefAssetEntries from "../../hooks/canvas/useRefAssetEntries"
 import { getPromptExpanded, setPromptExpanded } from "../../utils/canvas/promptBarPrefs"
 import {
@@ -26,12 +28,6 @@ import {
   MAX_REFERENCE_IMAGES,
 } from "./videoReferenceHelpers"
 import useModelCapabilities from "../../hooks/useModelCapabilities"
-import {
-  CONTENT_STYLE_OPTIONS,
-  findScriptTableNode,
-  getProjectContentStyle,
-  normalizeContentStyle,
-} from "../../utils/canvas/contentStylePresets"
 import {
   mergeMentionRefsIntoFreeRefs,
   mergeMentionRefsIntoReferenceImages,
@@ -401,7 +397,6 @@ export default function CanvasPromptBar({
   // image
   const [imgModel,      setImgModel]      = useState("")
   const [imgModelOpen,  setImgModelOpen]  = useState(false)
-  const [contentStyleOpen, setContentStyleOpen] = useState(false)
   const [imgQuality,    setImgQuality]    = useState("2K")
   const [imgRatio,      setImgRatio]      = useState("1:1")
   const [imgResolution, setImgResolution] = useState("1024x1024")
@@ -421,13 +416,13 @@ export default function CanvasPromptBar({
   const [enhanceBridgeTick, setEnhanceBridgeTick] = useState(0)
   const [atMentionOpen, setAtMentionOpen]   = useState(false)
   const [atMentionQuery, setAtMentionQuery] = useState("")
+  const [atMentionAnchor, setAtMentionAnchor] = useState(null)
   const [isExpanded,    setIsExpanded]    = useState(false)
   const [textMode,      setTextMode]      = useState(TEXT_MODES.CHAT)
 
   const hideTimerRef   = useRef(null)
   const refUploadInputRef = useRef(null)
   const textareaWrapRef = useRef(null)
-  const mentionListRef = useRef(null)
   const mentionEditorRef = useRef(null)
   const recognitionRef = useRef(null)
 
@@ -452,12 +447,29 @@ export default function CanvasPromptBar({
   useEffect(() => subscribeVideoEnhanceBridge(() => setEnhanceBridgeTick((n) => n + 1)), [])
 
   useEffect(() => {
+    const anyOpen =
+      countDropOpen || textModelOpen || imgModelOpen || imgPanelOpen || vidModelOpen || vidPanelOpen
+    if (!anyOpen) return undefined
+    const closeSelf = () => {
+      setCountDropOpen(false)
+      setTextModelOpen(false)
+      setImgModelOpen(false)
+      setImgPanelOpen(false)
+      setVidModelOpen(false)
+      setVidPanelOpen(false)
+    }
+    openCanvasDropdown(closeSelf)
+    return () => closeCanvasDropdown(closeSelf)
+  }, [countDropOpen, textModelOpen, imgModelOpen, imgPanelOpen, vidModelOpen, vidPanelOpen])
+
+  useEffect(() => {
     if (!atMentionOpen) return undefined
     const handler = (e) => {
-      if (mentionListRef.current?.contains(e.target)) return
+      if (e.target.closest?.(".video-at-mention")) return
       if (textareaWrapRef.current?.contains(e.target)) return
       setAtMentionOpen(false)
       setAtMentionQuery("")
+      setAtMentionAnchor(null)
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
@@ -603,24 +615,6 @@ export default function CanvasPromptBar({
     setPrompt(promptBarSync.text ?? "")
   }, [promptBarSync, selectedNodeId])
 
-  const scriptTableNode = useMemo(
-    () => findScriptTableNode(getNodes()),
-    [getNodes, selectedNodeId, visible]
-  )
-  const projectContentStyle = useMemo(
-    () => getProjectContentStyle(getNodes()),
-    [getNodes, selectedNodeId, visible, scriptTableNode?.data?.contentStyle]
-  )
-
-  const handleContentStyleChange = useCallback((styleId) => {
-    const next = normalizeContentStyle(styleId)
-    const st = findScriptTableNode(getNodes())
-    if (st?.data?.onUpdate) {
-      st.data.onUpdate(st.id, { contentStyle: next })
-    }
-    setContentStyleOpen(false)
-  }, [getNodes])
-
   const closeAllParamPanels = useCallback(() => {
     setCountDropOpen(false)
     setTextModelOpen(false)
@@ -628,13 +622,12 @@ export default function CanvasPromptBar({
     setImgPanelOpen(false)
     setVidModelOpen(false)
     setVidPanelOpen(false)
-    setContentStyleOpen(false)
   }, [])
 
   // 点击卡片外 / 画布空白 / 非面板区域时收起（capture 避免 nb-banner stopPropagation）
   useEffect(() => {
     const anyOpen = countDropOpen || textModelOpen || imgModelOpen || imgPanelOpen
-      || vidModelOpen || vidPanelOpen || contentStyleOpen
+      || vidModelOpen || vidPanelOpen
     if (!anyOpen) return
     const closeOnOutside = (e) => {
       if (e.target.closest(
@@ -644,7 +637,7 @@ export default function CanvasPromptBar({
     }
     document.addEventListener("pointerdown", closeOnOutside, true)
     return () => document.removeEventListener("pointerdown", closeOnOutside, true)
-  }, [countDropOpen, textModelOpen, imgModelOpen, imgPanelOpen, vidModelOpen, vidPanelOpen, contentStyleOpen, closeAllParamPanels])
+  }, [countDropOpen, textModelOpen, imgModelOpen, imgPanelOpen, vidModelOpen, vidPanelOpen, closeAllParamPanels])
 
   useEffect(() => {
     window.addEventListener(PARAM_PANEL_CLOSE_EVENT, closeAllParamPanels)
@@ -829,9 +822,9 @@ export default function CanvasPromptBar({
         )
         if (hasImageMentions) {
           patch.referenceMode = "freeref"
+          patch.referenceSlotsOpen = true
+          setReferenceSlotsExpanded(true)
         }
-        patch.referenceSlotsOpen = true
-        setReferenceSlotsExpanded(true)
       }
       if (isImage) {
         const nextRefs = syncMentionRefsIntoReferenceImages(
@@ -1152,13 +1145,15 @@ export default function CanvasPromptBar({
     })
   }, [isText, isTextResponse, isImage, isVideo])
 
-  const handleMentionQuery = useCallback(({ active, query }) => {
+  const handleMentionQuery = useCallback(({ active, query, anchorRect }) => {
     if (active) {
       setAtMentionOpen(true)
       setAtMentionQuery(query || "")
+      setAtMentionAnchor(anchorRect || null)
     } else {
       setAtMentionOpen(false)
       setAtMentionQuery("")
+      setAtMentionAnchor(null)
     }
   }, [])
 
@@ -1166,6 +1161,7 @@ export default function CanvasPromptBar({
     mentionEditorRef.current?.insertMention(item)
     setAtMentionOpen(false)
     setAtMentionQuery("")
+    setAtMentionAnchor(null)
   }, [])
 
   const toggleMic = useCallback((e) => {
@@ -1396,37 +1392,6 @@ export default function CanvasPromptBar({
               <BarChartIcon /><span>{modelLabel(imageModels, imgModel, imgModel)}</span>
             </button>
           </div>
-          <div className="nb-bottom-sep" />
-          <div className="nb-dropup-wrap">
-            {contentStyleOpen && scriptTableNode && (
-              <div className="nb-dropup-menu" onPointerDown={sp}>
-                {CONTENT_STYLE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    className={`nb-dropup-item nodrag${projectContentStyle === opt.id ? " nb-dropup-item--active" : ""}`}
-                    onClick={(e) => { sp(e); handleContentStyleChange(opt.id) }}
-                  >
-                    {t(`canvas.contentStyle.${opt.id === "photorealistic_cinema" ? "photorealistic" : "generic"}`)}
-                  </button>
-                ))}
-              </div>
-            )}
-            <button
-              className="nb-model-btn-bare nodrag"
-              onPointerDown={sp}
-              onClick={(e) => {
-                sp(e)
-                if (scriptTableNode) setContentStyleOpen((v) => !v)
-              }}
-              disabled={!scriptTableNode}
-              title={scriptTableNode ? t("canvas.script.contentStyleTitle") : t("canvas.script.contentStyleNoTable")}
-            >
-              <span>
-                {t(`canvas.contentStyle.${projectContentStyle === "photorealistic_cinema" ? "photorealistic" : "generic"}`)}
-              </span>
-            </button>
-          </div>
           {imageHasParamPanel && (
             <>
               <div className="nb-bottom-sep" />
@@ -1588,18 +1553,17 @@ export default function CanvasPromptBar({
           {(isImage || isVideo) && promptRefChipItems.length > 0 && (
             <PromptRefChips items={promptRefChipItems} onRemove={handlePromptChipRemove} />
           )}
-          <div ref={mentionListRef}>
-            {(isImage || isVideo) && (
-              <VideoAtMentionList
-                open={atMentionOpen}
-                query={atMentionQuery}
-                excludeNodeId={null}
-                compact
-                onSelect={handleAtMentionSelect}
-                onClose={() => { setAtMentionOpen(false); setAtMentionQuery("") }}
-              />
-            )}
-          </div>
+          {(isImage || isVideo) && (
+            <VideoAtMentionList
+              open={atMentionOpen}
+              query={atMentionQuery}
+              anchorRect={atMentionAnchor}
+              excludeNodeId={null}
+              compact
+              onSelect={handleAtMentionSelect}
+              onClose={() => { setAtMentionOpen(false); setAtMentionQuery(""); setAtMentionAnchor(null) }}
+            />
+          )}
           {(isImage || isVideo) ? (
             <MentionTextarea
               ref={mentionEditorRef}

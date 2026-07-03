@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { createPortal } from "react-dom"
 import { ProjectThumb, formatProjectDate } from "./workspaceProjectUtils"
 import { useLocale } from "../../utils/locale"
 import { useTeamStore } from "../../stores"
 import MigrateToTeamModal, { getMigratableTeams } from "./MigrateToTeamModal"
+import AnimatedModal from "../common/AnimatedModal"
 
 const sp = (e) => e.stopPropagation()
 
@@ -19,9 +19,8 @@ function ConfirmModal({ title, body, confirmLabel, onConfirm, onClose, danger })
     }
   }
 
-  return createPortal(
-    <div className="ws-modal-overlay" onClick={onClose}>
-      <div className="ws-modal" onClick={sp}>
+  return (
+    <AnimatedModal open onClose={onClose}>
         <div className="ws-modal-title">{title}</div>
         <p className="ws-modal-body">{body}</p>
         <div className="ws-modal-footer">
@@ -37,9 +36,7 @@ function ConfirmModal({ title, body, confirmLabel, onConfirm, onClose, danger })
             {loading ? "处理中…" : confirmLabel}
           </button>
         </div>
-      </div>
-    </div>,
-    document.body
+    </AnimatedModal>
   )
 }
 

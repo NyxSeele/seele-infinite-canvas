@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { MOTION_EXIT_MS, useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import { LineIcon } from "../icons/LineIcons"
 import { useLocale } from "../../utils/locale"
 
@@ -71,27 +72,34 @@ function usePickerGroups(fromEdge, sourceNodeType) {
 export default function NodePickerMenu({ x, y, fromEdge = false, sourceNodeType = null, onSelect, onClose }) {
   const ref = useRef(null)
   const [activeIdx, setActiveIdx] = useState(0)
+  const [closing, setClosing] = useState(false)
   const groups = usePickerGroups(fromEdge, sourceNodeType)
   const allItems = groups.flatMap((g) => g.items)
 
-  useEffect(() => {
-    const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) onClose()
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [onClose])
+  const requestClose = useCallback(() => {
+    if (closing) return
+    setClosing(true)
+    setTimeout(() => onClose?.(), MOTION_EXIT_MS)
+  }, [closing, onClose])
 
   useEffect(() => {
     const handler = (e) => {
-      if (e.key === "Escape") { onClose(); return }
+      if (ref.current && !ref.current.contains(e.target)) requestClose()
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [requestClose])
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape") { requestClose(); return }
       if (e.key === "ArrowDown") { setActiveIdx((i) => (i + 1) % allItems.length); e.preventDefault() }
       if (e.key === "ArrowUp") { setActiveIdx((i) => (i - 1 + allItems.length) % allItems.length); e.preventDefault() }
       if (e.key === "Enter") { const item = allItems[activeIdx]; onSelect({ type: item.type, action: item.action }); e.preventDefault() }
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [activeIdx, allItems, onClose, onSelect])
+  }, [activeIdx, allItems, requestClose, onSelect])
 
   const adjustedPos = useCallback(() => {
     const menuW = 260, menuH = 320
@@ -104,10 +112,19 @@ export default function NodePickerMenu({ x, y, fromEdge = false, sourceNodeType 
   const pos = adjustedPos()
   let globalIdx = 0
 
+  const menuClasses = overlayClassNames({
+    mounted: true,
+    closing,
+    open: !closing,
+    base: "tl-picker-menu",
+    enterClass: !closing ? "motion-popover-in" : "",
+    exitClass: closing ? "motion-popover-out" : "",
+  })
+
   return (
     <div
       ref={ref}
-      className="tl-picker-menu"
+      className={menuClasses}
       style={{ left: pos.left, top: pos.top }}
       onPointerDown={(e) => e.stopPropagation()}
     >

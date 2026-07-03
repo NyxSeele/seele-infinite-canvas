@@ -59,6 +59,17 @@ function IconStyleRef() {
   )
 }
 
+function IconQualityStyle() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden>
+      <rect x="1" y="2" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1" />
+      <rect x="7" y="2" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1" />
+      <rect x="1" y="7" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1" />
+      <rect x="7" y="7" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1" />
+    </svg>
+  )
+}
+
 function IconZoom() {
   return (
     <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden>
@@ -91,4 +102,4 @@ function IconEnhance() {
   )
 }
 
-export { IconCollabScreen, IconAgent, IconShare, IconStyleRef, IconZoom, IconEnhance, IconCredit }
+export { IconCollabScreen, IconAgent, IconShare, IconStyleRef, IconQualityStyle, IconZoom, IconEnhance, IconCredit }

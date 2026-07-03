@@ -1,0 +1,238 @@
+/* Shared motion tokens and utility classes */
+
+:root {
+  --motion-duration-fast: 180ms;
+  --motion-duration-normal: 240ms;
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --motion-ease-panel: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Popover / dropdown */
+.motion-popover-in {
+  animation: motion-popover-in var(--motion-duration-normal) var(--motion-ease-out) forwards;
+}
+
+.motion-popover-out {
+  animation: motion-popover-out var(--motion-duration-fast) var(--motion-ease-in) forwards;
+}
+
+@keyframes motion-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes motion-popover-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+}
+
+.motion-popover-in--top {
+  animation-name: motion-popover-in-top;
+}
+
+.motion-popover-out--top {
+  animation-name: motion-popover-out-top;
+}
+
+@keyframes motion-popover-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes motion-popover-out-top {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+
+.motion-popover-in--left {
+  animation-name: motion-popover-in-left;
+}
+
+.motion-popover-out--left {
+  animation-name: motion-popover-out-left;
+}
+
+@keyframes motion-popover-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes motion-popover-out-left {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(8px) scale(0.97);
+  }
+}
+
+/* Modal overlay */
+.motion-modal-overlay-in {
+  animation: motion-modal-overlay-in var(--motion-duration-fast) var(--motion-ease-out) forwards;
+}
+
+.motion-modal-overlay-out {
+  animation: motion-modal-overlay-out var(--motion-duration-fast) var(--motion-ease-in) forwards;
+}
+
+@keyframes motion-modal-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes motion-modal-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* Modal content */
+.motion-modal-in {
+  animation: motion-modal-in var(--motion-duration-normal) var(--motion-ease-out) forwards;
+}
+
+.motion-modal-out {
+  animation: motion-modal-out var(--motion-duration-fast) var(--motion-ease-in) forwards;
+}
+
+@keyframes motion-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes motion-modal-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+}
+
+/* Crossfade */
+.motion-fade-in {
+  animation: motion-fade-in var(--motion-duration-normal) var(--motion-ease-out) forwards;
+}
+
+.motion-fade-out {
+  animation: motion-fade-out var(--motion-duration-fast) var(--motion-ease-in) forwards;
+}
+
+@keyframes motion-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes motion-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-popover-in,
+  .motion-popover-out,
+  .motion-popover-in--top,
+  .motion-popover-out--top,
+  .motion-popover-in--left,
+  .motion-popover-out--left,
+  .motion-modal-overlay-in,
+  .motion-modal-overlay-out,
+  .motion-modal-in,
+  .motion-modal-out,
+  .motion-fade-in,
+  .motion-fade-out {
+    animation-duration: 80ms;
+    animation-timing-function: ease;
+  }
+
+  .motion-popover-in,
+  .motion-popover-out,
+  .motion-popover-in--top,
+  .motion-popover-out--top,
+  .motion-popover-in--left,
+  .motion-popover-out--left,
+  .motion-modal-in,
+  .motion-modal-out {
+    transform: none;
+  }
+
+  @keyframes motion-popover-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes motion-popover-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+
+  @keyframes motion-popover-in-top {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes motion-popover-out-top {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+
+  @keyframes motion-popover-in-left {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes motion-popover-out-left {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+
+  @keyframes motion-modal-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes motion-modal-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+}

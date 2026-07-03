@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -25,6 +29,7 @@ from services.shot_prompt_package import build_shot_prompt_package
 from services.split_shot_beats import split_shot_beats
 from services.script_shot_strategy import evaluate_visual_reference
 from services.prompt_intent import classify_user_intent
+from trace_bus import push_trace
 
 router = APIRouter(tags=["prompt"])
 
@@ -71,6 +76,7 @@ def _to_response(
     *,
     visual_decision=None,
     narrative_enabled: bool = True,
+    trace_id: str | None = None,
 ) -> BuildPromptResponse:
     use_ref = False
     denoise = None
@@ -102,6 +108,7 @@ def _to_response(
         img2img_denoise=denoise,
         visual_reference_note=note,
         shot_linking=shot_linking,
+        trace_id=trace_id,
     )
 
 
@@ -162,7 +169,7 @@ async def build_script_shot(
         shot_number=body.shot_number,
         continuity_mode=body.continuity_mode,
         style_reference=body.style_reference,
-        content_style=body.content_style,
+        quality_preset_id=body.quality_preset_id,
     )
     prior_desc = prior[-1].get("description") if prior else None
     visual_decision = evaluate_visual_reference(
@@ -174,10 +181,25 @@ async def build_script_shot(
         has_previous_shot_image=body.has_previous_shot_image,
     )
     narrative_on = body.continuity_mode and body.shot_number > 1
+    trace_id = (body.trace_id or "").strip() or str(uuid.uuid4())
+    await push_trace(
+        0,
+        "BUILT",
+        {
+            "trace_id": trace_id,
+            "task_type": "image",
+            "quality_preset_id": body.quality_preset_id,
+            "positive": built.positive,
+            "negative": built.negative,
+            "display_prompt": built.display_prompt or description,
+            "shot_number": body.shot_number,
+        },
+    )
     return _to_response(
         built,
         visual_decision=visual_decision,
         narrative_enabled=narrative_on or bool((body.theme_context or "").strip()),
+        trace_id=trace_id,
     )
 
 

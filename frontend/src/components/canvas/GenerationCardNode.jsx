@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { createPortal } from "react-dom"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_NODE_DOTS_MENU, Z_REF_HOVER } from "../../utils/zIndexLayers"
 import { useModelStore, useCanvasStore } from "../../stores"
 import { useAssetStore } from "../../stores/assetStore"
 import { pushGenHistory } from "../../utils/canvas/genHistory"
@@ -12,7 +14,6 @@ import NodeLastEditedMeta from "./NodeLastEditedMeta"
 import { getCanvasTeamId, teamIdPayload } from "../../utils/teamContext"
 import MediaFullscreenViewer from "./MediaFullscreenViewer"
 import GenerationStopButton from "./GenerationStopButton"
-import GenerationBrandLoader from "./GenerationBrandLoader"
 import { cancelCanvasTask } from "../../services/cancelTask"
 import {
   buildClearGenerationTaskPatch,
@@ -611,6 +612,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     }
     const negative = (data.negativePrompt || "").trim()
     if (negative) payload.negative_prompt = negative
+    if (data.traceId) payload.trace_id = data.traceId
     return payload
   }, [data, modelId, prompt, id])
 
@@ -914,9 +916,8 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
   const gridSlotCount = isPending ? expectedCount : Math.max(results.length, 1)
   const showResultsGrid = !data.uploadedImage && (isPending || isDone) && gridSlotCount > 0
   const showUploadRow =
-    (isIdle && !data.uploadedImage && !showResultsGrid && selected)
-    || isRefSource
-    || (selected && !isIdle)
+    isRefSource
+    || (isIdle && !data.uploadedImage && !showResultsGrid && selected)
 
   const setAssetLibraryOpen = useCanvasStore((s) => s.setAssetLibraryOpen)
 
@@ -930,8 +931,10 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     if (!file) return
     try {
       const url = await uploadImageFile(file)
-      if (isIdle && !data.uploadedImage && !isRefSource) {
-        if (data.onUpdate) data.onUpdate(id, { uploadedImage: url })
+      if (isIdle && !isRefSource) {
+        if (data.onUpdate) {
+          data.onUpdate(id, { uploadedImage: url, referenceImage: null })
+        }
       } else {
         setReferenceImage(url)
         if (data.onUpdate) data.onUpdate(id, { referenceImage: url })
@@ -1179,18 +1182,17 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       className={`gn2-wrapper${isRefTarget ? " gn2-wrapper--ref-target" : ""}${isRefSource ? " gn2-wrapper--ref-source" : ""}`}
       style={{ zIndex: nodeZIndex }}
     >
-      {/* 未生成 / 参考模式：顶部上传与资产库 */}
       <div className={`gn2-upload-row${showUploadRow ? " gn2-upload-row--visible" : ""}`}>
         <div className="gn2-upload-bar">
-          <button type="button" className="gn2-upload-btn nodrag" onClick={() => uploadRef.current?.click()}>
+          <button type="button" className="gn2-upload-btn nodrag" aria-label={t("canvas.common.upload")} onClick={() => uploadRef.current?.click()}>
             <UploadIcon /> {t("canvas.common.upload")}
           </button>
           <span className="gn2-upload-divider" aria-hidden="true" />
-          <button type="button" className="gn2-upload-btn nodrag" onClick={openAssetLibrary}>
+          <button type="button" className="gn2-upload-btn nodrag" aria-label={t("canvas.image.fromLibrary")} onClick={openAssetLibrary}>
             <AssetLibraryIcon /> {t("canvas.image.fromLibrary")}
           </button>
         </div>
-        <input ref={uploadRef} type="file" accept="image/*" hidden onChange={handleTopUpload} />
+        <input ref={uploadRef} type="file" accept="image/*" hidden onChange={handleTopUpload} aria-label={t("canvas.common.upload")} />
       </div>
 
       {/* 标签行 */}
@@ -1405,12 +1407,12 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
         createPortal(
           <div
             ref={cellMenuPortalRef}
-            className="cell-menu-portal gn2-dots-menu nodrag nopan"
+            className={`cell-menu-portal gn2-dots-menu nodrag nopan ${getThemePageClass()}`}
             style={{
               position: "fixed",
               top: cellMenu.menuPos.y,
               left: cellMenu.menuPos.x,
-              zIndex: 9999,
+              zIndex: Z_NODE_DOTS_MENU,
             }}
             onMouseDown={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
@@ -1474,20 +1476,20 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
               <span>⬇</span>{t("canvas.image.download")}
             </button>
           </div>,
-          document.body
+          getThemePortalRoot()
         )}
 
       {subMenu &&
         createPortal(
           <div
             ref={subMenuPortalRef}
-            className="cell-menu-portal gn2-dots-menu nodrag nopan"
+            className={`cell-menu-portal gn2-dots-menu nodrag nopan ${getThemePageClass()}`}
             style={{
               position: "fixed",
               top: subMenu.pos.y,
               left: subMenu.pos.x,
               width: CELL_SUBMENU_WIDTH,
-              zIndex: 10000,
+              zIndex: Z_NODE_DOTS_MENU + 1,
             }}
             onMouseEnter={() => clearTimeout(submenuHoverTimerRef.current)}
             onMouseLeave={() => {
@@ -1572,7 +1574,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
               </>
             )}
           </div>,
-          document.body
+          getThemePortalRoot()
         )}
 
     </div>

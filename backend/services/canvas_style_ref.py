@@ -11,6 +11,9 @@ from fastapi import HTTPException
 from models.canvas_project import CanvasProject
 
 
+from services.quality_presets import migrate_content_style_to_preset, normalize_quality_preset_id
+
+
 def load_canvas_data(project: CanvasProject) -> dict[str, Any]:
     try:
         data = json.loads(project.data or "{}")
@@ -80,24 +83,26 @@ def get_video_node_style_reference(canvas_data: dict, node_id: str) -> dict | No
     return ref if isinstance(ref, dict) else None
 
 
-def get_script_table_content_style(
+def get_script_table_default_quality_preset(
     canvas_data: dict,
     script_table_node_id: str | None = None,
 ) -> str:
-    """读取项目级内容风格；默认写实电影。"""
+    """读取分镜表默认画风 preset id（含旧 contentStyle 迁移）。"""
 
     def _read(table: dict) -> str:
-        cs = _node_data(table).get("contentStyle")
-        return "generic" if cs == "generic" else "photorealistic_cinema"
+        data = _node_data(table)
+        default_id = data.get("defaultQualityPresetId")
+        content_style = data.get("contentStyle")
+        return migrate_content_style_to_preset(content_style, default_id)
 
     if script_table_node_id:
         node = find_node(canvas_data, script_table_node_id)
         if node and node.get("type") == "script-table":
-            return _read(node)
+            return normalize_quality_preset_id(_read(node))
     for node in canvas_data.get("nodes") or []:
         if isinstance(node, dict) and node.get("type") == "script-table":
-            return _read(node)
-    return "photorealistic_cinema"
+            return normalize_quality_preset_id(_read(node))
+    return "auto"
 
 
 def _sync_row_style_reference(

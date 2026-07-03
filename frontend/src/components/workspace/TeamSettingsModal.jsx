@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { useTeamStore } from "../../stores/teamStore"
+import AnimatedModal from "../common/AnimatedModal"
 import {
   addTeamMember,
   createTeam,
@@ -168,11 +169,13 @@ export default function TeamSettingsModal({ open, onClose, initialTeamId = null 
     }
   }
 
-  if (!open) return null
-
   return (
-    <div className="team-modal-backdrop" onClick={onClose}>
-      <div className="team-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="团队管理">
+    <AnimatedModal
+      open={open}
+      onClose={onClose}
+      overlayClass="team-modal-backdrop"
+      modalClass="team-modal"
+    >
         <header className="team-modal-head">
           <h2>团队管理</h2>
           <button type="button" className="team-modal-close" onClick={onClose} aria-label="关闭">×</button>
@@ -297,7 +300,6 @@ export default function TeamSettingsModal({ open, onClose, initialTeamId = null 
             )}
           </section>
         )}
-      </div>
-    </div>
+    </AnimatedModal>
   )
 }

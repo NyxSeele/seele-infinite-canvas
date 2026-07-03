@@ -10,6 +10,7 @@ import { useNotificationUnread, emitNotificationUnread } from "../../hooks/useNo
 import JoinTeamInputModal from "./JoinTeamInputModal"
 import { MENU_HOVER_MENU_CLOSE_MS } from "../../utils/menuFlyoutTiming"
 import { useThemeTransition } from "../../hooks/useThemeTransition"
+import { IconCredit } from "../canvas/CanvasTopbarIcons"
 
 const PREFS_KEY = "canvas-user-profile-prefs"
 
@@ -110,8 +111,8 @@ export default function WorkspaceTopbar({
 
         <div className="ws-util-capsule">
           <button type="button" className="ws-util-credit" title="Credits">
-            <span className="ws-util-credit-icon">+</span>
-            <span>{creditNum}</span>
+            <IconCredit />
+            <span className="ws-util-credit-num">{creditNum}</span>
           </button>
           <span className="ws-util-sep" />
           <button

@@ -1,17 +1,16 @@
-import { useCallback, useEffect, useState } from "react"
-import { useStore } from "reactflow"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useReactFlow } from "reactflow"
 import { useReferenceSelect } from "./CanvasActionsContext"
 import RefPickerTrigger from "./RefPickerTrigger"
 import AddRefHoverPanel, { RefPickAnchor } from "./AddRefHoverPanel"
 import { DEFAULT_KEYFRAMES, truncateLabel, buildRefItem } from "./videoReferenceHelpers"
-import { useMentionableItems } from "./promptMentions"
-import { ensureMediaUrl } from "../../utils/mediaTicket"
 import { uploadImageFile } from "../../services/uploadImage"
 import useRefAssetEntries from "../../hooks/canvas/useRefAssetEntries"
 import { useLocale } from "../../utils/locale"
 import VideoStyleReferencePanel from "./VideoStyleReferencePanel"
-import { styleReferenceSummary } from "../../utils/canvas/styleReferenceFormat"
-import { IconStyleRef } from "./CanvasTopbarIcons"
+import VideoStylePicker from "./VideoStylePicker"
+import { findScriptTableNode, resolveVideoQualityPresetId } from "../../utils/canvas/scriptTableNode"
+import "./VideoStylePicker.css"
 import "./VideoReferencePanel.css"
 import "./CanvasImageQuickPicker.css"
 
@@ -91,6 +90,7 @@ export default function VideoReferencePanel({
   enhancePanelSlot = null,
 }) {
   const { t } = useLocale()
+  const { getNodes } = useReactFlow()
   const refSelect = useReferenceSelect()
   const { assetEntries, ensureLoaded } = useRefAssetEntries()
   const [styleRefOpen, setStyleRefOpen] = useState(false)
@@ -294,7 +294,26 @@ export default function VideoReferencePanel({
   }, [updateKeyframes])
 
   const styleReference = data.styleReference || null
-  const hasStyleRef = !!styleReference
+  const scriptTableNode = useMemo(() => {
+    const ref = data.scriptTableRef
+    if (ref?.nodeId) {
+      return getNodes().find((n) => n.id === ref.nodeId) || null
+    }
+    return findScriptTableNode(getNodes())
+  }, [data.scriptTableRef, getNodes])
+
+  const qualityPresetId = resolveVideoQualityPresetId(
+    data,
+    scriptTableNode?.data || null
+  )
+
+  const handlePresetChange = useCallback(
+    (presetId) => {
+      data?.onUpdate?.(nodeId, { qualityPresetId: presetId, referenceSlotsOpen: true })
+      onSlotsExpandedChange?.(true)
+    },
+    [data, nodeId, onSlotsExpandedChange]
+  )
 
   const handleStyleReferenceChange = useCallback(
     (ref) => {
@@ -365,23 +384,13 @@ export default function VideoReferencePanel({
             />
           </div>
           {projectId && (
-            <button
-              type="button"
-              className={`video-style-ref-btn nodrag nopan${hasStyleRef ? " video-style-ref-btn--active" : ""}`}
-              title={
-                hasStyleRef
-                  ? styleReferenceSummary(styleReference)
-                  : t("canvas.styleRef.videoBtn")
-              }
-              onClick={(e) => {
-                sp(e)
-                setStyleRefOpen(true)
-              }}
-            >
-              <IconStyleRef />
-              <span className="video-style-ref-btn-label">{t("canvas.styleRef.videoBtnShort")}</span>
-              {hasStyleRef ? <span className="video-style-ref-dot" aria-hidden /> : null}
-            </button>
+            <VideoStylePicker
+              value={qualityPresetId}
+              styleReference={styleReference}
+              readOnly={readOnly}
+              onPresetChange={handlePresetChange}
+              onUploadClick={() => setStyleRefOpen(true)}
+            />
           )}
         </>
       )}
@@ -532,71 +541,6 @@ export default function VideoReferencePanel({
       {slotsSection}
       {keyframePickPop}
       {styleRefModal}
-    </div>
-  )
-}
-
-/** 画布可引用元素列表（@ 提及） */
-export function VideoAtMentionList({
-  open,
-  onSelect,
-  onClose,
-  query = "",
-  excludeNodeId = null,
-  compact = false,
-}) {
-  const { t } = useLocale()
-  const candidates = useMentionableItems(excludeNodeId)
-
-  const filtered = candidates.filter((c) => {
-    const q = (query || "").toLowerCase()
-    if (!q) return true
-    return c.name.toLowerCase().includes(q)
-  })
-
-  if (!open) return null
-
-  return (
-    <div
-      className={`video-at-mention nodrag nopan${compact ? " video-at-mention--compact" : ""}`}
-      onPointerDown={sp}
-    >
-      {filtered.length === 0 ? (
-        <div className="video-at-mention-empty">{t("canvas.video.noRefElements")}</div>
-      ) : (
-        filtered.slice(0, 8).map((c) => (
-          <button
-            key={`${c.id}_${c.image_index ?? 0}_${c.type}`}
-            type="button"
-            className="video-at-mention-item nodrag nopan"
-            onClick={() => {
-              onSelect?.(c)
-              onClose?.()
-            }}
-          >
-            {c.thumbUrl || c.imageUrl ? (
-              c.type === "video" ? (
-                <span className="video-at-mention-thumb video-at-mention-thumb--video">▶</span>
-              ) : (
-                <img
-                  src={ensureMediaUrl(c.thumbUrl || c.imageUrl)}
-                  alt=""
-                  draggable={false}
-                  style={{ pointerEvents: "none" }}
-                />
-              )
-            ) : (
-              <span className="video-at-mention-thumb video-at-mention-thumb--text">T</span>
-            )}
-            <span className="video-at-mention-label">
-              <span className="video-at-mention-name">@{c.name}</span>
-              {c.preview && (
-                <span className="video-at-mention-preview">{c.preview}</span>
-              )}
-            </span>
-          </button>
-        ))
-      )}
     </div>
   )
 }

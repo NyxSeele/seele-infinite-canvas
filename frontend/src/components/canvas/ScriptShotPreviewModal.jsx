@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
 import "../../pages/Canvas.css"
@@ -130,6 +131,6 @@ export default function ScriptShotPreviewModal({
         </div>
       </div>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

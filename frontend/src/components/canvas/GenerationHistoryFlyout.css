@@ -38,11 +38,11 @@
 }
 
 .ghf-flyout--open {
-  animation: ghf-flyout-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: ghf-flyout-in var(--motion-duration-normal, 240ms) var(--motion-ease-out, cubic-bezier(0.16, 1, 0.3, 1)) forwards;
 }
 
 .ghf-flyout--closing {
-  animation: ghf-flyout-out 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: ghf-flyout-out var(--motion-duration-fast, 180ms) var(--motion-ease-in, cubic-bezier(0.4, 0, 1, 1)) forwards;
   pointer-events: none;
 }
 

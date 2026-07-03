@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { createTeamInviteLink, getTeamInviteLink } from "../../services/teamApi"
 import { inviteExpiryLabel } from "../../utils/teamInviteLink"
 import TeamInviteLinkSettingsModal from "./TeamInviteLinkSettingsModal"
+import AnimatedModal from "../common/AnimatedModal"
 import "./TeamInviteModal.css"
 
 function CopyIcon() {
@@ -51,8 +52,6 @@ export default function TeamInviteModal({ open, onClose, teamId, teamName }) {
     return () => { cancelled = true }
   }, [open, teamId, linkKey])
 
-  if (!open) return null
-
   const handleCopy = async () => {
     if (!url) return
     try {
@@ -66,8 +65,12 @@ export default function TeamInviteModal({ open, onClose, teamId, teamName }) {
 
   return (
     <>
-      <div className="tim-backdrop" onClick={onClose}>
-        <div className="tim-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="邀请成员">
+      <AnimatedModal
+        open={open}
+        onClose={onClose}
+        overlayClass="tim-backdrop"
+        modalClass="tim-modal"
+      >
           <header className="tim-head">
             <div>
               <h2>邀请成员</h2>
@@ -115,8 +118,7 @@ export default function TeamInviteModal({ open, onClose, teamId, teamName }) {
               编辑链接设置
             </button>
           </footer>
-        </div>
-      </div>
+      </AnimatedModal>
 
       <TeamInviteLinkSettingsModal
         open={settingsOpen}

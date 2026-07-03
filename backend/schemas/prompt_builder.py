@@ -63,9 +63,13 @@ class BuildScriptShotRequest(BaseModel):
         default=None,
         description="项目级视频风格参考（结构化 JSON）",
     )
-    content_style: Literal["photorealistic_cinema", "generic"] = Field(
-        default="generic",
-        description="项目级内容风格：写实电影 / 通用",
+    quality_preset_id: str = Field(
+        default="auto",
+        description="画风预设 ID（与分镜表 qualityPresetId 对齐）",
+    )
+    trace_id: Optional[str] = Field(
+        default=None,
+        description="Prompt Trace 会话 ID（可选，由前端传入以串联 L0–L4）",
     )
 
 
@@ -107,6 +111,10 @@ class BuildPromptResponse(BaseModel):
         description="视觉参考策略说明（供 UI 提示）",
     )
     shot_linking: Optional[ShotLinkingMeta] = None
+    trace_id: Optional[str] = Field(
+        default=None,
+        description="Prompt Trace 会话 ID（回显）",
+    )
 
 
 class ScriptTableGenerateRequest(BaseModel):

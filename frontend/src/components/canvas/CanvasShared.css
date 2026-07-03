@@ -1,5 +1,59 @@
 @import "../../styles/promptBarTokens.css";
 
+/* ── Shared chrome pill (upload bar, toolbar hover, dropdown triggers) ── */
+.chrome-pill-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: var(--chrome-bg, rgba(255, 255, 255, 0.96));
+  border: 1px solid var(--chrome-border, rgba(0, 0, 0, 0.1));
+  border-radius: 999px;
+  box-shadow: var(--chrome-shadow, 0 8px 24px rgba(0, 0, 0, 0.12));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.chrome-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  color: var(--tl-text-primary, #111111);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.chrome-pill-btn:hover {
+  background: var(--tl-toolbar-btn-hover, rgba(0, 0, 0, 0.06));
+}
+
+.chrome-pill-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--chrome-sep, rgba(0, 0, 0, 0.1));
+  flex-shrink: 0;
+}
+
+.rf-page--dark .chrome-pill-bar {
+  background: var(--chrome-bg, rgba(22, 22, 22, 0.92));
+  border-color: var(--chrome-border, rgba(255, 255, 255, 0.08));
+}
+
+.rf-page--dark .chrome-pill-btn {
+  color: var(--tl-text-primary, rgba(255, 255, 255, 0.92));
+}
+
+.rf-page--dark .chrome-pill-btn:hover {
+  background: var(--tl-toolbar-btn-hover, rgba(255, 255, 255, 0.08));
+}
+
 /* ── React Flow handle: hidden by default, shows on node hover ─ */
 .rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node:not(.selected) .gn2-root,
 .rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node:not(.selected) .tn-wrapper,
@@ -13,7 +67,10 @@
 
 .rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .gn2-root,
 .rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .tn-wrapper,
-.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .tr-wrapper {
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .tr-wrapper,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .st-wrapper,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .ss-wrapper,
+.rf-page--node-focused:not(.ref-select-active):not(.comment-select-active) .react-flow__node.selected .sbc-root {
   opacity: 1;
 }
 

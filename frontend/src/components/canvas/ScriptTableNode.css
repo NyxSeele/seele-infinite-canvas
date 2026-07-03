@@ -136,7 +136,8 @@
   background: var(--tl-card-bg);
   border-radius: 0 0 16px 16px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
   pointer-events: all;
   position: relative;
   box-sizing: border-box;
@@ -243,6 +244,24 @@
   border: 1px solid var(--tl-card-border);
   border-radius: 6px;
   padding: 4px 8px;
+}
+
+.st-toolbar-pills .vsp-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.st-toolbar-pills .vsp-trigger {
+  height: auto;
+  min-height: 28px;
+  font-size: 13px;
+  max-width: min(220px, 40vw);
+}
+
+.st-toolbar:has(.vsp-wrap .vsp-trigger--open) {
+  position: relative;
+  z-index: 40;
 }
 
 .st-toolbar-row--models {
@@ -360,10 +379,19 @@
   white-space: nowrap;
 }
 
+.st-model-dropup--open {
+  position: relative;
+  z-index: 50;
+}
+
 .st-model-dropup .nb-dropup-wrap,
 .st-model-dropup-wrap {
   position: relative;
-  z-index: 1;
+}
+
+.st-toolbar:has(.st-model-dropup--open) {
+  position: relative;
+  z-index: 40;
 }
 
 .st-model-dropup-wrap .nb-dropdown-menu {
@@ -898,55 +926,75 @@
 
 .st-lut-panel {
   margin: 8px 0 12px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--st-surface-muted, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--st-border, rgba(255, 255, 255, 0.08));
 }
 
 .st-lut-panel-body {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   margin-top: 8px;
+}
+
+.st-lut-preset-group {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .st-lut-preset-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  flex: 1;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.st-lut-preset-list > li {
+  flex: 0 0 auto;
 }
 
 .st-lut-preset-btn {
-  width: 100%;
-  text-align: left;
-  padding: 6px 10px;
+  width: auto;
+  white-space: nowrap;
+  text-align: center;
+  padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--tl-card-border);
+  background: var(--tl-toolbar-btn-bg);
+  color: var(--tl-text-secondary);
   cursor: pointer;
   font-size: 13px;
+  font-weight: 600;
+}
+
+.st-lut-preset-btn:hover:not(:disabled) {
+  color: var(--tl-text-primary);
+  background: var(--tl-toolbar-btn-hover);
 }
 
 .st-lut-preset-btn--active {
-  background: var(--tl-toolbar-btn-hover, rgba(255, 255, 255, 0.08));
-  border-color: var(--tl-border, rgba(255, 255, 255, 0.12));
+  background: rgba(167, 139, 250, 0.18);
+  color: var(--tl-text-primary);
+  border-color: rgba(167, 139, 250, 0.35);
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.35);
 }
 
 .st-lut-upload-col {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  min-width: 160px;
+  flex: 0 0 auto;
 }
 
 .st-lut-custom-name {
   font-size: 12px;
   margin: 0;
   word-break: break-all;
+  color: var(--tl-text-secondary);
 }
 
 .st-lut-apply-all-btn {

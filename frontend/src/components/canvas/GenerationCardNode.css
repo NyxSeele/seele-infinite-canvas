@@ -10,35 +10,50 @@
   position: relative;
 }
 
-/* 卡片顶部：上传 / 资产库 */
+/* 卡片顶部：上传 / 资产库 — 浮在整节点（含标签行）上方，不参与 flex 布局 */
 .gn2-upload-row {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  z-index: 30;
   display: flex;
   justify-content: center;
   align-items: center;
-  padding-bottom: 8px;
+  width: max-content;
+  transform: translate(-50%, calc(-100% - 12px));
   pointer-events: none;
   opacity: 0;
-  transform: translateY(4px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+  height: auto;
+  padding: 0;
+  overflow: visible;
 }
 .gn2-upload-row--visible {
   opacity: 1;
-  transform: translateY(0);
+  visibility: visible;
   pointer-events: all;
 }
-.gn2-upload-bar {
+@media (prefers-reduced-motion: reduce) {
+  .gn2-upload-row {
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+  }
+}
+.gn2-upload-bar,
+.chrome-pill-bar {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   padding: 4px 6px;
-  background: var(--chrome-bg);
-  border: 1px solid var(--chrome-border);
+  background: var(--chrome-bg, rgba(255, 255, 255, 0.96));
+  border: 1px solid var(--chrome-border, rgba(0, 0, 0, 0.1));
   border-radius: 999px;
-  box-shadow: var(--chrome-shadow);
+  box-shadow: var(--chrome-shadow, 0 8px 24px rgba(0, 0, 0, 0.12));
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
-.gn2-upload-btn {
+.gn2-upload-btn,
+.chrome-pill-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -53,10 +68,12 @@
   transition: background 0.15s, color 0.15s;
   white-space: nowrap;
 }
-.gn2-upload-btn:hover {
+.gn2-upload-btn:hover,
+.chrome-pill-btn:hover {
   background: var(--tl-toolbar-btn-hover);
 }
-.gn2-upload-divider {
+.gn2-upload-divider,
+.chrome-pill-divider {
   width: 1px;
   height: 16px;
   background: var(--chrome-sep);

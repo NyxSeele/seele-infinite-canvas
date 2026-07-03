@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
 import {
@@ -231,6 +232,6 @@ export default function VideoStyleReferencePanel({
         />
       </div>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

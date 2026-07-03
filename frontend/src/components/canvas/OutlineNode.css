@@ -17,6 +17,16 @@
   overflow: hidden;
 }
 
+.outline-card--selected {
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.6), 0 0 18px 4px rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.rf-page--light .outline-card--selected {
+  box-shadow: 0 0 0 1.5px rgba(130, 130, 130, 0.35), 0 0 18px 4px rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.22);
+}
+
 .outline-card--readonly .outline-node-body,
 .outline-card--readonly .outline-node-footer,
 .outline-card--readonly .outline-version-tabs {

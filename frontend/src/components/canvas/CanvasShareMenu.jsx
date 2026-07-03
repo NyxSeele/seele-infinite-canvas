@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { Link } from "lucide-react"
 import { useLocale } from "../../utils/locale"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
 import { showDevNotice } from "../common/ProductNoticeModal"
 
 function IconLink() {
@@ -160,7 +161,7 @@ export default function CanvasShareMenu({
   return createPortal(
     <div
       ref={panelRef}
-      className="ctb-share-menu"
+      className={`ctb-share-menu ${getThemePageClass()}`}
       style={{ top: pos.top, left: pos.left }}
       role="menu"
       aria-label={t("canvas.topbar.share")}
@@ -180,6 +181,6 @@ export default function CanvasShareMenu({
         </button>
       ))}
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

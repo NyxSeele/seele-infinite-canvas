@@ -108,6 +108,12 @@ class CanvasImageRequest(BaseModel):
     mentions: Optional[list[CanvasMention]] = Field(
         default=None, description="@ 引用的画布节点"
     )
+    trace_id: Optional[str] = Field(
+        default=None, description="Prompt Trace 会话 ID"
+    )
+    quality_preset_id: Optional[str] = Field(
+        default=None, description="画风预设 ID（trace 展示用）"
+    )
 
 
 class CanvasVideoRequest(BaseModel):
@@ -143,6 +149,12 @@ class CanvasVideoRequest(BaseModel):
     client_id: Optional[str] = Field(
         default=None,
         description="与前端 WebSocket 一致的 clientId，用于接收 ComfyUI 进度推送",
+    )
+    trace_id: Optional[str] = Field(
+        default=None, description="Prompt Trace 会话 ID"
+    )
+    quality_preset_id: Optional[str] = Field(
+        default=None, description="画风预设 ID（注入 prompt suffix）"
     )
 
 
@@ -181,13 +193,16 @@ class VideoEnhanceRequest(BaseModel):
         default=None,
         description="与前端 WebSocket 一致的 clientId",
     )
+    trace_id: Optional[str] = Field(
+        default=None, description="Prompt Trace 会话 ID"
+    )
 
 
 class VideoEnhanceRecommendRequest(BaseModel):
     video_url: str = Field(..., description="待分析视频 URL")
     project_id: Optional[str] = Field(default=None, description="画布项目 ID")
     script_table_node_id: Optional[str] = Field(
-        default=None, description="分镜表节点 ID（读取 contentStyle）"
+        default=None, description="分镜表节点 ID（读取 defaultQualityPresetId）"
     )
 
 
@@ -202,3 +217,6 @@ class VideoLutRequest(BaseModel):
     project_id: str = Field(..., description="画布项目 ID")
     script_table_node_id: str = Field(..., description="分镜表节点 ID")
     team_id: Optional[str] = Field(default=None)
+    trace_id: Optional[str] = Field(
+        default=None, description="Prompt Trace 会话 ID"
+    )

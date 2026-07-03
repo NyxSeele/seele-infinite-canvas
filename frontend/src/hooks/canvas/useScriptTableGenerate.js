@@ -12,9 +12,7 @@ import {
   resolveSceneRefsForRow,
 } from "../../utils/canvas/entityRefs"
 import { useAssetStore } from "../../stores/assetStore"
-import {
-  getScriptTableContentStyle,
-} from "../../utils/canvas/contentStylePresets"
+import { getEffectiveQualityPresetId } from "../../utils/canvas/scriptTableNode"
 import { appendDirectorFieldsToDescription } from "../../utils/canvas/shotDirectorFields"
 import {
   BEAT_CARD_NODE_TYPE,
@@ -54,6 +52,13 @@ import {
 
 const KEYFRAME_Y_STEP = SCRIPT_KEYFRAME_Y_STEP
 const VIDEO_NODE_EXTRA_Y = 140
+
+function newTraceId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `trace-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+}
 
 function resolveBeatCard(nodes, row) {
   if (!row?.beatCardNodeId) return null
@@ -208,11 +213,12 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             .slice(0, MAX_CHAR_REFS)
         }
 
+        const traceId = newTraceId()
         const buildRes = await api.post("/api/prompt/build-shot", {
           description: rowDesc,
           model_id: modelId,
           global_style: "",
-          content_style: getScriptTableContentStyle(scriptNode.data),
+          quality_preset_id: getEffectiveQualityPresetId(row, scriptNode.data),
           theme_context: castContext || scriptNode.data.themeContext || "",
           prior_shots: priorShots,
           shot_number: row.shotNumber ?? rowIndex + 1,
@@ -222,6 +228,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             prevRow?.directResultUrl || getLastKeyframeResult(prevRow)
           ),
           has_manual_reference: manualRefs.length > 0,
+          trace_id: traceId,
         })
 
         const {
@@ -231,7 +238,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           use_visual_reference: useVisualReference,
           img2img_denoise: suggestedDenoise,
           visual_reference_note: visualReferenceNote,
+          trace_id: traceIdFromApi,
         } = buildRes.data
+        const sessionTraceId = traceIdFromApi || traceId
 
         if (!(prompt || "").trim()) {
           patchScriptTableRow(scriptTableNodeId, rowId, {
@@ -281,6 +290,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           generationPrompt: prompt,
           displayPrompt: uiPrompt,
           modelId,
+          traceId: sessionTraceId,
           referenceImageUrl: refUrl,
           referenceImage: refUrl,
           referenceImages: resolvedRefs.length
@@ -463,11 +473,12 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             .slice(0, MAX_CHAR_REFS)
         }
 
+        const traceId = newTraceId()
         const buildRes = await api.post("/api/prompt/build-shot", {
           description: rowDesc,
           model_id: modelId,
           global_style: "",
-          content_style: getScriptTableContentStyle(scriptNode.data),
+          quality_preset_id: getEffectiveQualityPresetId(row, scriptNode.data),
           theme_context: castContext || scriptNode.data.themeContext || "",
           prior_shots: priorShots,
           shot_number: row.shotNumber ?? rowIndex + 1,
@@ -477,6 +488,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             prevKfInRow?.resultUrl || getLastKeyframeResult(prevRow)
           ),
           has_manual_reference: manualRefs.length > 0,
+          trace_id: traceId,
         })
 
         const {
@@ -486,7 +498,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           use_visual_reference: useVisualReference,
           img2img_denoise: suggestedDenoise,
           visual_reference_note: visualReferenceNote,
+          trace_id: traceIdFromApi,
         } = buildRes.data
+        const sessionTraceId = traceIdFromApi || traceId
 
         if (!(prompt || "").trim()) {
           patchScriptTableKeyframe(scriptTableNodeId, rowId, keyframeId, {
@@ -543,6 +557,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           generationPrompt: prompt,
           displayPrompt: uiPrompt,
           modelId,
+          traceId: sessionTraceId,
           referenceImageUrl: refUrl,
           referenceImage: refUrl,
           referenceImages: resolvedRefs.length
@@ -764,6 +779,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         label,
         prompt: videoPrompt,
         modelId: videoModelId,
+        qualityPresetId: getEffectiveQualityPresetId(row, scriptNode.data),
         keyframes: { first: firstRef, last: firstRef },
         referenceMode: "keyframe",
         vidDuration: `${durationSec}s`,
@@ -896,6 +912,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         label,
         prompt: videoPrompt,
         modelId: videoModelId,
+        qualityPresetId: getEffectiveQualityPresetId(row, scriptNode.data),
         keyframes: { first: firstRef, last: lastRef },
         referenceMode: "keyframe",
         vidDuration: `${durationSec}s`,

@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
+import { useStore } from "reactflow"
 import { useLocale } from "../../utils/locale"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_DROPDOWN } from "../../utils/zIndexLayers"
+import { closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import "./NodeBanner.css"
 
 const sp = (e) => e.stopPropagation()
 
 /**
- * 与文本/图像卡一致的模型选择器：固定前置 tag + 下拉菜单
+ * 与文本/图像卡一致的模型选择器：固定前置 tag + 下拉菜单（portal 避免被分镜卡遮挡）
  */
 export default function CanvasModelDropup({
   tag,
@@ -20,7 +25,9 @@ export default function CanvasModelDropup({
 }) {
   const { t } = useLocale()
   const [open, setOpen] = useState(false)
+  const [menuStyle, setMenuStyle] = useState(null)
   const wrapRef = useRef(null)
+  const anchorRef = useRef(null)
   const label =
     models.find((m) => m.id === value)?.display_name
     || models.find((m) => (m.id || m.display_name) === value)?.display_name
@@ -29,9 +36,46 @@ export default function CanvasModelDropup({
 
   const btnClass = bare ? "nb-model-btn-bare" : "nb-model-btn"
   const menuClass = direction === "up" ? "nb-dropup-menu" : "nb-dropdown-menu"
+  const viewportTransform = useStore((s) => s.transform)
+
+  const updateMenuPosition = useCallback(() => {
+    const el = anchorRef.current
+    if (!el) return false
+    const rect = el.getBoundingClientRect()
+    if (
+      rect.bottom < 0
+      || rect.top > window.innerHeight
+      || rect.right < 0
+      || rect.left > window.innerWidth
+    ) {
+      return false
+    }
+    if (direction === "up") {
+      setMenuStyle({
+        position: "fixed",
+        left: rect.left,
+        bottom: window.innerHeight - rect.top + 6,
+        minWidth: Math.max(rect.width, 180),
+        zIndex: Z_DROPDOWN,
+      })
+    } else {
+      setMenuStyle({
+        position: "fixed",
+        left: rect.left,
+        top: rect.bottom + 6,
+        minWidth: Math.max(rect.width, 180),
+        zIndex: Z_DROPDOWN,
+      })
+    }
+    return true
+  }, [direction])
 
   useEffect(() => {
     if (!open) return undefined
+
+    const closeSelf = () => setOpen(false)
+    openCanvasDropdown(closeSelf)
+    updateMenuPosition()
 
     const isInside = (e) => {
       const path = e.composedPath?.() || []
@@ -39,55 +83,85 @@ export default function CanvasModelDropup({
       return wrapRef.current?.contains(e.target)
     }
 
-    const close = () => setOpen(false)
-
     const onPointerDown = (e) => {
-      if (!isInside(e)) close()
+      if (!isInside(e) && !e.target.closest?.(".nb-dropdown-menu--portal, .nb-dropup-menu--portal")) {
+        closeSelf()
+      }
     }
     const onKeyDown = (e) => {
-      if (e.key === "Escape") close()
+      if (e.key === "Escape") closeSelf()
     }
-    const onScroll = () => close()
+    const onReflow = () => updateMenuPosition()
 
     document.addEventListener("pointerdown", onPointerDown, true)
     document.addEventListener("keydown", onKeyDown)
-    window.addEventListener("scroll", onScroll, true)
-    window.addEventListener("resize", close)
+    window.addEventListener("scroll", onReflow, true)
+    window.addEventListener("resize", onReflow)
 
     return () => {
+      closeCanvasDropdown(closeSelf)
       document.removeEventListener("pointerdown", onPointerDown, true)
       document.removeEventListener("keydown", onKeyDown)
-      window.removeEventListener("scroll", onScroll, true)
-      window.removeEventListener("resize", close)
+      window.removeEventListener("scroll", onReflow, true)
+      window.removeEventListener("resize", onReflow)
     }
-  }, [open])
+  }, [open, updateMenuPosition])
+
+  // 画布平移/缩放、节点拖动时持续对齐锚点（fixed portal 不随 React Flow transform 自动移动）
+  useEffect(() => {
+    if (!open) return undefined
+    let rafId = 0
+    const tick = () => {
+      const ok = updateMenuPosition()
+      if (!ok) {
+        setOpen(false)
+        return
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [open, updateMenuPosition, viewportTransform])
+
+  const menuPortal = open && models.length > 0 && menuStyle
+    ? createPortal(
+        <div
+          className={`${menuClass}${direction === "up" ? " nb-dropup-menu--portal" : " nb-dropdown-menu--portal"} nodrag ${getThemePageClass()}`}
+          style={menuStyle}
+          onPointerDown={sp}
+        >
+          {models.map((m) => {
+            const id = m.id || m.display_name
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`nb-dropup-item nodrag${value === id ? " nb-dropup-item--active" : ""}`}
+                onClick={(e) => {
+                  sp(e)
+                  onChange?.(id)
+                  setOpen(false)
+                }}
+              >
+                {m.display_name || m.id}
+              </button>
+            )
+          })}
+        </div>,
+        getThemePortalRoot()
+      )
+    : null
 
   return (
-    <div className="st-model-dropup nodrag" title={title} ref={wrapRef}>
+    <div
+      className={`st-model-dropup nodrag${open ? " st-model-dropup--open" : ""}`}
+      title={title}
+      ref={wrapRef}
+    >
       {tag && <span className="st-model-tag cn-param-key">{tag}</span>}
       <div className="nb-dropup-wrap st-model-dropup-wrap">
-        {open && models.length > 0 && (
-          <div className={`${menuClass} nodrag`} onPointerDown={sp}>
-            {models.map((m) => {
-              const id = m.id || m.display_name
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className={`nb-dropup-item nodrag${value === id ? " nb-dropup-item--active" : ""}`}
-                  onClick={(e) => {
-                    sp(e)
-                    onChange?.(id)
-                    setOpen(false)
-                  }}
-                >
-                  {m.display_name || m.id}
-                </button>
-              )
-            })}
-          </div>
-        )}
         <button
+          ref={anchorRef}
           type="button"
           className={`${btnClass} nodrag`}
           disabled={disabled || models.length === 0}
@@ -105,6 +179,7 @@ export default function CanvasModelDropup({
           <span className="nb-model-btn-label">{label}</span>
         </button>
       </div>
+      {menuPortal}
     </div>
   )
 }

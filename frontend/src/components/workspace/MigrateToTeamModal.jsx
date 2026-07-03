@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
-import { createPortal } from "react-dom"
 import { useLocale } from "../../utils/locale"
+import AnimatedModal from "../common/AnimatedModal"
 
 const EDIT_ROLES = new Set(["owner", "admin", "editor"])
 
@@ -24,8 +24,6 @@ export default function MigrateToTeamModal({
     setSelectedId(teams[0]?.id || "")
   }, [open, teams])
 
-  if (!open) return null
-
   const handleConfirm = async () => {
     if (!selectedId || loading) return
     setLoading(true)
@@ -36,9 +34,8 @@ export default function MigrateToTeamModal({
     }
   }
 
-  return createPortal(
-    <div className="ws-modal-overlay" onClick={onClose}>
-      <div className="ws-modal" onClick={(e) => e.stopPropagation()}>
+  return (
+    <AnimatedModal open={open} onClose={onClose}>
         <div className="ws-modal-title">{t("ws.project.migrateTitle")}</div>
         <p className="ws-modal-body">
           {t("ws.project.migrateBody", { name: projectName })}
@@ -76,8 +73,6 @@ export default function MigrateToTeamModal({
             {loading ? t("ws.project.migrateLoading") : t("ws.project.migrateConfirm")}
           </button>
         </div>
-      </div>
-    </div>,
-    document.body
+    </AnimatedModal>
   )
 }

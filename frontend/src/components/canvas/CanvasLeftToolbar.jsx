@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react"
+import { createPortal } from "react-dom"
 import { useAuth } from "../../contexts/AuthContext"
 import { useNavigate } from "react-router-dom"
 import { useCanvasStore } from "../../stores"
@@ -11,6 +12,7 @@ import { LineIcon } from "../icons/LineIcons"
 import { IconCredit } from "./CanvasTopbarIcons"
 import { useLocale } from "../../utils/locale"
 import { useThemeTransition } from "../../hooks/useThemeTransition"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
 
 const APP_VERSION = `v${pkg.version}`
 const PREFS_KEY = "canvas-user-profile-prefs"
@@ -27,10 +29,56 @@ function readDisplayName(fallback) {
 export { pushGenHistory, readGenHistory }
 
 function CltItemWrap({ label, className = "", children }) {
+  const wrapRef = useRef(null)
+  const [hovered, setHovered] = useState(false)
+  const [pillPos, setPillPos] = useState(null)
+
+  const updatePillPos = useCallback(() => {
+    const r = wrapRef.current?.getBoundingClientRect()
+    if (!r) return
+    setPillPos({
+      left: r.right + 8,
+      top: r.top + r.height / 2,
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!hovered) {
+      setPillPos(null)
+      return undefined
+    }
+    updatePillPos()
+    window.addEventListener("scroll", updatePillPos, true)
+    window.addEventListener("resize", updatePillPos)
+    return () => {
+      window.removeEventListener("scroll", updatePillPos, true)
+      window.removeEventListener("resize", updatePillPos)
+    }
+  }, [hovered, updatePillPos])
+
+  const portalPill = hovered && pillPos
+    ? createPortal(
+        <span
+          className={`clt-hover-pill clt-hover-pill--portal ${getThemePageClass()}`}
+          style={{ left: pillPos.left, top: pillPos.top }}
+          aria-hidden
+        >
+          {label}
+        </span>,
+        getThemePortalRoot(),
+      )
+    : null
+
   return (
-    <div className={`clt-item-wrap${className ? ` ${className}` : ""}`}>
+    <div
+      ref={wrapRef}
+      className={`clt-item-wrap${className ? ` ${className}` : ""}`}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       {children}
-      <span className="clt-hover-pill" aria-hidden>{label}</span>
+      <span className="clt-hover-pill clt-hover-pill--inline" aria-hidden>{label}</span>
+      {portalPill}
     </div>
   )
 }
@@ -300,22 +348,21 @@ export default function CanvasLeftToolbar({
           )}
         </CltItemWrap>
 
-        {TOOLBAR_ITEMS.map(({ id, Icon, labelKey, action, dynamicLabel }) => (
+        {TOOLBAR_ITEMS.map(({ id, Icon, labelKey, action, dynamicLabel }) => {
+          const isItemActive =
+            activePanel === id
+            || (id === "assets" && assetLibraryOpen)
+            || (id === "history" && genHistoryOpen)
+            || (id === "comment" && commentMode)
+            || (id === "fullscreen" && isFullscreen)
+          return (
           <CltItemWrap
             key={id}
             label={dynamicLabel && isFullscreen ? t("canvas.toolbar.exitFullscreen") : t(labelKey)}
             className={id === "comment" ? "clt-item-wrap--comment" : ""}
           >
             <button
-              className={`clt-btn${
-                activePanel === id
-                || (id === "assets" && assetLibraryOpen)
-                || (id === "history" && genHistoryOpen)
-                || (id === "comment" && commentMode)
-                || (id === "fullscreen" && isFullscreen)
-                  ? " clt-btn--active"
-                  : ""
-              }`}
+              className={`clt-btn${isItemActive ? " clt-btn--active" : ""}`}
               onClick={() => handleAction(action)}
             >
               {id === "fullscreen" ? <Icon exit={isFullscreen} /> : <Icon />}
@@ -324,7 +371,8 @@ export default function CanvasLeftToolbar({
               )}
             </button>
           </CltItemWrap>
-        ))}
+          )
+        })}
       </div>
 
       <div className="clt-bottom">

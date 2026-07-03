@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useLocale } from "../../utils/locale"
 import "./ProductNoticeModal.css"
 
@@ -72,6 +73,6 @@ export default function ProductNoticeModal() {
         </button>
       </div>
     </div>,
-    document.body
+    getThemePortalRoot()
   )
 }

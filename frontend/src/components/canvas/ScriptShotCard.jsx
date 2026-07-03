@@ -1,22 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { MAX_SHOT_DURATION, rowDirectImageReady } from "../../utils/canvas/scriptTableKeyframes"
 import { getRetryPolicy } from "../../utils/canvas/generationRetryPolicy"
-import { SCRIPT_QUALITY_PRESETS, applyQualityPresetToRow } from "../../utils/canvas/scriptQualityPresets"
+import { applyQualityPresetToRow } from "../../utils/canvas/scriptQualityPresets"
 import { useLocale } from "../../utils/locale"
 import ScriptRowPromptField from "./ScriptRowPromptField"
 import ScriptShotDirectorPanel from "./ScriptShotDirectorPanel"
-import CanvasModelDropup from "./CanvasModelDropup"
+import VideoStylePicker from "./VideoStylePicker"
+import { closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import "./ScriptShotCard.css"
 import "./NodeBanner.css"
-
-const PresetIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-    <rect x="1" y="2" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
-    <rect x="7" y="2" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
-    <rect x="1" y="7" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
-    <rect x="7" y="7" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1.1"/>
-  </svg>
-)
+import "./VideoStylePicker.css"
 
 const DragHandleIcon = () => (
   <svg width="12" height="16" viewBox="0 0 12 16" fill="none" aria-hidden>
@@ -70,11 +63,16 @@ export default function ScriptShotCard({
 
   useEffect(() => {
     if (!moreOpen) return undefined
+    const closeSelf = () => setMoreOpen(false)
+    openCanvasDropdown(closeSelf)
     const close = (e) => {
       if (moreRef.current && !moreRef.current.contains(e.target)) setMoreOpen(false)
     }
     document.addEventListener("mousedown", close)
-    return () => document.removeEventListener("mousedown", close)
+    return () => {
+      document.removeEventListener("mousedown", close)
+      closeCanvasDropdown(closeSelf)
+    }
   }, [moreOpen])
 
   return (
@@ -132,18 +130,12 @@ export default function ScriptShotCard({
               onPointerDown={sp}
             />
           </label>
-          <CanvasModelDropup
-            tag={t("canvas.script.style")}
-            icon={PresetIcon}
-            models={SCRIPT_QUALITY_PRESETS.map((p) => ({
-              id: p.id,
-              display_name: p.name,
-            }))}
+          <VideoStylePicker
             value={presetId}
-            direction="down"
-            disabled={readOnly}
-            onChange={(id) => onUpdateRow(row.id, applyQualityPresetToRow(row, id))}
+            showUploadSection={false}
+            readOnly={readOnly}
             title={t("canvas.script.shotStyleTitle")}
+            onPresetChange={(id) => onUpdateRow(row.id, applyQualityPresetToRow(row, id))}
           />
           {sceneOptions.length > 0 ? (
             <label className="st-shot-card-scene nodrag">

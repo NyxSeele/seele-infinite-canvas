@@ -2,7 +2,7 @@ import { useCallback, useRef } from "react"
 import { addEdge, applyEdgeChanges } from "reactflow"
 import { useCanvasStore } from "../../stores"
 import { makeEmptyScriptRow } from "../../components/canvas/ScriptTableNode"
-import { makeId, NODE_WIDTHS_MAP } from "../../utils/canvas/nodeHelpers"
+import { makeId, NODE_WIDTHS_MAP, isEmptyImageGenNode } from "../../utils/canvas/nodeHelpers"
 import {
   hasFlyoutDrag,
   parseFlyoutDrop,
@@ -15,7 +15,6 @@ export function useCanvasInteraction({
   setNodes,
   setEdges,
   getNode,
-  project,
   createNode,
   buildData,
   selectedNodeId,
@@ -177,7 +176,11 @@ export function useCanvasInteraction({
             visualContinuity: false,
           }
         : {}
-      const newId = createNode(type, screenPos, extra)
+      const placement =
+        pm?.fromEdge && pm?.sourceNodeId
+          ? { anchorNodeId: pm.sourceNodeId }
+          : { anchorNodeId: selectedNodeId || null }
+      const newId = createNode(type, screenPos, extra, placement)
       if (pm?.fromEdge && pm?.sourceNodeId && newId) {
         const sourceNode = nodes.find((n) => n.id === pm.sourceNodeId)
         setEdges((es) =>
@@ -195,7 +198,7 @@ export function useCanvasInteraction({
       }
       setPickerMenu(null)
     },
-    [createNode, nodes, setEdges, setNodes, buildData, pickerMenuRef, setPickerMenu, pushHistory]
+    [createNode, nodes, setEdges, setNodes, buildData, pickerMenuRef, setPickerMenu, pushHistory, selectedNodeId]
   )
 
   const handlePaneDblClick = useCallback((e) => {
@@ -230,6 +233,9 @@ export function useCanvasInteraction({
   }, [commentMode, setPickerMenu, setContextMenu])
 
   const handlePaneClick = useCallback(() => {
+    if (document.activeElement?.closest?.(".ccp-marker-pin")) {
+      document.activeElement.blur()
+    }
     if (commentMode) return
     window.dispatchEvent(new Event("canvas-close-param-panels"))
     setPickerMenu(null)
@@ -251,35 +257,73 @@ export function useCanvasInteraction({
       try {
         const { uploadImageFile } = await import("../../services/uploadImage")
         const url = await uploadImageFile(file)
+        const selected = selectedNodeId ? getNode(selectedNodeId) : null
+        if (isEmptyImageGenNode(selected) && selected.data?.onUpdate) {
+          pushHistory?.()
+          selected.data.onUpdate(selectedNodeId, {
+            uploadedImage: url,
+            imageSource: "upload",
+            status: "input",
+            error: null,
+          })
+          return
+        }
         const screenPos = { x: window.innerWidth / 2, y: window.innerHeight / 2 }
         pushHistory?.()
-        createNode("image-gen", screenPos, {
-          uploadedImage: url,
-          imageSource: "upload",
-          status: "completed",
-        })
+        const id = createNode(
+          "image-gen",
+          screenPos,
+          {
+            uploadedImage: url,
+            imageSource: "upload",
+            status: "input",
+          },
+          { anchorNodeId: selectedNodeId || null },
+        )
+        if (id) {
+          setSelectedNodeId(id)
+          raiseNodeToFront(id)
+        }
       } catch (err) {
         console.error("上传失败", err)
       }
     }
     input.click()
-  }, [createNode, pushHistory])
+  }, [createNode, getNode, pushHistory, raiseNodeToFront, selectedNodeId, setSelectedNodeId])
 
   const handleAddNodeOfType = useCallback(
     (type) => {
       if (type === "image-upload") { handleUploadImage(); return }
       pushHistory?.()
-      createNode(type, { x: window.innerWidth / 2, y: window.innerHeight / 2 })
+      const id = createNode(
+        type,
+        { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+        {},
+        { anchorNodeId: selectedNodeId || null },
+      )
+      if (id) {
+        setSelectedNodeId(id)
+        raiseNodeToFront(id)
+      }
     },
-    [createNode, handleUploadImage, pushHistory]
+    [createNode, handleUploadImage, pushHistory, raiseNodeToFront, selectedNodeId, setSelectedNodeId]
   )
 
   const handleQuickCreate = useCallback(
     (type) => {
       pushHistory?.()
-      createNode(type, { x: window.innerWidth / 2, y: window.innerHeight / 2 })
+      const id = createNode(
+        type,
+        { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+        {},
+        { anchorNodeId: selectedNodeId || null },
+      )
+      if (id) {
+        setSelectedNodeId(id)
+        raiseNodeToFront(id)
+      }
     },
-    [createNode, pushHistory]
+    [createNode, pushHistory, raiseNodeToFront, selectedNodeId, setSelectedNodeId]
   )
 
   const handleNodeDragStart = useCallback((_e, node) => {
@@ -325,7 +369,7 @@ export function useCanvasInteraction({
       if (item.source === "asset") {
         id = createNode("image-gen", screenPos, {
           prompt: item.name || "",
-          status: "completed",
+          status: "input",
           uploadedImage: item.imageUrl,
           imageSource: "asset",
         })
@@ -338,7 +382,7 @@ export function useCanvasInteraction({
       } else {
         id = createNode("image-gen", screenPos, {
           prompt: item.prompt || "",
-          status: "completed",
+          status: "input",
           uploadedImage: item.resultUrl,
           imageSource: "history",
         })
