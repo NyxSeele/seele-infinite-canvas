@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../../contexts/AuthContext"
 import { useCanvasStore } from "../../stores"
@@ -12,6 +13,8 @@ import AvatarCropModal from "../workspace/AvatarCropModal"
 import { useLocale } from "../../utils/locale"
 import { useThemeTransition } from "../../hooks/useThemeTransition"
 import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_WS_MODAL } from "../../utils/zIndexLayers"
 import pkg from "../../../package.json"
 import "./CanvasProfileModal.css"
 
@@ -227,10 +230,10 @@ export default function CanvasProfileModal() {
     exitClass: closing ? "motion-modal-out" : "",
   })
 
-  return (
+  return createPortal(
     <>
     {mounted && (
-    <div className={overlayClasses} onPointerDown={handleBackdropPointerDown}>
+    <div className={overlayClasses} style={{ zIndex: Z_WS_MODAL }} onPointerDown={handleBackdropPointerDown}>
       <div
         className={modalClasses}
         onPointerDown={(e) => e.stopPropagation()}
@@ -406,6 +409,7 @@ export default function CanvasProfileModal() {
       onConfirm={handleCropConfirm}
       onCancel={handleCropCancel}
     />
-    </>
+    </>,
+    getThemePortalRoot(),
   )
 }

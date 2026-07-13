@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 
+from core.logging_setup import studio_print
 from services.qwen import _call_llm
 
 MAX_SHOT_DURATION = 15
@@ -164,6 +165,11 @@ async def split_shot_beats(payload: dict, *, use_llm: bool = True) -> dict:
     }
 
     try:
+        beats_target = _beat_count(duration)
+        studio_print(
+            "trace",
+            f"A5 BEATS_INPUT shots_count=1 beats_target={beats_target}",
+        )
         raw, _ = await _call_llm(
             _SYSTEM,
             json.dumps(user, ensure_ascii=False, indent=2),
@@ -171,6 +177,10 @@ async def split_shot_beats(payload: dict, *, use_llm: bool = True) -> dict:
         )
         parsed = _parse_llm_beats(raw, duration)
         if parsed:
+            studio_print(
+                "trace",
+                f"A5 BEATS_OUTPUT beats_count={len(parsed)} beats_per_shot={len(parsed)}",
+            )
             return {"beats": parsed, "source": "llm", "duration": duration}
     except Exception:
         pass

@@ -147,6 +147,17 @@ async def run_mock_video_task(task_id: str, failure_rate: float) -> None:
         _release_task_slots(task)
         db.commit()
         logger.info("mock video task completed task_id=%s src=%s", task_id, src.name)
+        if bool(getattr(task, "use_reactor", False)):
+            from services.reactor_video import maybe_apply_reactor_video
+
+            asyncio.create_task(maybe_apply_reactor_video(task_id))
+        elif (
+            (task.sound_note or "").strip()
+            and (task.video_backend or "").strip().lower() != "ltx2"
+        ):
+            from services.audiogen_postprocess import maybe_apply_sound_note_mix
+
+            asyncio.create_task(maybe_apply_sound_note_mix(task_id))
     except Exception:
         db.rollback()
         logger.exception("mock video task error task_id=%s", task_id)

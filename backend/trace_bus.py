@@ -16,7 +16,7 @@ def get_trace_queue() -> asyncio.Queue:
     return _trace_queue
 
 
-async def push_trace(layer: int, tag: str, data: dict) -> None:
+async def push_trace(layer: int | str, tag: str, data: dict) -> None:
     queue = get_trace_queue()
     await queue.put(
         {
@@ -31,15 +31,25 @@ async def push_trace(layer: int, tag: str, data: dict) -> None:
 def extract_workflow_trace(workflow: dict, model_file: str) -> dict[str, Any]:
     """从 ComfyUI workflow 提取 L4 展示字段。"""
     positive_prompt: str | None = None
+    negative_prompt: str | None = None
+    clip_encode_index = 0
     steps: int | float | None = None
     cfg: int | float | None = None
     width: int | None = None
     height: int | None = None
     batch_size: int | None = None
+    num_frames: int | None = None
     denoise: int | float | None = None
     ckpt_name = model_file
+    reference_filename: str | None = None
+    start_reference_filename: str | None = None
+    end_reference_filename: str | None = None
+    load_image_filenames: list[str] = []
     has_load_image = False
     has_vae_encode = False
+    has_wan_flf2v = False
+    has_wan_fun_inpaint = False
+    has_wan_i2v = False
 
     for node in workflow.values():
         if not isinstance(node, dict):
@@ -47,11 +57,19 @@ def extract_workflow_trace(workflow: dict, model_file: str) -> dict[str, Any]:
         class_type = node.get("class_type")
         inputs = node.get("inputs") or {}
 
-        if class_type == "CLIPTextEncode" and positive_prompt is None:
+        if class_type == "CLIPTextEncode":
             text = inputs.get("text")
             if isinstance(text, str) and text.strip():
-                positive_prompt = text.strip()
+                if clip_encode_index == 0:
+                    positive_prompt = text.strip()
+                elif clip_encode_index == 1 and negative_prompt is None:
+                    negative_prompt = text.strip()
+                clip_encode_index += 1
         elif class_type == "KSampler":
+            steps = inputs.get("steps", steps)
+            cfg = inputs.get("cfg", cfg)
+            denoise = inputs.get("denoise", denoise)
+        elif class_type == "KSamplerAdvanced":
             steps = inputs.get("steps", steps)
             cfg = inputs.get("cfg", cfg)
             denoise = inputs.get("denoise", denoise)
@@ -61,8 +79,30 @@ def extract_workflow_trace(workflow: dict, model_file: str) -> dict[str, Any]:
             batch_size = inputs.get("batch_size", batch_size)
         elif class_type == "LoadImage":
             has_load_image = True
+            img = inputs.get("image")
+            if isinstance(img, str) and img.strip():
+                load_image_filenames.append(img.strip())
+                reference_filename = img.strip()
         elif class_type == "VAEEncode":
             has_vae_encode = True
+        elif class_type == "WanFirstLastFrameToVideo":
+            has_wan_flf2v = True
+            width = inputs.get("width", width)
+            height = inputs.get("height", height)
+            num_frames = inputs.get("length", num_frames)
+            batch_size = inputs.get("batch_size", batch_size)
+        elif class_type == "WanFunInpaintToVideo":
+            has_wan_fun_inpaint = True
+            width = inputs.get("width", width)
+            height = inputs.get("height", height)
+            num_frames = inputs.get("length", num_frames)
+            batch_size = inputs.get("batch_size", batch_size)
+        elif class_type == "WanImageToVideo":
+            has_wan_i2v = True
+            width = inputs.get("width", width)
+            height = inputs.get("height", height)
+            num_frames = inputs.get("length", num_frames)
+            batch_size = inputs.get("batch_size", batch_size)
         elif class_type == "EmptyLTXVLatentVideo":
             width = inputs.get("width", width)
             height = inputs.get("height", height)
@@ -93,18 +133,40 @@ def extract_workflow_trace(workflow: dict, model_file: str) -> dict[str, Any]:
             height = inputs.get("height", height)
             batch_size = inputs.get("batch_size", batch_size)
 
-    workflow_mode = "img2img" if has_load_image and has_vae_encode else "txt2img"
+    if has_wan_fun_inpaint:
+        workflow_mode = "fun_inpaint"
+        if len(load_image_filenames) >= 1:
+            start_reference_filename = load_image_filenames[0]
+        if len(load_image_filenames) >= 2:
+            end_reference_filename = load_image_filenames[1]
+    elif has_wan_flf2v:
+        workflow_mode = "flf2v"
+        if len(load_image_filenames) >= 1:
+            start_reference_filename = load_image_filenames[0]
+        if len(load_image_filenames) >= 2:
+            end_reference_filename = load_image_filenames[1]
+    elif has_load_image and has_vae_encode:
+        workflow_mode = "img2img"
+    elif has_wan_i2v or has_load_image:
+        workflow_mode = "image2video"
+    else:
+        workflow_mode = "txt2img"
 
     return {
         "positive_prompt": positive_prompt,
+        "negative_prompt": negative_prompt,
         "steps": steps,
         "cfg": cfg,
         "width": width,
         "height": height,
         "batch_size": batch_size,
+        "num_frames": num_frames,
         "denoise": denoise,
         "model_file": ckpt_name,
         "workflow_mode": workflow_mode,
+        "reference_filename": reference_filename,
+        "start_reference_filename": start_reference_filename,
+        "end_reference_filename": end_reference_filename,
     }
 
 

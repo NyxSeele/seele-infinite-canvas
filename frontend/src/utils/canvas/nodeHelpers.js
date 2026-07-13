@@ -21,6 +21,7 @@ export const NODE_WIDTHS_MAP = {
   "text-note": TEXT_NOTE_WIDTH,
   "script-table": SCRIPT_TABLE_WIDTH,
   "script-beat-card": 920,
+  "character-card": 300,
   outline: 540,
   "shot-script": 840,
 }

@@ -1,7 +1,7 @@
 .wnp-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 500;
+  z-index: 500; /* Z_WS_NOTIFY */
   background: rgba(0, 0, 0, 0.28);
   display: flex;
   justify-content: flex-end;

@@ -27,11 +27,36 @@ from services.seed import SEED_TESTUSER2_TEAM_ID
 MOCK_CAST_IMAGE = "/api/uploads/images/mock-cast-ref.jpg"
 MOCK_SCENE_IMAGE = "/api/uploads/images/mock-scene-ref.jpg"
 
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROBE_REF_DISK = (
+    BACKEND_DIR / "uploads" / "images" / "mock-cast-ref.jpg",
+    BACKEND_DIR / "uploads" / "images" / "mock-scene-ref.jpg",
+)
+
 # 与 CanvasEmptyState QUICK_ITEM_KEYS 的 assetView 一致
 EMPTY_TAG_ASSET_PREFS = {
     "character": {"contentTab": "subjects", "filter": "character"},
     "scene": {"contentTab": "subjects", "filter": "scene"},
 }
+
+
+def ensure_mock_ref_images() -> None:
+    """缺 mock 参考图时调用 generate_mock_assets，避免 POST /api/assets 误报 404。"""
+    missing = [p for p in PROBE_REF_DISK if not p.is_file()]
+    if not missing:
+        print("mock refs ok:", ", ".join(p.name for p in PROBE_REF_DISK))
+        return
+    print("missing mock refs:", ", ".join(p.name for p in missing), "→ generate_mock_assets")
+    from generate_mock_assets import main as generate_mock_main
+
+    rc = generate_mock_main()
+    if rc != 0:
+        raise RuntimeError(f"generate_mock_assets failed rc={rc}")
+    still = [p for p in PROBE_REF_DISK if not p.is_file()]
+    if still:
+        raise FileNotFoundError(f"mock refs still missing: {[p.name for p in still]}")
+    print("mock refs ready:", ", ".join(p.name for p in PROBE_REF_DISK))
+
 
 
 def get_team_id(client: httpx.Client, token: str) -> str | None:
@@ -334,7 +359,15 @@ def probe_manage_scene(client: httpx.Client, issues: list[str]) -> None:
         refs = extract_mock_reference_images({"prompt_text": prompt})
         print("  reference_images recorded", refs)
         if len(refs) < 2:
-            issues.append("C2 reference_images 应同时含角色+场景")
+            # mock 路径会把 reference_images 写入 prompt_text 标记；真实 GPU 路径无此标记
+            try:
+                health = client.get(f"{BASE}/health", timeout=10).json()
+            except Exception:
+                health = {}
+            if health.get("agent_mock_generation"):
+                issues.append("C2 reference_images 应同时含角色+场景")
+            else:
+                print("  note: skip mock_reference_images assert (agent_mock_generation=false; task completed)")
 
 
 def probe_empty_tag_prefs(client: httpx.Client, issues: list[str]) -> None:
@@ -393,6 +426,11 @@ def probe_team_isolation(client: httpx.Client, issues: list[str]) -> None:
 
 def main() -> int:
     issues: list[str] = []
+    try:
+        ensure_mock_ref_images()
+    except Exception as exc:
+        print("mock ref bootstrap failed:", exc)
+        return 1
     with httpx.Client() as client:
         try:
             probe_cross_project_cast(client, issues)

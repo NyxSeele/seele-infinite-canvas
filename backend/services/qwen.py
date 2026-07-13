@@ -11,9 +11,11 @@ import httpx
 from openai import AsyncOpenAI
 
 from core.config import settings
+from core.logging_setup import studio_print
 from db.base import SessionLocal
 from models import RegisteredModel
 from services.api_key_service import get_registered_model_api_key
+from trace_bus import push_trace
 
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
@@ -162,6 +164,21 @@ def _log_finish_reason(finish_reason: str | None, *, context: str) -> bool:
     return False
 
 
+def _usage_dict(usage) -> dict:
+    if usage is None:
+        return {}
+    prompt_t = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion_t = int(getattr(usage, "completion_tokens", 0) or 0)
+    total = int(getattr(usage, "total_tokens", 0) or 0)
+    if total <= 0:
+        total = prompt_t + completion_t
+    return {
+        "prompt_tokens": prompt_t,
+        "completion_tokens": completion_t,
+        "total_tokens": total,
+    }
+
+
 async def _call_llm(
     system_prompt: str, user_prompt: str, *, max_tokens: int = 4000
 ) -> tuple[str, str | None]:
@@ -182,12 +199,35 @@ async def _call_llm(
     return content, finish_reason
 
 
+async def _call_llm_with_usage(
+    system_prompt: str, user_prompt: str, *, max_tokens: int = 4000
+) -> tuple[str, str | None, dict]:
+    """与 _call_llm 相同，额外返回 token usage 字典。"""
+    row = _resolve_text_model()
+    if row:
+        try:
+            content, finish_reason, usage = await _call_registered_model(
+                row.id, system_prompt, user_prompt, max_tokens, return_usage=True
+            )
+            _log_finish_reason(finish_reason, context="registered")
+            return content, finish_reason, usage
+        except Exception:
+            pass
+    content, finish_reason, usage = await _call_dashscope(
+        system_prompt, user_prompt, max_tokens, return_usage=True
+    )
+    _log_finish_reason(finish_reason, context="dashscope")
+    return content, finish_reason, usage
+
+
 async def _call_registered_model(
     model_id: str,
     system_prompt: str,
     user_prompt: str,
     max_tokens: int,
-) -> tuple[str, str | None]:
+    *,
+    return_usage: bool = False,
+) -> tuple[str, str | None] | tuple[str, str | None, dict]:
     db = SessionLocal()
     try:
         row = (
@@ -199,11 +239,12 @@ async def _call_registered_model(
         if not row or not api_key or not (row.api_base or "").strip():
             raise ValueError(f"模型 {model_id} 未配置或未启用")
 
-        async with httpx.AsyncClient(trust_env=False, timeout=120.0) as http:
+        llm_timeout = float(settings.llm_http_timeout)
+        async with httpx.AsyncClient(trust_env=False, timeout=llm_timeout) as http:
             client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=row.api_base.strip(),
-                timeout=120.0,
+                timeout=llm_timeout,
                 http_client=http,
             )
             response = await client.chat.completions.create(
@@ -228,26 +269,28 @@ async def _call_registered_model(
                 from services.llm_router import record_usage
 
                 record_usage(model_id, total)
-        return (
-            (choice.message.content or "").strip(),
-            getattr(choice, "finish_reason", None),
-        )
+        content = (choice.message.content or "").strip()
+        finish = getattr(choice, "finish_reason", None)
+        if return_usage:
+            return content, finish, _usage_dict(usage)
+        return content, finish
     finally:
         db.close()
 
 
 async def _call_dashscope(
-    system_prompt: str, user_prompt: str, max_tokens: int
-) -> tuple[str, str | None]:
+    system_prompt: str, user_prompt: str, max_tokens: int, *, return_usage: bool = False
+) -> tuple[str, str | None] | tuple[str, str | None, dict]:
     api_key = settings.dashscope_api_key or os.environ.get("DASHSCOPE_API_KEY")
     if not api_key:
         raise ValueError("未配置 DASHSCOPE_API_KEY，且无可用的已注册文本模型")
 
-    async with httpx.AsyncClient(trust_env=False, timeout=120.0) as http:
+    llm_timeout = float(settings.llm_http_timeout)
+    async with httpx.AsyncClient(trust_env=False, timeout=llm_timeout) as http:
         client = AsyncOpenAI(
             api_key=api_key,
             base_url=DASHSCOPE_BASE_URL,
-            timeout=120.0,
+            timeout=llm_timeout,
             http_client=http,
         )
         response = await client.chat.completions.create(
@@ -261,10 +304,12 @@ async def _call_dashscope(
             stream=False,
         )
     choice = response.choices[0]
-    return (
-        (choice.message.content or "").strip(),
-        getattr(choice, "finish_reason", None),
-    )
+    usage = getattr(response, "usage", None)
+    content = (choice.message.content or "").strip()
+    finish = getattr(choice, "finish_reason", None)
+    if return_usage:
+        return content, finish, _usage_dict(usage)
+    return content, finish
 
 
 def _validate_scenes(scenes: list, *, label: str = "scenes") -> list:
@@ -526,6 +571,30 @@ def _outline_payload_for_shots(outline: str) -> tuple[str, int | None]:
     return text, target
 
 
+def _shots_segments_summary(segments: list) -> list[dict]:
+    summary: list[dict] = []
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        for shot in seg.get("shots") or []:
+            if not isinstance(shot, dict):
+                continue
+            prompt = (shot.get("prompt") or "").strip()
+            if not prompt:
+                continue
+            summary.append(
+                {
+                    "shot_id": shot.get("id"),
+                    "prompt_preview": prompt[:80],
+                    "camera": (shot.get("camera") or "")[:40],
+                    "movement": (shot.get("movement") or "")[:40],
+                }
+            )
+            if len(summary) >= 6:
+                return summary
+    return summary
+
+
 async def generate_shots(outline: str, *, target_duration_sec: int | None = None) -> dict:
     text = (outline or "").strip()
     if not text:
@@ -541,7 +610,23 @@ async def generate_shots(outline: str, *, target_duration_sec: int | None = None
             + llm_input
         )
 
-    raw, finish_reason = await _call_llm(
+    shots_target = max(2, int(target) // 8) if target is not None else 0
+    studio_print(
+        "trace",
+        f"A4 SHOTS_INPUT outline_len={len(llm_input)} shots_target={shots_target}",
+    )
+    await push_trace(
+        "A4",
+        "SHOTS_INPUT",
+        {
+            "system_preview": SHOTS_SYSTEM_PROMPT[:200],
+            "user_preview": llm_input[:300],
+            "outline_len": len(llm_input),
+            "shots_target": shots_target or None,
+        },
+    )
+
+    raw, finish_reason, usage = await _call_llm_with_usage(
         SHOTS_SYSTEM_PROMPT, llm_input, max_tokens=8000
     )
     if not raw:
@@ -556,6 +641,30 @@ async def generate_shots(outline: str, *, target_duration_sec: int | None = None
         )
         parsed["segments"] = segments
         parsed["target_video_duration_sec"] = int(target)
+
+    segments = parsed.get("segments") or []
+    segments_count = len(segments)
+    total_shots = sum(len(s.get("shots") or []) for s in segments if isinstance(s, dict))
+    segments_summary = _shots_segments_summary(segments)
+    token_total = usage.get("total_tokens") or (
+        len(SHOTS_SYSTEM_PROMPT) // 4 + len(llm_input) // 4 + len(raw) // 4
+    )
+    studio_print(
+        "trace",
+        f"A4 SHOTS_OUTPUT segments={segments_count} total_shots={total_shots}",
+    )
+    await push_trace(
+        "A4",
+        "SHOTS_OUTPUT",
+        {
+            "segments_count": segments_count,
+            "total_shots": total_shots,
+            "segments_summary": segments_summary,
+            "tokens": token_total,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+        },
+    )
 
     truncated = finish_reason == "length"
     if truncated:

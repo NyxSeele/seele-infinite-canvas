@@ -1,4 +1,5 @@
 import api from "../../services/api"
+import { pollTaskUntilDone } from "./outlineStructureApi"
 import { redistributeKeyframeTimes } from "./scriptTableKeyframes"
 import { buildShotPromptPackage } from "./scriptPromptPackage"
 
@@ -48,6 +49,16 @@ export function buildLocalPromptPackage(row, castLibrary, keyframeId = null, sce
   return buildShotPromptPackage(row, castLibrary, { keyframeId, sceneLibrary, styleReference })
 }
 
+async function postPromptLlmOrSync(url, payload) {
+  const submit = await api.post(url, payload, { timeout: 30000 })
+  const taskId = submit.data?.task_id
+  if (!taskId) {
+    return submit.data
+  }
+  const task = await pollTaskUntilDone(taskId)
+  return task.result || {}
+}
+
 export async function expandShotPromptPackage(row, castLibrary, options = {}) {
   const { keyframeId = null, useLlm = true, sceneLibrary = [] } = options
   const payload = rowToExpandPayload(row, castLibrary, sceneLibrary)
@@ -55,19 +66,19 @@ export async function expandShotPromptPackage(row, castLibrary, options = {}) {
   payload.use_llm = useLlm
 
   try {
-    const res = await api.post("/api/prompt/expand-shot-package", payload)
-    return normalizePromptPackage(res.data)
+    const data = await postPromptLlmOrSync("/api/prompt/expand-shot-package", payload)
+    return normalizePromptPackage(data)
   } catch {
     return buildLocalPromptPackage(row, castLibrary, keyframeId, sceneLibrary)
   }
 }
+
 export async function splitShotBeats(row, castLibrary, options = {}) {
   const { useLlm = true, sceneLibrary = [] } = options
   const payload = rowToExpandPayload(row, castLibrary, sceneLibrary)
   payload.use_llm = useLlm
   try {
-    const res = await api.post("/api/prompt/split-shot-beats", payload)
-    return res.data
+    return await postPromptLlmOrSync("/api/prompt/split-shot-beats", payload)
   } catch {
     return null
   }

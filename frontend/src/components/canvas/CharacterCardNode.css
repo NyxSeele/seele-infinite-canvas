@@ -1,0 +1,71 @@
+.ccn-root {
+  width: 300px;
+  padding: 12px 14px;
+  background: var(--canvas-card-bg, #1a1a1f);
+  border: 1px solid var(--canvas-card-border, #2a2a32);
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.ccn-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.ccn-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.ccn-label {
+  display: block;
+  margin: 6px 0 4px;
+  opacity: 0.75;
+  font-size: 11px;
+}
+
+.ccn-input,
+.ccn-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid var(--canvas-input-border, #333);
+  background: var(--canvas-input-bg, #121218);
+  color: inherit;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.ccn-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ccn-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.ccn-upload {
+  width: 56px;
+  height: 56px;
+  border: 1px dashed #555;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.ccn-saving {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.6;
+}

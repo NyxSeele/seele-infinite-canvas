@@ -57,6 +57,66 @@ export function collectEntityReferenceUrls(
   return [...charUrls, ...sceneUrls]
 }
 
+/** 与分镜表相连的 character-card 节点 → prompt compile 用 character_refs */
+export function collectConnectedCharacterRefs(nodes = [], edges = [], nodeId) {
+  if (!nodeId) return []
+  const byId = new Map((nodes || []).map((n) => [n.id, n]))
+  const refs = []
+  const seen = new Set()
+
+  for (const edge of edges || []) {
+    let otherId = null
+    if (edge.source === nodeId) otherId = edge.target
+    else if (edge.target === nodeId) otherId = edge.source
+    else continue
+
+    const node = byId.get(otherId)
+    if (node?.type !== "character-card") continue
+    const name = (node.data?.name || "").trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    refs.push({
+      name,
+      appearance: (node.data?.appearance || "").trim(),
+    })
+  }
+  return refs
+}
+
+/** 与出图卡相连的 character-card 首张参考脸 URL（用于 flux-pulid） */
+export function collectConnectedCharacterFaceUrl(nodes = [], edges = [], nodeId) {
+  if (!nodeId) return null
+  const byId = new Map((nodes || []).map((n) => [n.id, n]))
+  for (const edge of edges || []) {
+    let otherId = null
+    if (edge.source === nodeId) otherId = edge.target
+    else if (edge.target === nodeId) otherId = edge.source
+    else continue
+    const node = byId.get(otherId)
+    if (node?.type !== "character-card") continue
+    const imgs = node.data?.referenceImages
+    if (Array.isArray(imgs) && imgs[0]) return imgs[0]
+  }
+  return null
+}
+
+export function mergeCharacterRefsForCompile(...groups) {
+  const out = []
+  const seen = new Set()
+  for (const group of groups) {
+    for (const ref of group || []) {
+      const name = (ref?.name || "").trim()
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      out.push({
+        name,
+        appearance: (ref?.appearance || ref?.desc || ref?.description || ref?.prompt || ref?.note || "").trim(),
+      })
+    }
+  }
+  return out
+}
+
 export function buildEntityThemeContext(row, castLibrary = [], sceneLibrary = [], globalAssets = []) {
   const chars = resolveCharacterRefsForRow(row, castLibrary, globalAssets)
   const scenes = resolveSceneRefsForRow(row, sceneLibrary)

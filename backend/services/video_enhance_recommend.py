@@ -26,7 +26,7 @@ _RECOMMEND_SYSTEM = """你是 AI 短视频画质增强参数顾问。用户视�
   "input_noise_scale": 0.25,
   "batch_size": 8,
   "color_correction": "lab",
-  "model_size": "7b",
+  "model_size": "3b",
   "strength": "normal",
   "reasoning": "一行中文说明推荐理由"
 }
@@ -114,9 +114,9 @@ def normalize_enhance_params(raw: dict[str, Any] | None) -> dict[str, Any]:
     if color not in VALID_COLOR:
         color = "lab"
 
-    model_size = str(data.get("model_size") or "7b").strip().lower()
+    model_size = str(data.get("model_size") or "3b").strip().lower()
     if model_size not in VALID_MODEL_SIZE:
-        model_size = "7b"
+        model_size = "3b"
 
     return {
         "upscale_factor": _snap_upscale(data.get("upscale_factor", 2.0)),
@@ -168,7 +168,7 @@ def _rule_recommend_params(
             "input_noise_scale": noise,
             "batch_size": batch,
             "color_correction": "lab",
-            "model_size": "7b",
+            "model_size": "3b",
             "strength": "normal",
         }
     )

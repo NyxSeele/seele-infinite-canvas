@@ -1,0 +1,422 @@
+{
+  "98": {
+    "class_type": "LTXVScheduler",
+    "inputs": {
+      "latent": [
+        "109",
+        0
+      ],
+      "steps": 20,
+      "max_shift": 2.05,
+      "base_shift": 0.95,
+      "stretch": true,
+      "terminal": 0.1
+    }
+  },
+  "99": {
+    "class_type": "LTXAVTextEncoderLoader",
+    "inputs": {
+      "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
+      "ckpt_name": "ltx-2-19b-dev-fp4.safetensors",
+      "device": "default"
+    }
+  },
+  "100": {
+    "class_type": "ManualSigmas",
+    "inputs": {
+      "sigmas": "0.909375, 0.725, 0.421875, 0.0"
+    }
+  },
+  "101": {
+    "class_type": "LatentUpscaleModelLoader",
+    "inputs": {
+      "model_name": "ltx-2-spatial-upscaler-x2-1.0.safetensors"
+    }
+  },
+  "102": {
+    "class_type": "LTXVCropGuides",
+    "inputs": {
+      "positive": [
+        "107",
+        0
+      ],
+      "negative": [
+        "107",
+        1
+      ],
+      "latent": [
+        "116",
+        0
+      ]
+    }
+  },
+  "103": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "model": [
+        "133",
+        0
+      ],
+      "positive": [
+        "102",
+        0
+      ],
+      "negative": [
+        "102",
+        1
+      ],
+      "cfg": 1
+    }
+  },
+  "104": {
+    "class_type": "ImageScaleBy",
+    "inputs": {
+      "image": [
+        "111",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "scale_by": 0.5
+    }
+  },
+  "105": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "104",
+        0
+      ]
+    }
+  },
+  "106": {
+    "class_type": "LTXVEmptyLatentAudio",
+    "inputs": {
+      "audio_vae": [
+        "123",
+        0
+      ],
+      "frames_number": 121,
+      "frame_rate": 24,
+      "batch_size": 1
+    }
+  },
+  "107": {
+    "class_type": "LTXVConditioning",
+    "inputs": {
+      "positive": [
+        "121",
+        0
+      ],
+      "negative": [
+        "110",
+        0
+      ],
+      "frame_rate": 24
+    }
+  },
+  "108": {
+    "class_type": "EmptyLTXVLatentVideo",
+    "inputs": {
+      "width": 848,
+      "height": 480,
+      "length": 121,
+      "batch_size": 1
+    }
+  },
+  "109": {
+    "class_type": "LTXVConcatAVLatent",
+    "inputs": {
+      "video_latent": [
+        "108",
+        0
+      ],
+      "audio_latent": [
+        "106",
+        0
+      ]
+    }
+  },
+  "110": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "99",
+        0
+      ],
+      "text": "blurry, low quality, still frame, frames, watermark, overlay, titles, has blurbox, has subtitles"
+    }
+  },
+  "111": {
+    "class_type": "EmptyImage",
+    "inputs": {
+      "width": 1280,
+      "height": 720,
+      "batch_size": 1,
+      "color": 0
+    }
+  },
+  "113": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "115",
+        0
+      ],
+      "guider": [
+        "128",
+        0
+      ],
+      "sampler": [
+        "135",
+        0
+      ],
+      "sigmas": [
+        "98",
+        0
+      ],
+      "latent_image": [
+        "109",
+        0
+      ]
+    }
+  },
+  "116": {
+    "class_type": "LTXVSeparateAVLatent",
+    "inputs": {
+      "av_latent": [
+        "113",
+        0
+      ]
+    }
+  },
+  "117": {
+    "class_type": "LTXVConcatAVLatent",
+    "inputs": {
+      "video_latent": [
+        "118",
+        0
+      ],
+      "audio_latent": [
+        "116",
+        1
+      ]
+    }
+  },
+  "119": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "114",
+        0
+      ],
+      "guider": [
+        "103",
+        0
+      ],
+      "sampler": [
+        "136",
+        0
+      ],
+      "sigmas": [
+        "100",
+        0
+      ],
+      "latent_image": [
+        "117",
+        0
+      ]
+    }
+  },
+  "121": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "99",
+        0
+      ],
+      "text": "A close-up of a cheerful girl puppet with curly auburn yarn hair and wide button eyes, holding a small red umbrella above her head. Rain falls gently around her. She looks upward and begins to sing with joy in English: \"It's raining, it's raining, I love it when its raining.\" Her fabric mouth opening and closing to a melodic tune. Her hands grip the umbrella handle as she sways slightly from side to side in rhythm. The camera holds steady as the rain sparkles against the soft lighting. Her eyes blink occasionally as she sings."
+    }
+  },
+  "123": {
+    "class_type": "LTXVAudioVAELoader",
+    "inputs": {
+      "ckpt_name": "ltx-2-19b-dev-fp4.safetensors"
+    }
+  },
+  "124": {
+    "class_type": "LTXVSeparateAVLatent",
+    "inputs": {
+      "av_latent": [
+        "119",
+        1
+      ]
+    }
+  },
+  "125": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "124",
+        0
+      ],
+      "vae": [
+        "138",
+        2
+      ]
+    }
+  },
+  "126": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "samples": [
+        "124",
+        0
+      ],
+      "vae": [
+        "138",
+        2
+      ],
+      "tile_size": 512,
+      "overlap": 64,
+      "temporal_size": 4096,
+      "temporal_overlap": 8
+    }
+  },
+  "127": {
+    "class_type": "LTXVAudioVAEDecode",
+    "inputs": {
+      "samples": [
+        "124",
+        1
+      ],
+      "audio_vae": [
+        "123",
+        0
+      ]
+    }
+  },
+  "128": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "model": [
+        "134",
+        0
+      ],
+      "positive": [
+        "107",
+        0
+      ],
+      "negative": [
+        "107",
+        1
+      ],
+      "cfg": 4
+    }
+  },
+  "132": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "138",
+        0
+      ],
+      "lora_name": "ltx-2-19b-distilled-lora-384.safetensors",
+      "strength_model": 1
+    }
+  },
+  "133": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "132",
+        0
+      ],
+      "lora_name": "ltx-2-19b-lora-camera-control-dolly-left.safetensors",
+      "strength_model": 1
+    }
+  },
+  "134": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "138",
+        0
+      ],
+      "lora_name": "ltx-2-19b-lora-camera-control-dolly-left.safetensors",
+      "strength_model": 1
+    }
+  },
+  "135": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler_ancestral"
+    }
+  },
+  "136": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler_ancestral"
+    }
+  },
+  "118": {
+    "class_type": "LTXVLatentUpsampler",
+    "inputs": {
+      "samples": [
+        "102",
+        2
+      ],
+      "upscale_model": [
+        "101",
+        0
+      ],
+      "vae": [
+        "138",
+        2
+      ]
+    }
+  },
+  "138": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "ltx-2-19b-dev-fp4.safetensors"
+    }
+  },
+  "122": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "126",
+        0
+      ],
+      "audio": [
+        "127",
+        0
+      ],
+      "fps": 24
+    }
+  },
+  "75": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "122",
+        0
+      ],
+      "filename_prefix": "video/LTX-2",
+      "format": "mp4",
+      "codec": "auto"
+    }
+  },
+  "114": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 0
+    }
+  },
+  "115": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 619559280547383
+    }
+  }
+}

@@ -8,12 +8,15 @@ from core.config import settings
 
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-IMAGE_SYSTEM_PROMPT = """你是专业AI图像生成提示词专家。
-把用户的中文描述转成高质量英文提示词。
-添加画质词：masterpiece, best quality, highly detailed, sharp focus
-根据内容补充合适的风格和场景描述词。
+IMAGE_SYSTEM_PROMPT = """你是一个专业的提示词翻译助手。
+规则：
+1. 只做中译英，不扩写、不添加词汇
+2. 保持原有词语顺序
+3. 不添加任何风格描述词（如 masterpiece、cinematic、best quality 等）
+4. 输出只有 JSON，无解释
+
 只返回JSON，不要其他内容：
-{"positive": "英文正向提示词", "negative": "英文负向提示词"}"""
+{"positive": "英文正向提示词", "negative": ""}"""
 
 VIDEO_SYSTEM_PROMPT = """你是专业AI视频生成提示词专家。
 把用户的中文描述转成适合视频生成的英文提示词。
@@ -22,13 +25,27 @@ VIDEO_SYSTEM_PROMPT = """你是专业AI视频生成提示词专家。
 只返回JSON，不要其他内容：
 {"positive": "英文正向提示词", "negative": "英文负向提示词"}"""
 
+VIDEO_TRANSLATE_PLAIN_SYSTEM = (
+    "You are a professional video prompt translation assistant. "
+    "Rules: translate Chinese to English only; do not add words; "
+    "keep camera/motion description at the beginning of the sentence; "
+    "use period to separate clauses; do not merge into one long sentence; "
+    "do not add smooth motion, cinematic, or quality tags; "
+    "character names, hairstyle, and clothing descriptions must be fully "
+    "preserved in the translation, regardless of whether the scene shows "
+    "the front, side, or back view. "
+    "Output only the English prompt text. No quotes, no JSON, no explanation."
+)
+
 TRANSLATE_PLAIN_SYSTEM = (
-    "You translate Chinese to English for AI image/video generation. "
+    "You are a professional prompt translation assistant. "
+    "Rules: translate Chinese to English only; do not add words; "
+    "preserve original word order; do not add style tags. "
     "Output only the English prompt text. No quotes, no JSON, no explanation."
 )
 
 
-async def translate_to_english(user_input: str) -> dict:
+async def translate_to_english(user_input: str, *, mode: str = "image") -> dict:
     """纯文本英译（不依赖 JSON），供 L3 翻译回退。"""
     text = (user_input or "").strip()
     if not text:
@@ -37,6 +54,8 @@ async def translate_to_english(user_input: str) -> dict:
     api_key = settings.dashscope_api_key or os.environ.get("DASHSCOPE_API_KEY")
     if not api_key:
         return {"positive": text, "error": "未配置 DASHSCOPE_API_KEY"}
+
+    system_prompt = VIDEO_TRANSLATE_PLAIN_SYSTEM if mode == "video" else TRANSLATE_PLAIN_SYSTEM
 
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=30.0) as http:
@@ -49,7 +68,7 @@ async def translate_to_english(user_input: str) -> dict:
                 response = await client.chat.completions.create(
                     model="qwen-plus",
                     messages=[
-                        {"role": "system", "content": TRANSLATE_PLAIN_SYSTEM},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": text},
                     ],
                     temperature=0.3,

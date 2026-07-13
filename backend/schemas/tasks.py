@@ -114,6 +114,10 @@ class CanvasImageRequest(BaseModel):
     quality_preset_id: Optional[str] = Field(
         default=None, description="画风预设 ID（trace 展示用）"
     )
+    use_reactor: bool = Field(
+        default=False,
+        description="G40：flux-pulid 出图后接 ReActor 单帧换脸（需角色正脸参考图）",
+    )
 
 
 class CanvasVideoRequest(BaseModel):
@@ -156,6 +160,48 @@ class CanvasVideoRequest(BaseModel):
     quality_preset_id: Optional[str] = Field(
         default=None, description="画风预设 ID（注入 prompt suffix）"
     )
+    sampling_profile: Optional[Literal["fast", "quality"]] = Field(
+        default="fast",
+        description="Wan 采样档位：fast=4步；quality=8步（有运镜时建议 quality）",
+    )
+    camera_move: Optional[str] = Field(
+        default="auto",
+        description="G33/G36 运镜：auto|push_in|pull_out|pan|track|static",
+    )
+    shot_scale: Optional[str] = Field(
+        default="auto",
+        description="G33/G36 景别：auto|close|medium|wide|full",
+    )
+    sound_note: Optional[str] = Field(
+        default=None,
+        description="G39 音效备注；非空且非 ltx2 时成片后混入 AudioGen 音效",
+    )
+    use_reactor: bool = Field(
+        default=False,
+        description="G45：成片后逐帧 ReActor 换脸（需 reactor_face_image 正脸参考）",
+    )
+    reactor_face_image: Optional[str] = Field(
+        default=None,
+        description="G45：换脸源正脸图 URL（/api/uploads/... 或 /api/view?...）",
+    )
+    steps: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="可选采样步数（探针/高级覆盖；Hunyuan 默认 50）",
+    )
+    width: Optional[int] = Field(
+        default=None,
+        ge=64,
+        le=2048,
+        description="可选宽度；与 height 同时提供时跳过 RESOLUTION_MAP（探针用）",
+    )
+    height: Optional[int] = Field(
+        default=None,
+        ge=64,
+        le=2048,
+        description="可选高度；与 width 同时提供时跳过 RESOLUTION_MAP（探针用）",
+    )
 
 
 class VideoEnhanceRequest(BaseModel):
@@ -185,7 +231,7 @@ class VideoEnhanceRequest(BaseModel):
         description="SeedVR2 色彩校正",
     )
     model_size: Literal["3b", "7b"] = Field(
-        default="7b",
+        default="3b",
         description="SeedVR2 DiT 模型规模",
     )
     node_id: str | None = Field(default=None, description="前端 video-gen 节点 ID")

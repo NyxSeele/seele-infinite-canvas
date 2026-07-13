@@ -3,11 +3,12 @@ from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from comfyui import client as comfyui
 from core.comfyui_settings import comfyui_http_url
+from core.config import settings
 from core.dependencies import get_current_user, get_media_user
 from core.logging_setup import studio_print
 from db.session import get_db
@@ -109,37 +110,61 @@ async def proxy_view(
         safe_subfolder,
         bool(range_header),
     )
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.get(
+
+    # Stream body to avoid buffering entire video (Cloudflare 100s / memory).
+    timeout = httpx.Timeout(float(settings.llm_http_timeout), connect=30.0)
+    client = httpx.AsyncClient(timeout=timeout)
+    try:
+        req = client.build_request(
+            "GET",
             upstream_url,
             params=params,
             headers=upstream_headers,
         )
+        resp = await client.send(req, stream=True)
+    except Exception:
+        await client.aclose()
+        raise
 
     if resp.status_code not in (200, 206):
+        body = await resp.aread()
+        await resp.aclose()
+        await client.aclose()
+        text = body.decode("utf-8", errors="replace")
         studio_print(
             "media",
             f"代理失败 {resp.status_code} filename={safe_name} "
-            f"upstream={upstream_url} body={resp.text[:200]}",
+            f"upstream={upstream_url} body={text[:200]}",
         )
-        return Response(status_code=resp.status_code, content=resp.text)
+        return Response(status_code=resp.status_code, content=body)
 
-    media_type = comfyui.guess_media_type(safe_name, resp.headers.get("content-type", ""))
+    media_type = comfyui.guess_media_type(
+        safe_name, resp.headers.get("content-type", "")
+    )
     out_headers = {}
     for key in _PASS_THROUGH_HEADERS:
         if key in resp.headers:
             out_headers[key] = resp.headers[key]
-    if "accept-ranges" not in out_headers and resp.status_code == 200:
+    if "accept-ranges" not in {k.lower() for k in out_headers} and resp.status_code == 200:
         out_headers["Accept-Ranges"] = "bytes"
 
+    content_length = resp.headers.get("content-length", "?")
     studio_print(
         "media",
-        f"代理成功 filename={safe_name} status={resp.status_code} "
-        f"type={media_type} bytes={len(resp.content)}",
+        f"代理成功(stream) filename={safe_name} status={resp.status_code} "
+        f"type={media_type} content_length={content_length}",
     )
 
-    return Response(
-        content=resp.content,
+    async def body_iter():
+        try:
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        body_iter(),
         status_code=resp.status_code,
         media_type=media_type,
         headers=out_headers,

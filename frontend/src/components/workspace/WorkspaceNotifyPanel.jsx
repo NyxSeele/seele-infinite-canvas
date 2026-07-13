@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react"
+import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { formatRelativeTime } from "../../utils/canvas/formatRelativeTime"
 import { markThreadNotificationsRead, applyReadToItems } from "../../utils/notificationThread"
 import { fetchNotifications } from "../../services/notificationsApi"
 import { emitNotificationUnread } from "../../hooks/useNotificationUnread"
 import { useLocale } from "../../utils/locale"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_WS_NOTIFY } from "../../utils/zIndexLayers"
 import "./WorkspaceNotifyPanel.css"
 
 function IconBellLarge() {
@@ -71,8 +74,8 @@ export default function WorkspaceNotifyPanel({ open, onClose, onUnreadChange }) 
 
   if (!open) return null
 
-  return (
-    <div className="wnp-backdrop" onClick={onClose} role="presentation">
+  return createPortal(
+    <div className="wnp-backdrop" style={{ zIndex: Z_WS_NOTIFY }} onClick={onClose} role="presentation">
       <aside
         className="wnp-panel"
         onClick={(e) => e.stopPropagation()}
@@ -131,6 +134,7 @@ export default function WorkspaceNotifyPanel({ open, onClose, onUnreadChange }) 
           </ul>
         )}
       </aside>
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }

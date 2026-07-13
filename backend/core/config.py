@@ -29,6 +29,11 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("JWT_SECRET", "JWT_SECRET_KEY"),
     )
+    api_key_encrypt_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("API_KEY_ENCRYPT_SECRET"),
+        description="Fernet 派生密钥；未设时回退 JWT_SECRET",
+    )
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = Field(default=120)
     refresh_token_expire_days: int = 30
@@ -47,6 +52,20 @@ class Settings(BaseSettings):
     )
     optimize_timeout: float = 32.0
     tasks_cache_ttl: float = 3.0
+    # Cloudflare Free ~100s idle limit; keep LLM HTTP under that.
+    llm_http_timeout: float = Field(
+        default=90.0,
+        validation_alias=AliasChoices("LLM_HTTP_TIMEOUT"),
+    )
+    agent_sse_keepalive_sec: float = Field(
+        default=25.0,
+        validation_alias=AliasChoices("AGENT_SSE_KEEPALIVE_SEC"),
+    )
+    media_download_timeout: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices("MEDIA_DOWNLOAD_TIMEOUT"),
+        description="后台下载外部视频用于探测的超时（秒）",
+    )
 
     comfyui_url: str = Field(
         default="http://127.0.0.1:8000",
@@ -58,6 +77,19 @@ class Settings(BaseSettings):
     )
 
     redis_url: str = Field(default="redis://127.0.0.1:6379/0", validation_alias="REDIS_URL")
+
+    seedance_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("SEEDANCE_API_KEY", "ARK_API_KEY"),
+    )
+    seedance_api_base: str = Field(
+        default="https://ark.cn-beijing.volces.com/api/v3",
+        validation_alias=AliasChoices("SEEDANCE_API_BASE"),
+    )
+    seedance_model_id: str = Field(
+        default="doubao-seedance-2-0-260128",
+        validation_alias=AliasChoices("SEEDANCE_MODEL_ID"),
+    )
 
     agent_mock_generation: bool = Field(
         default=False,

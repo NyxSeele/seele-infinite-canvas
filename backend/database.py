@@ -42,3 +42,7 @@ def _ensure_task_result_columns(conn) -> None:
         conn.execute(text("ALTER TABLE tasks ADD COLUMN comfyui_prompt_id TEXT"))
     if "node_id" not in names:
         conn.execute(text("ALTER TABLE tasks ADD COLUMN node_id TEXT"))
+    if "sound_note" not in names:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN sound_note TEXT"))
+    if "video_backend" not in names:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN video_backend TEXT"))

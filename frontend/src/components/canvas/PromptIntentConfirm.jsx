@@ -1,5 +1,8 @@
 import { useLocale } from "../../utils/locale"
 import { useCanvasStore } from "../../stores"
+import { createPortal } from "react-dom"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_MODAL } from "../../utils/zIndexLayers"
 import "./PromptIntentConfirm.css"
 
 const sp = (e) => e.stopPropagation()
@@ -25,9 +28,10 @@ export default function PromptIntentConfirm({
   const canForceGen = isScreenplay || showGenPrompt
   const displayContextLabel = contextLabel || t("canvas.intent.currentCard")
 
-  return (
+  return createPortal(
     <div
       className={`pic-backdrop nodrag rf-page rf-page--${theme}`}
+      style={{ zIndex: Z_MODAL }}
       onPointerDown={sp}
       role="presentation"
     >
@@ -116,6 +120,7 @@ export default function PromptIntentConfirm({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }

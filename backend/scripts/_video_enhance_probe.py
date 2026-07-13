@@ -81,14 +81,15 @@ def assert_workflow_builders() -> None:
     assert "ImageUpscaleWithModel" in classes2, classes2
 
 
-def assert_registry_disabled() -> None:
+def assert_registry_providers() -> None:
     seed = get_comfyui_provider(VIDEO_ENHANCE_SEEDVR2_ID)
     real = get_comfyui_provider(VIDEO_ENHANCE_REALESRGAN_ID)
     assert seed is not None, "missing seedvr2 provider"
     assert real is not None, "missing realesrgan provider"
-    assert seed.get("enabled") is False, seed
-    assert real.get("enabled") is False, real
-    assert resolve_video_enhance_workflow("auto") is None
+    assert seed.get("enabled") is True, seed
+    resolved = resolve_video_enhance_workflow("auto")
+    assert resolved is not None, "expected seedvr2 auto resolve"
+    assert resolved[0] == VIDEO_ENHANCE_SEEDVR2_ID, resolved
 
 
 def assert_503_when_disabled(client: httpx.Client, token: str) -> None:
@@ -115,9 +116,9 @@ def assert_503_when_disabled(client: httpx.Client, token: str) -> None:
 def main() -> int:
     try:
         assert_workflow_builders()
-        assert_registry_disabled()
+        assert_registry_providers()
         print("[builders] OK")
-        print("[registry] providers registered, enabled=False")
+        print("[registry] SeedVR2 provider enabled=True")
     except AssertionError as exc:
         print(f"[assert] {exc}")
         return 3
@@ -160,7 +161,7 @@ def main() -> int:
                     "input_noise_scale": params.get("input_noise_scale", 0.25),
                     "batch_size": params.get("batch_size", 8),
                     "color_correction": params.get("color_correction", "lab"),
-                    "model_size": params.get("model_size", "7b"),
+                    "model_size": params.get("model_size", "3b"),
                     "node_id": "probe-video-enhance",
                 },
                 timeout=30,

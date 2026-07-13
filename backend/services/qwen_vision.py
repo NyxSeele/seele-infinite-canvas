@@ -37,11 +37,12 @@ async def describe_frame_vl(image_path: Path) -> str:
         raise RuntimeError("未配置 DASHSCOPE_API_KEY，无法分析视频风格")
 
     data_uri = _image_to_data_uri(image_path)
-    async with httpx.AsyncClient(trust_env=False, timeout=120.0) as http:
+    llm_timeout = float(settings.llm_http_timeout)
+    async with httpx.AsyncClient(trust_env=False, timeout=llm_timeout) as http:
         client = AsyncOpenAI(
             api_key=api_key,
             base_url=DASHSCOPE_BASE_URL,
-            timeout=120.0,
+            timeout=llm_timeout,
             http_client=http,
         )
         response = await client.chat.completions.create(

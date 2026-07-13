@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -13,6 +14,7 @@ import httpx
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from core.config import settings
 from models import User
 from services.media_access import resolve_video_source_for_enhance
 
@@ -21,18 +23,29 @@ def _ffmpeg_executable() -> str:
     try:
         import imageio_ffmpeg
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="ffmpeg 不可用，无法分析视频") from exc
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and Path(exe).is_file():
+            return exe
+    except Exception:
+        pass
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+    raise HTTPException(status_code=503, detail="ffmpeg 不可用，无法分析视频")
 
 
 def _ffprobe_executable() -> str | None:
-    ffmpeg = _ffmpeg_executable()
-    candidate = Path(ffmpeg).with_name("ffprobe.exe" if Path(ffmpeg).suffix else "ffprobe")
-    if candidate.is_file():
-        return str(candidate)
-    # imageio bundle may only ship ffmpeg
-    return None
+    try:
+        ffmpeg = _ffmpeg_executable()
+        candidate = Path(ffmpeg).with_name(
+            "ffprobe.exe" if Path(ffmpeg).suffix else "ffprobe"
+        )
+        if candidate.is_file():
+            return str(candidate)
+    except HTTPException:
+        pass
+    # imageio bundle may only ship ffmpeg; fall back to system ffprobe
+    return shutil.which("ffprobe")
 
 
 def _parse_fps(value: str | float | int | None) -> float:
@@ -156,7 +169,8 @@ def probe_video_info(video_path: Path) -> dict[str, Any]:
 
 
 async def _download_http_video(url: str) -> Path:
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    timeout = float(settings.media_download_timeout)
+    async with httpx.AsyncClient(timeout=timeout) as client:
         res = await client.get(url)
         res.raise_for_status()
         data = res.content
@@ -171,8 +185,10 @@ async def _download_http_video(url: str) -> Path:
 
 
 async def probe_video_info_from_url(db: Session, user: User, video_url: str) -> dict[str, Any]:
-    """解析可访问视频并探测元数据；http(s) 临时下载后探测。"""
-    raw = (video_url or "").strip()
+    """解析可访问视频并探测元数据；外部 http(s) 临时下载后探测。"""
+    from services.media_access import normalize_media_reference_url
+
+    raw = normalize_media_reference_url((video_url or "").strip())
     if not raw:
         raise HTTPException(status_code=400, detail="视频地址不能为空")
 

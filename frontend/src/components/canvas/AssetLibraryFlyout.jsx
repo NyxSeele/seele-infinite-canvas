@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useStore } from "reactflow"
 import { useAuth } from "../../contexts/AuthContext"
 import { useAssetStore, useCanvasStore, useTeamStore } from "../../stores"
@@ -14,6 +15,8 @@ import { getImageNodeImages } from "./videoReferenceHelpers"
 import { useFlyoutMount } from "../../hooks/useFlyoutMount"
 import ScopeSwitchPanel from "../common/ScopeSwitchPanel"
 import { useLocale } from "../../utils/locale"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_CANVAS_FLYOUT } from "../../utils/zIndexLayers"
 import "./AssetLibraryFlyout.css"
 
 const sp = (e) => e.stopPropagation()
@@ -302,10 +305,11 @@ export default function AssetLibraryFlyout({ open, onClose, getCardPointerHandle
 
   const filters = contentTab === "subjects" ? SUBJECT_FILTERS : MATERIAL_FILTERS
 
-  return (
+  return createPortal(
     <aside
       ref={panelRef}
       className={`alf-flyout nodrag nopan${open && !closing ? " alf-flyout--open" : ""}${closing ? " alf-flyout--closing" : ""}${dragging ? " alf-flyout--dragging" : ""}`}
+      style={{ zIndex: Z_CANVAS_FLYOUT }}
       onPointerDown={sp}
       onDoubleClick={sp}
       role="dialog"
@@ -733,6 +737,7 @@ export default function AssetLibraryFlyout({ open, onClose, getCardPointerHandle
       </ScopeSwitchPanel>
 
       {toast && <div className="alf-toast">{toast}</div>}
-    </aside>
+    </aside>,
+    getThemePortalRoot(),
   )
 }

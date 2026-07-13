@@ -24,7 +24,7 @@ _memory_output_grants: dict[str, float] = {}
 
 _FILENAME_SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 _UPLOAD_PATH = re.compile(
-    r"^(?:images|videos)/[A-Za-z0-9._-]+$|^luts/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.cube$"
+    r"^(?:images|videos|audio)/[A-Za-z0-9._-]+$|^luts/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.cube$"
 )
 
 
@@ -330,12 +330,45 @@ def build_signed_view_url(
 UPLOAD_ROOT = Path("uploads")
 
 
+def normalize_media_reference_url(url: str) -> str:
+    """
+    将 http(s)://{本机}/api/view|uploads/... 剥回 path?query；去掉 mt。
+    真正外部 URL 原样返回（仍以 http 开头）。
+    """
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+    raw = (url or "").strip()
+    if not raw:
+        return raw
+    if raw.startswith("data:") or raw.startswith("blob:"):
+        return raw
+
+    parsed = None
+    if raw.startswith("http://") or raw.startswith("https://"):
+        parsed = urlparse(raw)
+        path = parsed.path or ""
+        if path.startswith("/api/view") or path.startswith("/api/uploads/") or path.startswith(
+            "/uploads/"
+        ):
+            # 本机 API 媒体路径 → 相对
+            q = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k != "mt"]
+            return urlunparse(("", "", path, "", urlencode(q), ""))
+        return raw  # 外部 URL
+
+    # 相对路径：去掉 mt
+    if "?" in raw:
+        path, _, query = raw.partition("?")
+        q = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True) if k != "mt"]
+        return f"{path}?{urlencode(q)}" if q else path
+    return raw
+
+
 def ref_url_to_rel_path(image_url: str) -> str:
     """将 /api/uploads/... 或 /uploads/... 转为 images/xxx 相对路径。"""
-    raw = (image_url or "").strip()
+    raw = normalize_media_reference_url((image_url or "").strip())
     if not raw:
         raise HTTPException(status_code=400, detail="参考图地址为空")
-    if "?" in raw:
+    if "?" in raw and "/api/view" not in raw.split("?", 1)[0]:
         raw = raw.split("?", 1)[0]
     if raw.startswith("http://") or raw.startswith("https://"):
         path = urlparse(raw).path or ""
@@ -368,6 +401,7 @@ def _resolve_comfy_output_path(filename: str, subfolder: str = "") -> Path | Non
     search_roots = [
         backend_dir / "output",
         backend_dir.parent / "output",
+        backend_dir.parent.parent / "ComfyUI" / "output",
         UPLOAD_ROOT,
     ]
     for root in search_roots:
@@ -386,9 +420,9 @@ def resolve_video_source_for_enhance(db: Session, user: User, video_url: str) ->
     解析画质增强可用的本地视频路径。
     - /api/view?filename=...：校验 Comfy 输出访问权后返回磁盘路径
     - /api/uploads/videos/...：沿用上传校验
-    - http(s)://：返回 None，由 upload_video_from_url 下载
+    - 外部 http(s)://：返回 None，由 upload_video_from_url 下载
     """
-    raw = (video_url or "").strip()
+    raw = normalize_media_reference_url((video_url or "").strip())
     if not raw:
         raise HTTPException(status_code=400, detail="视频地址不能为空")
     if raw.startswith("http://") or raw.startswith("https://"):
@@ -414,6 +448,41 @@ def resolve_video_source_for_enhance(db: Session, user: User, video_url: str) ->
     except HTTPException as exc:
         if exc.status_code == 400 and exc.detail == "非法上传路径":
             raise HTTPException(status_code=400, detail="视频源无效或无权访问") from exc
+        raise
+
+
+def resolve_image_reference_path(db: Session, user: User, image_url: str) -> Path:
+    """
+    解析图生视频 / 图生图可用的本地参考图路径。
+    - /api/view?filename=...：校验 Comfy 输出访问权后返回磁盘路径
+    - /api/uploads/images/...：沿用上传校验
+    """
+    raw = normalize_media_reference_url((image_url or "").strip())
+    if not raw:
+        raise HTTPException(status_code=400, detail="参考图地址不能为空")
+    if raw.startswith("http://") or raw.startswith("https://"):
+        raise HTTPException(status_code=400, detail="参考图无效或无权访问")
+    if "filename=" in raw or raw.startswith("/api/view"):
+        from urllib.parse import parse_qs, urlparse
+
+        query = parse_qs(urlparse(raw).query)
+        names = query.get("filename") or []
+        if not names or not names[0]:
+            raise HTTPException(status_code=400, detail="参考图无效或无权访问")
+        filename = names[0]
+        subfolders = query.get("subfolder") or [""]
+        subfolder = (subfolders[0] or "").strip()
+        if not user_can_access_comfy_output(db, user, filename, subfolder=subfolder):
+            raise HTTPException(status_code=403, detail="参考图无效或无权访问")
+        path = _resolve_comfy_output_path(filename, subfolder)
+        if not path or not path.is_file():
+            raise HTTPException(status_code=404, detail="参考图文件不存在，请重新生成后再试")
+        return path
+    try:
+        return assert_user_can_read_upload_url(db, user, raw)
+    except HTTPException as exc:
+        if exc.status_code == 400 and exc.detail == "非法上传路径":
+            raise HTTPException(status_code=400, detail="参考图无效或无权访问") from exc
         raise
 
 

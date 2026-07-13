@@ -37,20 +37,47 @@ def get_model_setting_api_key(db, model_id: str) -> str | None:
 
 
 def migrate_plaintext_api_keys(db: Session) -> int:
-    """启动时将明文 API Key 加密入库。"""
+    """启动时：明文加密；旧 JWT 派生密文重加密到当前主密钥。"""
+    from core.secret_store import ENCRYPTED_PREFIX, decrypt_secret, encrypt_secret
+
     changed = 0
     for row in db.query(RegisteredModel).all():
         raw = (row.api_key or "").strip()
-        if not raw or raw.startswith("enc:v1:"):
+        if not raw:
             continue
-        row.api_key = encrypt_secret(raw)
-        changed += 1
+        if not raw.startswith(ENCRYPTED_PREFIX):
+            row.api_key = encrypt_secret(raw)
+            changed += 1
+            continue
+        # 已加密：尝试解密再以主密钥重写（幂等；主密钥未变则密文可能变化但明文不变）
+        try:
+            plain = decrypt_secret(raw)
+        except ValueError:
+            continue
+        if not plain:
+            continue
+        new_enc = encrypt_secret(plain)
+        if new_enc and new_enc != raw:
+            row.api_key = new_enc
+            changed += 1
     for row in db.query(ModelSetting).all():
         raw = (row.api_key or "").strip()
-        if not raw or raw.startswith("enc:v1:"):
+        if not raw:
             continue
-        row.api_key = encrypt_secret(raw)
-        changed += 1
+        if not raw.startswith(ENCRYPTED_PREFIX):
+            row.api_key = encrypt_secret(raw)
+            changed += 1
+            continue
+        try:
+            plain = decrypt_secret(raw)
+        except ValueError:
+            continue
+        if not plain:
+            continue
+        new_enc = encrypt_secret(plain)
+        if new_enc and new_enc != raw:
+            row.api_key = new_enc
+            changed += 1
     if changed:
         db.commit()
     return changed

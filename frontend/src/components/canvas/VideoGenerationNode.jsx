@@ -9,8 +9,9 @@ import api from "../../services/api"
 import { getCanvasTeamId, teamIdPayload } from "../../utils/teamContext"
 import { cancelCanvasTask } from "../../services/cancelTask"
 import { buildMediaViewUrl, resolveTaskResultUrl } from "../../utils/mediaViewUrl"
-import { ensureMediaUrl } from "../../utils/mediaTicket"
+import { ensureMediaUrl, toRelativeMediaUrl } from "../../utils/mediaTicket"
 import { downloadMediaUrl } from "../../utils/downloadMedia"
+import { pollTaskUntilDone } from "../../utils/canvas/outlineStructureApi"
 import MediaFullscreenViewer from "./MediaFullscreenViewer"
 import GenerationStopButton from "./GenerationStopButton"
 import GenerationBrandLoader from "./GenerationBrandLoader"
@@ -32,12 +33,19 @@ import { mergeMentionRefsIntoFreeRefs } from "./promptMentions"
 import { isNetworkError, networkErrorMessage, parseGenerationError } from "./taskNetworkError"
 import { getRetryPolicy } from "../../utils/canvas/generationRetryPolicy"
 import { createStaleProgressGuard, isTerminalTaskStatus, PROGRESS_STALE_MS } from "./taskPollTimeout"
-import { normalizeProgressPercent, logVideoPollDebug } from "./videoProgressSync"
+import { normalizeProgressPercent, mergeMonotonicProgress, logVideoPollDebug } from "./videoProgressSync"
 import useModelCapabilities from "../../hooks/useModelCapabilities"
 import { uploadImageFile } from "../../services/uploadImage"
 import { useLocale } from "../../utils/locale"
 import { appendStyleReferenceToDescription, styleReferenceSummary } from "../../utils/canvas/styleReferenceFormat"
+import { T2V_ONLY } from "../../utils/canvas/videoModelCompat"
 import { IconStyleRef, IconZoom, IconEnhance } from "./CanvasTopbarIcons"
+import { collectConnectedCharacterFaceUrl } from "../../utils/canvas/entityRefs"
+import CameraMotionPicker, {
+  CAMERA_MOVE_OPTIONS,
+  SHOT_SCALE_OPTIONS,
+} from "./CameraMotionPicker"
+import "./CameraMotionPicker.css"
 import { useCanvasNodeWheel } from "./canvasScrollHelpers"
 import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
 import { findScriptTableNode, resolveVideoQualityPresetId } from "../../utils/canvas/scriptTableNode"
@@ -171,12 +179,48 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const lastSubmitParamsRef = useRef(null)
   const effectiveModelId = data.modelId || modelId
   const { capabilities: modelCapabilities } = useModelCapabilities(effectiveModelId)
+  const [cameraPickerOpen, setCameraPickerOpen] = useState(false)
+  const cameraMove = data.cameraMove || "auto"
+  const shotScale = data.shotScale || "auto"
 
   useEffect(() => {
     if (videoModels.length > 0 && !modelId) {
       setModelId(videoModels[0].id || videoModels[0].display_name || "")
     }
   }, [videoModels])
+
+  useEffect(() => {
+    if (!data.onUpdate) return
+    const patch = {}
+    if (data.cameraMove == null) patch.cameraMove = "auto"
+    if (data.shotScale == null) patch.shotScale = "auto"
+    if (Object.keys(patch).length) data.onUpdate(id, patch)
+  }, [id, data.cameraMove, data.shotScale, data.onUpdate])
+
+  useEffect(() => {
+    if (effectiveModelId !== "wan-fun-inpaint") return
+    if (data.referenceMode === "keyframe" && data.panelMode !== "freeref") return
+    data.onUpdate?.(id, {
+      referenceMode: "keyframe",
+      panelMode: "keyframe",
+      vidMode: "首尾帧",
+    })
+  }, [effectiveModelId, data.referenceMode, data.panelMode, data.onUpdate, id])
+
+  const handleCardCameraMotionChange = useCallback((next) => {
+    data.onUpdate?.(id, {
+      cameraMove: next.cameraMove ?? "auto",
+      shotScale: next.shotScale ?? "auto",
+      samplingProfile: next.samplingProfile
+        ?? ((next.cameraMove || "auto") !== "auto" ? "quality" : "fast"),
+    })
+  }, [id, data])
+
+  const cameraSummaryLabel = useMemo(() => {
+    const moveLabel = CAMERA_MOVE_OPTIONS.find((o) => o.id === cameraMove)?.label || "自动"
+    const scaleLabel = SHOT_SCALE_OPTIONS.find((o) => o.id === shotScale)?.label || "自动"
+    return `${moveLabel} · ${scaleLabel}`
+  }, [cameraMove, shotScale])
 
   useEffect(() => {
     if (!modelCapabilities || !data.onUpdate) return
@@ -227,11 +271,13 @@ export default function VideoGenerationNode({ id, data, selected }) {
     }
   }, [data.status, data.error, status, sending, stopPolling, t])
 
-  const applyProgress = useCallback((pct) => {
-    const p = Math.min(100, Math.max(0, Number(pct) || 0))
-    setProgress(p)
-    staleGuardRef.current?.bump(p)
-    data.onUpdate?.(id, { progress: p })
+  const applyProgress = useCallback((pct, { reset = false } = {}) => {
+    setProgress((prev) => {
+      const next = mergeMonotonicProgress(prev, pct, { allowDecrease: reset })
+      staleGuardRef.current?.bump(next)
+      data.onUpdate?.(id, { progress: next })
+      return next
+    })
   }, [id, data])
 
   const failTask = useCallback((nextStatus, msg) => {
@@ -504,7 +550,10 @@ export default function VideoGenerationNode({ id, data, selected }) {
         }
 
       } else if (msg.type === "execution_error") {
-        failTask("error", msg.data?.exception_message || t("canvas.gen.failed"))
+        failTask(
+          "error",
+          parseGenerationError(msg.data?.exception_message || msg.data, null),
+        )
       }
     })
     return remove
@@ -516,7 +565,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
     toastTimerRef.current = setTimeout(() => setToast(null), 2000)
   }, [])
 
-  const { getNode, getNodes } = useReactFlow()
+  const { getNode, getNodes, getEdges } = useReactFlow()
   const canvasActions = useCanvasActions()
   const refSelect = useReferenceSelect()
   const isRefSource = refSelect?.mode?.active && refSelect?.mode?.sourceNodeId === id
@@ -616,7 +665,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
       }
       const refMode =
         data.referenceMode
-        || (data.vidMode === "参考" ? "freeref" : "keyframe")
+        || (data.vidMode === "参考" ? "freeref" : data.vidMode === "文生" ? "t2v" : "keyframe")
       const keyframes = data.keyframes || DEFAULT_KEYFRAMES
       const mentionsList = Array.isArray(data.mentions) ? data.mentions : []
       const freeRefs = refMode === "freeref"
@@ -632,10 +681,35 @@ export default function VideoGenerationNode({ id, data, selected }) {
       })()
       const qualityPresetId = resolveVideoQualityPresetId(data, scriptTable?.data || null)
 
+      let modelForSubmit = data.modelId || modelId || "wan-2.6"
+      // 双帧 + 任意 T2V-only → 自动切 i2v；已选 wan-fun-inpaint 保持不变
+      if (
+        refMode !== "freeref"
+        && refMode !== "t2v"
+        && keyframes.first?.imageUrl
+        && keyframes.last?.imageUrl
+        && modelForSubmit !== "wan-fun-inpaint"
+        && (!modelForSubmit || T2V_ONLY.has(modelForSubmit))
+      ) {
+        modelForSubmit = "wan-i2v"
+      }
+
+      if (modelForSubmit === "wan-fun-inpaint") {
+        if (refMode === "freeref" || refMode === "t2v" || !keyframes.first?.imageUrl || !keyframes.last?.imageUrl) {
+          const msg = "Wan Fun Inpaint 需要首帧与尾帧"
+          setErrorMessage(msg)
+          data.onUpdate?.(id, { status: "error", error: msg })
+          showToast(msg)
+          setSending(false)
+          return
+        }
+      }
+
       const payload = {
-        model:           data.modelId        || modelId || "wan-2.6",
+        model:           modelForSubmit,
         prompt:          promptForSubmit,
         quality_preset_id: qualityPresetId !== "auto" ? qualityPresetId : undefined,
+        sampling_profile: data.samplingProfile === "quality" ? "quality" : "fast",
         mentions:        mentionsList,
         ratio:           data.vidRatio       || "16:9",
         resolution:      data.vidQuality     || "1080P",
@@ -645,11 +719,27 @@ export default function VideoGenerationNode({ id, data, selected }) {
         node_id:         id,
         generation_mode: refMode === "freeref" ? "freeref" : "keyframe",
         client_id:       wsManager.getClientId(),
+        trace_id:        data.traceId || crypto.randomUUID(),
       }
+
+      // G45: 相连 character-card / 分镜表角色正脸 → 成片后逐帧换脸
+      const faceFromCard =
+        collectConnectedCharacterFaceUrl(getNodes(), getEdges(), id)
+        || (scriptTable?.id
+          ? collectConnectedCharacterFaceUrl(getNodes(), getEdges(), scriptTable.id)
+          : null)
+      const faceFromCast = (() => {
+        const cast = scriptTable?.data?.castLibrary || []
+        const hit = cast.find((c) => c && c.type !== "scene" && c.imageUrl)
+        return hit?.imageUrl || null
+      })()
+      const reactorFace = faceFromCard || faceFromCast || null
+      payload.use_reactor = Boolean(reactorFace)
+      if (reactorFace) payload.reactor_face_image = reactorFace
 
       if (refMode === "freeref") {
         payload.reference_images = freeRefs.map((r) => r.imageUrl).filter(Boolean)
-      } else {
+      } else if (refMode !== "t2v") {
         payload.first_frame = keyframes.first?.imageUrl || null
         payload.last_frame = keyframes.last?.imageUrl || null
       }
@@ -896,7 +986,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
   ])
 
   const submitEnhanceTask = useCallback(async (params) => {
-    const sourceUrl = ensureMediaUrl(videoUrl || data.videoUrl || null)
+    const sourceUrl = toRelativeMediaUrl(videoUrl || data.videoUrl || null)
     if (!sourceUrl || enhancing || enhanceAnalyzing) return
     stopEnhancePolling()
     setEnhancing(true)
@@ -975,20 +1065,32 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const fetchRecommendParams = useCallback(async (sourceUrl) => {
     const { canvasId } = useCanvasStore.getState()
     const scriptTable = findScriptTableNode(getNodes())
-    const res = await api.post("/api/tasks/video-enhance/recommend-params", {
-      video_url: sourceUrl,
-      project_id: canvasId || undefined,
-      script_table_node_id: scriptTable?.id || undefined,
-    })
-    const params = res.data?.params
-    const reasoning = res.data?.reasoning || ""
+    const submit = await api.post(
+      "/api/tasks/video-enhance/recommend-params",
+      {
+        video_url: sourceUrl,
+        project_id: canvasId || undefined,
+        script_table_node_id: scriptTable?.id || undefined,
+      },
+      { timeout: 30000 }
+    )
+    let params = submit.data?.params
+    let reasoning = submit.data?.reasoning || ""
+    const taskId = submit.data?.task_id
+    if (taskId) {
+      const task = await pollTaskUntilDone(taskId, {
+        timeoutMessage: "视频分析超时，请稍后重试",
+      })
+      params = task.result?.params
+      reasoning = task.result?.reasoning || ""
+    }
     if (!params) throw new Error(t("canvas.gen.failed"))
     applyEnhanceParams(params, reasoning)
     return params
   }, [applyEnhanceParams, t, getNodes])
 
   const handleSmartEnhance = useCallback(async () => {
-    const sourceUrl = ensureMediaUrl(videoUrl || data.videoUrl || null)
+    const sourceUrl = toRelativeMediaUrl(videoUrl || data.videoUrl || null)
     if (!sourceUrl || enhancing || enhanceAnalyzing) return
 
     try {
@@ -1076,7 +1178,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const handleEnhanceAdvancedOpenChange = useCallback(async (open) => {
     setEnhanceAdvancedOpen(open)
     if (!open || enhanceReasoning) return
-    const sourceUrl = ensureMediaUrl(videoUrl || data.videoUrl || null)
+    const sourceUrl = toRelativeMediaUrl(videoUrl || data.videoUrl || null)
     if (!sourceUrl) return
     try {
       setEnhanceAnalyzing(true)
@@ -1668,6 +1770,29 @@ export default function VideoGenerationNode({ id, data, selected }) {
           </div>
         )}
 
+      </div>
+
+      <div className="gn2-camera-row nodrag nopan" onPointerDown={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          className={`gn2-camera-summary nodrag nopan${cameraPickerOpen ? " gn2-camera-summary--open" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation()
+            setCameraPickerOpen((v) => !v)
+          }}
+        >
+          {cameraSummaryLabel}
+        </button>
+        {cameraPickerOpen ? (
+          <div className="gn2-camera-picker-pop nodrag nopan">
+            <CameraMotionPicker
+              cameraMove={cameraMove}
+              shotScale={shotScale}
+              onChange={handleCardCameraMotionChange}
+              readOnly={false}
+            />
+          </div>
+        ) : null}
       </div>
 
       {toast && (

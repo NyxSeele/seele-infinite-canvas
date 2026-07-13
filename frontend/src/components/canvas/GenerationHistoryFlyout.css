@@ -29,7 +29,7 @@
   border: 1px solid var(--alf-border, rgba(255, 255, 255, 0.1));
   border-radius: 14px;
   box-shadow: var(--alf-shadow, 0 12px 40px rgba(0, 0, 0, 0.45));
-  z-index: 199;
+  z-index: 200; /* Z_CANVAS_FLYOUT */
   overflow: hidden;
   pointer-events: all;
   color: var(--alf-text, rgba(255, 255, 255, 0.92));

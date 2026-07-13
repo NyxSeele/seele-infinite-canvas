@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react"
+import { createPortal } from "react-dom"
 import { LineIcon } from "../icons/LineIcons"
 import { useLocale } from "../../utils/locale"
 import { MENU_SUBMENU_CLOSE_MS } from "../../utils/menuFlyoutTiming"
 import { MOTION_EXIT_MS, overlayClassNames } from "../../hooks/useFlyoutMount"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_NODE_DOTS_MENU } from "../../utils/zIndexLayers"
 
 const NODE_ITEM_KEYS = [
   { type: "image-gen", icon: "sparkle", labelKey: "canvas.menu.imageGen" },
@@ -74,11 +77,11 @@ export default function CanvasRightClickMenu({ x, y, onCreateNode, onUploadImage
     exitClass: closing ? "motion-popover-out" : "",
   })
 
-  return (
+  return createPortal(
     <div
       ref={ref}
       className={menuClasses}
-      style={{ left: pos.left, top: pos.top }}
+      style={{ left: pos.left, top: pos.top, zIndex: Z_NODE_DOTS_MENU }}
       onPointerDown={(e) => e.stopPropagation()}
     >
       <button className="tl-context-item" onClick={() => { requestClose(); onUploadImage?.() }}>
@@ -129,6 +132,7 @@ export default function CanvasRightClickMenu({ x, y, onCreateNode, onUploadImage
         <span className="tl-context-icon"><LineIcon name="paste" size={16} /></span>
         <span>{t("canvas.menu.paste")}</span>
       </button>
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }

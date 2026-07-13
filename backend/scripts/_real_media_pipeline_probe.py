@@ -70,7 +70,7 @@ def main() -> int:
             f"{BASE}/api/tasks/image",
             headers=headers(token),
             json={
-                "model": "stable-diffusion",
+                "model": "flux-dev",
                 "prompt": "real media probe: simple red apple on white table",
                 "ratio": "1:1",
                 "quality": "2K",

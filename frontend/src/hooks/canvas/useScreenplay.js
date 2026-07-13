@@ -1,17 +1,17 @@
 import { useCallback, useEffect } from "react"
 import { addEdge } from "reactflow"
-import api from "../../services/api"
 import {
   makeId,
   NODE_WIDTHS_MAP,
   SHOT_SCRIPT_NODE_OFFSET_X,
 } from "../../utils/canvas/nodeHelpers"
+import { postGenerateShots } from "../../utils/canvas/outlineStructureApi"
 import { normalizeRowsToTargetDuration } from "../../utils/canvas/scriptDurationNormalize"
 import {
   findScriptTableForOutline,
   segmentsToScriptPayload,
 } from "../../utils/canvas/scriptTableSegments"
-import { findUpstreamTargetDuration } from "../../utils/canvas/videoDurationIntent"
+import { findUpstreamTargetDuration, parseTargetDurationSec } from "../../utils/canvas/videoDurationIntent"
 import { getT } from "../../utils/locale"
 
 const OUTLINE_TO_SCRIPT_OFFSET_X = SHOT_SCRIPT_NODE_OFFSET_X
@@ -78,7 +78,7 @@ export function useScreenplay({
         outline,
         target_duration_sec: targetDuration ?? undefined,
       }
-      const res = await api.post("/api/screenplay/generate-shots", payload)
+      const res = await postGenerateShots(payload)
       const rawSegments = res.data?.segments
       if (!Array.isArray(rawSegments) || rawSegments.length === 0) {
         throw new Error(getT()("canvas.outline.noShotData"))
@@ -392,30 +392,81 @@ export function useScreenplay({
     ]
   )
 
-  /** P2：旧分镜提示词卡 → 迁移到分镜表 */
+  /** P2：文本卡 / 旧分镜提示词卡 → 迁移到分镜表 */
   const onImportScriptTable = useCallback(
-    (shotScriptNodeId) => {
+    async (sourceNodeId) => {
       if (readOnlyRef?.current === true) return
-      const shotScript =
-        nodesRef.current.find((n) => n.id === shotScriptNodeId)
-        || getNode(shotScriptNodeId)
-      if (!shotScript || shotScript.type !== "shot-script") return
+      const source =
+        nodesRef.current.find((n) => n.id === sourceNodeId)
+        || getNode(sourceNodeId)
+      if (!source) return
 
-      const segments = shotScript.data?.segments
+      if (source.type === "text-response") {
+        const text = (source.data?.content || "").trim()
+        if (!text) return
+
+        if (source.data?.migratedToScriptTableId) {
+          const existing = getNode(source.data.migratedToScriptTableId)
+          if (existing?.type === "script-table") return existing.id
+        }
+
+        const sourceId = source.data?.sourceNodeId
+        const sourceNote = sourceId ? getNode(sourceId) : null
+        const sourceIdea = (sourceNote?.data?.prompt || source.data?.prompt || "").trim()
+        const targetDuration =
+          parseTargetDurationSec(sourceIdea || text)
+          ?? findUpstreamTargetDuration(
+            nodesRef.current,
+            edgesRef?.current || [],
+            sourceNodeId
+          )
+
+        const res = await postGenerateShots({
+          outline: text,
+          target_duration_sec: targetDuration ?? undefined,
+        })
+        const rawSegments = res.data?.segments
+        if (!Array.isArray(rawSegments) || rawSegments.length === 0) {
+          throw new Error(getT()("canvas.outline.noShotData"))
+        }
+
+        const scriptId = createOrUpdateScriptTableFromSegments(source, rawSegments, {
+          targetVideoDurationSec:
+            res.data?.target_video_duration_sec ?? targetDuration ?? null,
+          durationWarning: res.data?.duration_warning || null,
+          truncated: res.data?.truncated === true,
+        })
+
+        if (scriptId) {
+          patchNodeData(sourceNodeId, { migratedToScriptTableId: scriptId })
+        }
+        return scriptId
+      }
+
+      if (source.type !== "shot-script") return
+
+      const segments = source.data?.segments
       if (!Array.isArray(segments) || segments.length === 0) return
 
-      if (shotScript.data?.migratedToScriptTableId) {
-        const existing = getNode(shotScript.data.migratedToScriptTableId)
+      if (source.data?.migratedToScriptTableId) {
+        const existing = getNode(source.data.migratedToScriptTableId)
         if (existing?.type === "script-table") return existing.id
       }
 
-      return createOrUpdateScriptTableFromSegments(shotScript, segments, {
-        targetVideoDurationSec: shotScript.data?.targetVideoDurationSec,
-        durationWarning: shotScript.data?.durationWarning,
-        truncated: shotScript.data?.truncated,
+      return createOrUpdateScriptTableFromSegments(source, segments, {
+        targetVideoDurationSec: source.data?.targetVideoDurationSec,
+        durationWarning: source.data?.durationWarning,
+        truncated: source.data?.truncated,
       })
     },
-    [getNode, nodesRef, createOrUpdateScriptTableFromSegments, readOnlyRef]
+    [
+      getNode,
+      nodesRef,
+      edgesRef,
+      createOrUpdateScriptTableFromSegments,
+      patchNodeData,
+      readOnlyRef,
+    ]
   )
 
   const onMigrateShotScript = onImportScriptTable

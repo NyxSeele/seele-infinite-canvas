@@ -8,9 +8,17 @@ from model_checker import check_registered_model_available
 from models import RegisteredModel, User
 from schemas.tasks import SelectModelRequest
 from services.model_permission_service import user_can_use_model
-from model_registry import MODEL_MAP
+from model_registry import COMFYUI_PROVIDER_MAP, MODEL_MAP, MODEL_SUMMARY_OVERRIDES
 
 router = APIRouter(prefix="/api/models", tags=["models"])
+
+
+def _model_summary(model_id: str) -> str:
+    meta = MODEL_MAP.get(model_id) or COMFYUI_PROVIDER_MAP.get(model_id) or {}
+    summary = (meta.get("summary") or "").strip()
+    if summary:
+        return summary
+    return (MODEL_SUMMARY_OVERRIDES.get(model_id) or "").strip()
 
 
 async def _query_available_models(category: str | None, db: Session) -> dict:
@@ -40,6 +48,7 @@ async def _query_available_models(category: str | None, db: Session) -> dict:
                 "display_name": row.display_name,
                 "category": row.category,
                 "type": row.type,
+                "summary": _model_summary(row.id),
             }
         )
     return {"models": output}

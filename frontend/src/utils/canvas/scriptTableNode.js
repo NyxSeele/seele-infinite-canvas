@@ -23,6 +23,9 @@ export function resolveVideoQualityPresetId(videoData = {}, tableData = null) {
   return "auto"
 }
 
+/** 图像卡画风：与视频卡相同（卡片 qualityPresetId > 分镜表 defaultQualityPresetId） */
+export const resolveImageQualityPresetId = resolveVideoQualityPresetId
+
 /** 表级默认画风（含旧 contentStyle 迁移） */
 export function migrateTableDefaultQualityPresetId(tableData = {}) {
   const defaultId = tableData?.defaultQualityPresetId

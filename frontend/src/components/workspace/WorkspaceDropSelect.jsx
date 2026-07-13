@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_DROPDOWN } from "../../utils/zIndexLayers"
 import "./WorkspaceDropSelect.css"
 
 function CheckIcon() {
@@ -53,7 +54,7 @@ export default function WorkspaceDropSelect({
       position: "fixed",
       left: rect.left,
       minWidth: Math.max(rect.width, 168),
-      zIndex: 10050,
+      zIndex: Z_DROPDOWN,
     }
     if (placement === "top") {
       style.bottom = window.innerHeight - rect.top + 8

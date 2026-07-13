@@ -4,6 +4,7 @@ import { useLocale } from "../../utils/locale"
 import { useMentionableItems } from "./promptMentions"
 import { ensureMediaUrl } from "../../utils/mediaTicket"
 import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_DROPDOWN } from "../../utils/zIndexLayers"
 import "./VideoReferencePanel.css"
 
 const sp = (e) => e.stopPropagation()
@@ -22,7 +23,7 @@ function clampMentionPos(anchorRect) {
     left,
     minWidth: 160,
     maxWidth: maxW,
-    zIndex: 10050,
+    zIndex: Z_DROPDOWN,
   }
 }
 

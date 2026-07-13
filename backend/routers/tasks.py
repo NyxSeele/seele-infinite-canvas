@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import logging
 import re
 import traceback
@@ -167,6 +168,22 @@ def _mark_task_terminal(
         from services.generation_slots import release_slots
 
         release_slots(task.user_id, team_id=task.team_id)
+
+
+def _schedule_video_postprocess(task: Task) -> None:
+    """G45 逐帧换脸（若 use_reactor）→ 链式 G39 sound_note；仅 sound_note 时直接混音。"""
+    if bool(getattr(task, "use_reactor", False)):
+        from services.reactor_video import maybe_apply_reactor_video
+
+        asyncio.create_task(maybe_apply_reactor_video(task.id))
+        return
+    if (
+        (task.sound_note or "").strip()
+        and (task.video_backend or "").strip().lower() != "ltx2"
+    ):
+        from services.audiogen_postprocess import maybe_apply_sound_note_mix
+
+        asyncio.create_task(maybe_apply_sound_note_mix(task.id))
 
 
 def _release_acquired_slots(
@@ -437,6 +454,39 @@ async def get_task_by_id(
     if task.user_id is not None and task.user_id != user.id and user.role != "admin":
         raise HTTPException(status_code=403, detail="无权访问该任务")
 
+    # JSON async jobs (screenplay / prompt LLM / import LLM / enhance reco): no ComfyUI
+    if task.task_type in (
+        "sp_structure",
+        "sp_shots",
+        "sp_expand",
+        "sp_beats",
+        "imp_parse",
+        "imp_group",
+        "ve_reco",
+    ):
+        progress = (
+            100
+            if task.status == "completed"
+            else (
+                50
+                if task.status in ("pending", "queued", "processing", "running")
+                else 0
+            )
+        )
+        result: object | None = task.result
+        if task.status == "completed" and isinstance(result, str) and result:
+            try:
+                result = json.loads(result)
+            except json.JSONDecodeError:
+                pass
+        return {
+            "task_id": task.id,
+            "status": task.status,
+            "progress": progress,
+            "result": result,
+            "error": task.error,
+        }
+
     if task.task_type in _MEDIA_TASK_TYPES and task.status == "completed" and task.result:
         return {
             "task_id": task.id,
@@ -461,6 +511,26 @@ async def get_task_by_id(
             "progress": 50 if task.status in ("pending", "queued", "running") else 0,
             "result": None,
             "error": None,
+        }
+
+    # Seedance / 外部异步任务：不走 ComfyUI poll，直接读 DB
+    if (
+        task.task_type == "video"
+        and task.comfyui_prompt_id
+        and (
+            task.comfyui_prompt_id == "seedance"
+            or str(task.comfyui_prompt_id).startswith("seedance:")
+        )
+    ):
+        progress = 100 if task.status == "completed" else (
+            50 if task.status in ("pending", "queued", "running") else 0
+        )
+        return {
+            "task_id": task.id,
+            "status": task.status,
+            "progress": progress,
+            "result": _sign_result_url_for_user(task.result, user.id) if task.result else None,
+            "error": task.error,
         }
 
     comfy_prompt_id = task.comfyui_prompt_id or (
@@ -494,6 +564,8 @@ async def get_task_by_id(
                     f"任务完成 task_id={task_id} comfy_prompt_id={comfy_prompt_id} "
                     f"result={task.result}",
                 )
+                if task.task_type == "video":
+                    _schedule_video_postprocess(task)
                 return {
                     "task_id": task.id,
                     "status": "completed",
@@ -679,78 +751,6 @@ def resolve_canvas_image_dimensions(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-# ── Text LLM dispatch ─────────────────────────────────────────────────────────
-
-async def call_openai(model: str, prompt: str, count: int, **kwargs) -> dict:
-    """占位：调用 OpenAI GPT 系列模型。"""
-    raise NotImplementedError(f"OpenAI 调用尚未实现 (model={model})")
-
-
-async def call_anthropic(model: str, prompt: str, count: int, **kwargs) -> dict:
-    """占位：调用 Anthropic Claude 系列模型。"""
-    raise NotImplementedError(f"Anthropic 调用尚未实现 (model={model})")
-
-
-# ── Image model dispatch stubs ────────────────────────────────────────────────
-
-async def call_stable_diffusion(
-    model: str, prompt: str, width: int, height: int, count: int,
-    reference_image: str | None = None, **kwargs
-) -> dict:
-    """占位：调用 Stable Diffusion / SDXL 本地模型。"""
-    raise NotImplementedError(f"Stable Diffusion 调用尚未实现 (model={model})")
-
-
-async def call_flux(
-    model: str, prompt: str, width: int, height: int, count: int,
-    reference_image: str | None = None, **kwargs
-) -> dict:
-    """占位：调用 FLUX 系列模型 (flux-dev / flux-schnell)。"""
-    raise NotImplementedError(f"FLUX 调用尚未实现 (model={model})")
-
-
-async def call_hidream(
-    model: str, prompt: str, width: int, height: int, count: int,
-    reference_image: str | None = None, **kwargs
-) -> dict:
-    """占位：调用 HiDream 模型。"""
-    raise NotImplementedError(f"HiDream 调用尚未实现 (model={model})")
-
-
-async def call_jimeng(
-    model: str, prompt: str, width: int, height: int, count: int,
-    reference_image: str | None = None, **kwargs
-) -> dict:
-    """占位：调用即梦（Jimeng）系列模型。"""
-    raise NotImplementedError(f"即梦调用尚未实现 (model={model})")
-
-
-# ── Video model dispatch stubs ────────────────────────────────────────────────
-
-async def call_wan(
-    model: str, prompt: str, width: int, height: int,
-    duration: int, audio: bool, generation_mode: str, count: int, **kwargs
-) -> dict:
-    """占位：调用 Wan 2.6 视频生成模型。"""
-    raise NotImplementedError(f"Wan 调用尚未实现 (model={model})")
-
-
-async def call_ltx(
-    model: str, prompt: str, width: int, height: int,
-    duration: int, audio: bool, generation_mode: str, count: int, **kwargs
-) -> dict:
-    """占位：调用 LTX-Video 视频生成模型。"""
-    raise NotImplementedError(f"LTX-Video 调用尚未实现 (model={model})")
-
-
-async def call_hunyuan(
-    model: str, prompt: str, width: int, height: int,
-    duration: int, audio: bool, generation_mode: str, count: int, **kwargs
-) -> dict:
-    """占位：调用 HunyuanVideo 视频生成模型。"""
-    raise NotImplementedError(f"HunyuanVideo 调用尚未实现 (model={model})")
-
-
 # ── Canvas: text generation ───────────────────────────────────────────────────
 
 async def _run_text_generation(
@@ -787,8 +787,15 @@ async def _run_text_generation(
                 from services.screenplay_structure import wrap_screenplay_user_prompt
 
                 final_prompt = wrap_screenplay_user_prompt(prompt)
+            mode = "screenplay" if screenplay_mode else "chat"
+            input_len = len(final_prompt)
+            studio_print("trace", f"A2 TEXT_INPUT mode={mode} input_len={input_len}")
             result_text = await call_openai_compatible(
                 model_id=model, prompt=final_prompt, max_tokens=8000
+            )
+            studio_print(
+                "trace",
+                f"A2 TEXT_OUTPUT mode={mode} output_len={len(result_text or '')}",
             )
         elif model_type == "local":
             raise ValueError(f"模型 {model} 为本地模型，暂不支持文本 API 调用")
@@ -872,6 +879,7 @@ async def canvas_image_task(
             raise HTTPException(status_code=400, detail="请填写画面描述")
 
         trace_id = (body.trace_id or "").strip() or str(uuid.uuid4())
+        preset_id = normalize_quality_preset_id(body.quality_preset_id)
 
         display_for_trace = (body.display_prompt or "").strip() or None
         await push_trace(
@@ -883,7 +891,7 @@ async def canvas_image_task(
                 "model": body.model.strip(),
                 "prompt": raw_prompt,
                 "display_prompt": display_for_trace,
-                "quality_preset_id": (body.quality_preset_id or "").strip() or None,
+                "quality_preset_id": preset_id if preset_id != "auto" else None,
                 "denoise": body.denoise,
                 "ratio": body.ratio,
                 "resolution": body.quality,
@@ -899,6 +907,9 @@ async def canvas_image_task(
         clean_prompt = strip_mention_tokens(raw_prompt)
         mention_ctx = resolve_mentions(db, user.id, body.mentions)
         prompt = enrich_prompt(clean_prompt, mention_ctx.get("context_parts") or [])
+        pos_suffix, neg_suffix_preset = get_suffixes(preset_id)
+        if pos_suffix:
+            prompt = f"{prompt}, {pos_suffix}" if prompt.strip() else pos_suffix
         reference_image = body.reference_image
         ref_urls = list(body.reference_images or [])
         mention_ref_urls = mention_ctx.get("reference_image_urls") or []
@@ -970,6 +981,7 @@ async def canvas_image_task(
                 "trace_id": trace_id,
                 "model": body.model.strip(),
                 "prompt": prompt,
+                "quality_preset_id": preset_id if preset_id != "auto" else None,
                 "ratio": body.ratio,
                 "count": batch_count,
             },
@@ -981,6 +993,8 @@ async def canvas_image_task(
 
         prompt_before_optimize = prompt
         negative_in = (body.negative_prompt or "").strip()
+        if neg_suffix_preset and not negative_in:
+            negative_in = neg_suffix_preset
         positive, negative_opt, optimized, translate_note = await maybe_optimize_prompt(
             prompt, negative_in, "image", True
         )
@@ -1090,6 +1104,7 @@ async def canvas_image_task(
                     skip_translate=optimized or not re.search(r"[\u4e00-\u9fff]", prompt_for_comfy or ""),
                     denoise=body.denoise,
                     negative_prompt=negative_opt or None,
+                    use_reactor=bool(getattr(body, "use_reactor", False)),
                     db=db,
                     user=user,
                 )
@@ -1160,9 +1175,9 @@ async def _image_url_to_base64(
                 raise ValueError("参考图过大（最大 10MB）")
             data = res.content
     else:
-        from services.media_access import assert_user_can_read_upload_url
+        from services.media_access import resolve_image_reference_path
 
-        path = assert_user_can_read_upload_url(db, user, image_url)
+        path = resolve_image_reference_path(db, user, image_url)
         data = path.read_bytes()
     return base64.b64encode(data).decode("ascii")
 
@@ -1188,6 +1203,13 @@ async def canvas_video_task(
     trace_id = (body.trace_id or "").strip() or str(uuid.uuid4())
     preset_id = normalize_quality_preset_id(body.quality_preset_id)
 
+    if (
+        body.generation_mode == "keyframe"
+        and body.last_frame
+        and not body.first_frame
+    ):
+        raise HTTPException(status_code=400, detail="首尾帧模式需要首帧图片")
+
     await push_trace(
         1,
         "SUBMIT",
@@ -1200,12 +1222,18 @@ async def canvas_video_task(
             "ratio": body.ratio,
             "resolution": body.resolution,
             "count": body.count,
+            "generation_mode": body.generation_mode,
+            "first_frame": body.first_frame,
+            "last_frame": body.last_frame,
         },
     )
     studio_print(
         "trace",
         f"L1 SUBMIT model={body.model} ratio={body.ratio} "
-        f"resolution={body.resolution} count={body.count}",
+        f"resolution={body.resolution} count={body.count} "
+        f"generation_mode={body.generation_mode} "
+        f"first_frame={'yes' if body.first_frame else 'no'} "
+        f"last_frame={'yes' if body.last_frame else 'no'}",
     )
 
     clean_prompt = strip_mention_tokens(raw_prompt)
@@ -1213,8 +1241,6 @@ async def canvas_video_task(
     prompt = enrich_prompt(clean_prompt, mention_ctx.get("context_parts") or [])
 
     pos_suffix, neg_suffix = get_suffixes(preset_id)
-    if pos_suffix:
-        prompt = f"{prompt}, {pos_suffix}" if prompt.strip() else pos_suffix
 
     mention_ref_urls = mention_ctx.get("reference_image_urls") or []
 
@@ -1263,16 +1289,21 @@ async def canvas_video_task(
             detail=f"视频时长仅支持 {opts} 秒",
         )
 
-    # 解析分辨率
-    res_key = (body.ratio, body.resolution)
-    if res_key not in RESOLUTION_MAP:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的比例/清晰度组合: {body.ratio} · {body.resolution}",
-        )
-    width, height = RESOLUTION_MAP[res_key]
+    # 解析分辨率（探针可同时传 width+height 覆盖）
+    override_w = getattr(body, "width", None)
+    override_h = getattr(body, "height", None)
+    if override_w is not None and override_h is not None:
+        width, height = int(override_w), int(override_h)
+    else:
+        res_key = (body.ratio, body.resolution)
+        if res_key not in RESOLUTION_MAP:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的比例/清晰度组合: {body.ratio} · {body.resolution}",
+            )
+        width, height = RESOLUTION_MAP[res_key]
     video_backend = resolve_video_backend(body.model.strip())
-    if video_backend == "ltx":
+    if video_backend in ("ltx", "ltx2"):
         aligned_w, aligned_h = comfyui.align_ltx_dimensions(width, height)
     else:
         aligned_w, aligned_h = comfyui.align_video_dimensions(width, height)
@@ -1297,6 +1328,49 @@ async def canvas_video_task(
     _release_stale_node_tasks(db, body.node_id, user.id)
     await reconcile_active_tasks_from_comfyui(db, user.id)
     check_concurrent_generations(db, user, slots_needed=batch_count, team_id=body.team_id)
+    ref_image = body.first_frame or body.reference_image
+    if not ref_image and body.reference_images:
+        ref_image = body.reference_images[0]
+
+    model_id = (body.model or "").strip()
+    use_fun_inpaint = model_id == "wan-fun-inpaint"
+    use_flf2v = (
+        not use_fun_inpaint
+        and body.generation_mode == "keyframe"
+        and body.first_frame
+        and body.last_frame
+    )
+    mode = "text2video"
+    image_b64 = None
+    start_image_b64 = None
+    end_image_b64 = None
+
+    if use_fun_inpaint:
+        if not body.first_frame or not body.last_frame:
+            raise HTTPException(
+                status_code=400,
+                detail="wan-fun-inpaint 需要首帧与尾帧（first_frame + last_frame）",
+            )
+        mode = "fun_inpaint"
+        try:
+            start_image_b64 = await _image_url_to_base64(body.first_frame, db=db, user=user)
+            end_image_b64 = await _image_url_to_base64(body.last_frame, db=db, user=user)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    elif use_flf2v:
+        mode = "flf2v"
+        try:
+            start_image_b64 = await _image_url_to_base64(body.first_frame, db=db, user=user)
+            end_image_b64 = await _image_url_to_base64(body.last_frame, db=db, user=user)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    elif ref_image:
+        mode = "image2video"
+        try:
+            image_b64 = await _image_url_to_base64(ref_image, db=db, user=user)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     await push_trace(
         2,
         "RECEIVED",
@@ -1308,11 +1382,14 @@ async def canvas_video_task(
             "quality_preset_id": preset_id if preset_id != "auto" else None,
             "ratio": body.ratio,
             "count": batch_count,
+            "workflow_route": mode,
+            "generation_mode": body.generation_mode,
         },
     )
     studio_print(
         "trace",
-        f"L2 RECEIVED model={body.model} prompt_len={len(prompt)} count={batch_count}",
+        f"L2 RECEIVED trace_id={trace_id} model={body.model} prompt_len={len(prompt)} "
+        f"count={batch_count} workflow_route={mode}",
     )
     try:
         check_and_consume(db, user.id, "video")
@@ -1324,34 +1401,27 @@ async def canvas_video_task(
     positive, negative, optimized, translate_note = await maybe_optimize_prompt(
         prompt, neg_suffix, "video", True
     )
+    translated_positive = positive
+    if pos_suffix:
+        positive = f"{positive}, {pos_suffix}" if positive.strip() else pos_suffix
     l3_trace = {
         "trace_id": trace_id,
         "before": prompt_before_optimize,
-        "after": positive,
+        "after": translated_positive,
+        "after_final": positive,
         "optimized": optimized,
     }
-    if not optimized and prompt_before_optimize.strip() == positive.strip():
+    if not optimized and prompt_before_optimize.strip() == translated_positive.strip():
         l3_trace["optimize_note"] = translate_note or (
             "未翻译：请配置 DASHSCOPE_API_KEY 或启用文本模型以翻译中文"
         )
     await push_trace(3, "TRANSLATED", l3_trace)
     studio_print(
         "trace",
-        f"L3 TRANSLATED optimized={optimized} before_len={len(prompt_before_optimize)} "
-        f"after_len={len(positive)}",
+        f"L3 TRANSLATED trace_id={trace_id} optimized={optimized} "
+        f"before_len={len(prompt_before_optimize)} after_len={len(translated_positive)} "
+        f"final_len={len(positive)}",
     )
-
-    ref_image = body.first_frame or body.reference_image
-    if not ref_image and body.reference_images:
-        ref_image = body.reference_images[0]
-
-    mode = "image2video" if ref_image else "text2video"
-    image_b64 = None
-    if ref_image:
-        try:
-            image_b64 = await _image_url_to_base64(ref_image, db=db, user=user)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
 
     logger.info(
         "canvas_video_task before comfyui: mode=%s duration=%s optimized=%s",
@@ -1370,6 +1440,9 @@ async def canvas_video_task(
     if settings.agent_mock_generation:
         # MOCK PROVIDER — 移除时机：ComfyUI 真实模型接入后
         task_id = str(uuid.uuid4())
+        sound_note = (body.sound_note or "").strip() or None
+        reactor_face = (body.reactor_face_image or "").strip() or None
+        use_reactor = bool(body.use_reactor) and bool(reactor_face)
         create_task_record(
             db,
             task_id,
@@ -1380,6 +1453,10 @@ async def canvas_video_task(
             prompt_text=prompt,
             comfyui_prompt_id=mock_generation.MOCK_PROMPT_ID,
             node_id=body.node_id,
+            sound_note=sound_note,
+            video_backend=video_backend,
+            use_reactor=use_reactor,
+            reactor_face_image=reactor_face if use_reactor else None,
         )
         db.commit()
         tasks_cache.invalidate_tasks_cache()
@@ -1414,6 +1491,8 @@ async def canvas_video_task(
         if video_backend == "ltx":
             # 以启动时从 ComfyUI 扫描到的权重为准，避免注册表占位名与磁盘不一致
             model_ckpt = comfyui.LTX_CKPT or model_ckpt
+        elif video_backend == "ltx2":
+            model_ckpt = (model_entry or {}).get("comfyui_model_file") or comfyui.LTX2_CKPT
         video_submit_kwargs = dict(
             prompt=positive,
             negative_prompt=negative,
@@ -1422,26 +1501,103 @@ async def canvas_video_task(
             height=aligned_h,
             mode=mode,
             image_b64=image_b64,
+            start_image_b64=start_image_b64,
+            end_image_b64=end_image_b64,
             raw_prompt=optimized,
             client_id=body.client_id,
             model_filename=model_ckpt,
         )
+        if video_backend == "ltx2":
+            video_submit_kwargs["audio"] = bool(body.audio)
         if video_backend == "wan":
             comfy_prompt_id, _client_id, workflow = await comfyui.submit_wan_video_prompt(
-                **video_submit_kwargs
+                **video_submit_kwargs,
+                sampling_profile=getattr(body, "sampling_profile", None) or "fast",
             )
             trace_ckpt = model_ckpt or comfyui.WAN_CKPT
         elif video_backend == "hunyuan":
             comfy_prompt_id, _client_id, workflow = await comfyui.submit_hunyuan_video_prompt(
-                **video_submit_kwargs
+                prompt=positive,
+                negative_prompt=negative,
+                duration=body.duration,
+                width=aligned_w,
+                height=aligned_h,
+                mode=mode,
+                image_b64=image_b64,
+                raw_prompt=optimized,
+                client_id=body.client_id,
+                model_filename=model_ckpt,
+                steps=getattr(body, "steps", None),
             )
             trace_ckpt = model_ckpt or comfyui.HUNYUAN_CKPT
+        elif video_backend == "seedance":
+            from providers.seedance import SeedanceClient, SeedanceNotConfiguredError
+            from services.prompt_builder import compress_for_seedance
+            from services.seedance_task_service import queue_seedance_video_task
+
+            client = SeedanceClient()
+            if not client.is_configured():
+                _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
+                raise HTTPException(
+                    status_code=503,
+                    detail="未配置 SEEDANCE_API_KEY，无法提交 Seedance 任务",
+                )
+            compressed = compress_for_seedance(
+                positive,
+                camera_move=getattr(body, "camera_move", None) or "auto",
+                shot_scale=getattr(body, "shot_scale", None) or "auto",
+            )
+            reactor_face = (body.reactor_face_image or "").strip() or None
+            use_reactor = bool(body.use_reactor) and bool(reactor_face)
+            task_id = await queue_seedance_video_task(
+                db,
+                user_id=user.id,
+                team_id=body.team_id,
+                node_id=body.node_id,
+                prompt=compressed.positive_prompt,
+                ratio=body.ratio,
+                duration=body.duration,
+                resolution=body.resolution,
+                sound_note=(body.sound_note or "").strip() or None,
+                use_reactor=use_reactor,
+                reactor_face_image=reactor_face if use_reactor else None,
+                video_backend=video_backend,
+            )
+            db.commit()
+            tasks_cache.invalidate_tasks_cache()
+            await push_trace(
+                4,
+                "WORKFLOW",
+                build_mock_workflow_trace(
+                    "video",
+                    trace_id=trace_id,
+                    positive_prompt=compressed.positive_prompt,
+                    width=aligned_w,
+                    height=aligned_h,
+                    workflow_mode="seedance",
+                    duration=body.duration,
+                ),
+            )
+            studio_print("video", f"seedance 异步提交 task_id={task_id}")
+            return {
+                "task_id": task_id,
+                "comfy_prompt_id": "seedance",
+                "status": "pending",
+            }
+        elif video_backend == "ltx2":
+            comfy_prompt_id, _client_id, workflow = await comfyui.submit_ltx2_video_prompt(
+                **video_submit_kwargs
+            )
+            trace_ckpt = model_ckpt or comfyui.LTX2_CKPT
         else:
             comfy_prompt_id, _client_id, workflow = await comfyui.submit_video_prompt(
                 **video_submit_kwargs
             )
             trace_ckpt = comfyui.LTX_CKPT
         workflow_trace = extract_workflow_trace(workflow, trace_ckpt)
+        workflow_trace["trace_id"] = trace_id
+        workflow_trace["task_type"] = "video"
+        workflow_trace["duration"] = body.duration
         await push_trace(4, "WORKFLOW", workflow_trace)
         studio_print("trace", f"L4 WORKFLOW {workflow_trace}")
     except ValueError as e:
@@ -1468,6 +1624,9 @@ async def canvas_video_task(
         raise HTTPException(status_code=500, detail=f"提交失败: {e}") from e
 
     task_id = str(uuid.uuid4())
+    sound_note = (body.sound_note or "").strip() or None
+    reactor_face = (body.reactor_face_image or "").strip() or None
+    use_reactor = bool(body.use_reactor) and bool(reactor_face)
     create_task_record(
         db,
         task_id,
@@ -1478,6 +1637,10 @@ async def canvas_video_task(
         prompt_text=prompt,
         comfyui_prompt_id=comfy_prompt_id,
         node_id=body.node_id,
+        sound_note=sound_note,
+        video_backend=video_backend,
+        use_reactor=use_reactor,
+        reactor_face_image=reactor_face if use_reactor else None,
     )
     db.commit()
     tasks_cache.invalidate_tasks_cache()
@@ -1497,25 +1660,102 @@ async def canvas_video_task(
 
 # ── Canvas: video enhance ─────────────────────────────────────────────────────
 
+TASK_TYPE_VE_RECO = "ve_reco"
 
-@router.post(
-    "/api/tasks/video-enhance/recommend-params",
-    response_model=VideoEnhanceRecommendResponse,
-)
+
+async def _run_video_enhance_recommend_task(
+    task_id: str,
+    *,
+    user_id: int,
+    video_url: str,
+    project_id: str | None,
+    script_table_node_id: str | None,
+) -> None:
+    from db.session import SessionLocal
+    from services.media_access import resolve_video_source_for_enhance
+    from services.video_enhance_probe import probe_video_info_from_url
+    from services.video_enhance_recommend import recommend_enhance_params
+
+    db = SessionLocal()
+    try:
+        task = db.get(Task, task_id)
+        if task:
+            task.status = "processing"
+            task.error = None
+            db.commit()
+
+        user = db.get(User, user_id)
+        if not user:
+            raise ValueError("用户不存在")
+
+        try:
+            resolve_video_source_for_enhance(db, user, video_url)
+        except HTTPException as e:
+            raise ValueError(e.detail if isinstance(e.detail, str) else "视频源无效或无权访问") from e
+
+        try:
+            video_info = await probe_video_info_from_url(db, user, video_url)
+        except HTTPException as e:
+            raise ValueError(e.detail if isinstance(e.detail, str) else "无法分析视频属性") from e
+        except Exception as e:
+            raise ValueError("无法分析视频属性") from e
+
+        quality_preset_id = "auto"
+        if project_id:
+            from services.canvas_access import get_accessible_project
+            from services.canvas_style_ref import (
+                get_script_table_default_quality_preset,
+                load_canvas_data,
+            )
+
+            project = get_accessible_project(db, user, project_id)
+            if project:
+                canvas_data = load_canvas_data(project)
+                quality_preset_id = get_script_table_default_quality_preset(
+                    canvas_data, script_table_node_id
+                )
+
+        use_llm = not settings.agent_mock_generation
+        params, reasoning = await recommend_enhance_params(
+            video_info,
+            use_llm=use_llm,
+            quality_preset_id=quality_preset_id,
+        )
+        task = db.get(Task, task_id)
+        if task and task.status != "cancelled":
+            task.status = "completed"
+            task.error = None
+            task.result = json.dumps(
+                {"params": params, "reasoning": reasoning or ""},
+                ensure_ascii=False,
+            )
+            db.commit()
+    except Exception as e:
+        task = db.get(Task, task_id)
+        if task and task.status != "cancelled":
+            task.status = "failed"
+            task.error = str(e)[:2000]
+            task.result = None
+            db.commit()
+        logger.exception("video-enhance recommend async failed task_id=%s", task_id)
+    finally:
+        db.close()
+
+
+@router.post("/api/tasks/video-enhance/recommend-params")
 async def canvas_video_enhance_recommend_params(
     body: VideoEnhanceRecommendRequest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """分析视频属性并推荐画质增强参数（智能模式）。"""
+    """分析视频属性并推荐画质增强参数；立即返回 task_id，结果经 GET /api/tasks/{id} 轮询。"""
     video_url = (body.video_url or "").strip()
     if not video_url:
         raise HTTPException(status_code=400, detail="视频地址不能为空")
 
     from services.media_access import resolve_video_source_for_enhance
-    from services.video_enhance_probe import probe_video_info_from_url
-    from services.video_enhance_recommend import recommend_enhance_params
 
+    # Fast precheck so obvious bad URLs fail before enqueue
     try:
         resolve_video_source_for_enhance(db, user, video_url)
     except HTTPException as e:
@@ -1523,35 +1763,26 @@ async def canvas_video_enhance_recommend_params(
     except Exception as e:
         raise HTTPException(status_code=400, detail="视频源无效或无权访问") from e
 
-    try:
-        video_info = await probe_video_info_from_url(db, user, video_url)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="无法分析视频属性") from e
-
-    quality_preset_id = "auto"
-    if body.project_id:
-        from services.canvas_access import get_accessible_project
-        from services.canvas_style_ref import (
-            get_script_table_default_quality_preset,
-            load_canvas_data,
-        )
-
-        project = get_accessible_project(db, user, body.project_id)
-        if project:
-            canvas_data = load_canvas_data(project)
-            quality_preset_id = get_script_table_default_quality_preset(
-                canvas_data, body.script_table_node_id
-            )
-
-    use_llm = not settings.agent_mock_generation
-    params, reasoning = await recommend_enhance_params(
-        video_info,
-        use_llm=use_llm,
-        quality_preset_id=quality_preset_id,
+    task_id = str(uuid.uuid4())
+    create_task_record(
+        db,
+        task_id,
+        TASK_TYPE_VE_RECO,
+        "queued",
+        user_id=user.id,
+        prompt_text=video_url[:2000],
     )
-    return VideoEnhanceRecommendResponse(params=params, reasoning=reasoning)
+    db.commit()
+    asyncio.create_task(
+        _run_video_enhance_recommend_task(
+            task_id,
+            user_id=user.id,
+            video_url=video_url,
+            project_id=body.project_id,
+            script_table_node_id=body.script_table_node_id,
+        )
+    )
+    return {"task_id": task_id, "status": "queued"}
 
 
 @router.post("/api/tasks/video-enhance")

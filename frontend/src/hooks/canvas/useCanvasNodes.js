@@ -322,8 +322,18 @@ export function useCanvasNodes({
           vidDuration:     params.vidDuration,
           vidAudio:        params.vidAudio,
           referenceMode:   params.referenceMode
-            || (params.vidMode === "参考" ? "freeref" : "keyframe"),
+            || (params.vidMode === "参考"
+              ? "freeref"
+              : params.vidMode === "文生"
+                ? "t2v"
+                : "keyframe"),
           freeRefs:        params.freeRefs ?? n.data.freeRefs,
+          qualityPresetId: params.qualityPresetId ?? n.data.qualityPresetId,
+          cameraMove:      params.cameraMove ?? n.data.cameraMove ?? "auto",
+          shotScale:       params.shotScale ?? n.data.shotScale ?? "auto",
+          samplingProfile: params.samplingProfile
+            ?? n.data.samplingProfile
+            ?? ((params.cameraMove || n.data.cameraMove || "auto") !== "auto" ? "quality" : "fast"),
           count:           params.count,
           expectedCount:   params.count || 1,
           pendingTrigger:  Date.now(),

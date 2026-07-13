@@ -3,6 +3,8 @@
 
 前置：后端 :7788 + AGENT_MOCK_GENERATION=true；admin 登录。
 会先 mock 出图取得真实 uploads URL 作为首尾帧。
+
+注意：mock 仅验证 API 提交；真实 GPU 首尾帧见 scripts/_prompt_debug_phase3_keyframe.py。
 退出码：0=PASS, 1=infra, 3=assert fail
 """
 from __future__ import annotations

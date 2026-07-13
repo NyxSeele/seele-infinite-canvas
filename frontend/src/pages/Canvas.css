@@ -1735,7 +1735,7 @@ html.rf-canvas-page-active .app-shell {
 .rf-page--fullscreen {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: 9999; /* Z_NODE_DOTS_MENU */
   width: 100vw;
   height: 100vh;
 }
@@ -1908,7 +1908,7 @@ body:has(.rf-page--fullscreen) .image-viewer {
 
 .ctb-share-menu {
   position: fixed;
-  z-index: 30010;
+  z-index: 30010; /* Z_SHARE_MENU */
   width: max-content;
   min-width: 0;
   padding: 6px;
@@ -2236,7 +2236,7 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
   top: 64px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 30000;
+  z-index: 30000; /* Z_TOAST */
   padding: 8px 16px;
   border-radius: 10px;
   font-size: 13px;
@@ -3310,7 +3310,7 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 9999;
+  z-index: 9999; /* Z_NODE_DOTS_MENU */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3386,7 +3386,7 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 9999;
+  z-index: 9999; /* Z_NODE_DOTS_MENU */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3441,7 +3441,7 @@ body.image-fullscreen-open .nb-banner {
 /* 飞出面板拖到画布的跟随预览 */
 .canvas-drag-ghost {
   position: fixed;
-  z-index: 9999;
+  z-index: 9999; /* Z_NODE_DOTS_MENU */
   pointer-events: none;
   transform: translate(-50%, -50%);
   display: flex;

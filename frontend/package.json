@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "npm run lint:jsx-undef",
     "build": "vite build",
     "lint": "eslint .",
+    "lint:jsx-undef": "eslint -c eslint.jsx-undef.config.js src",
     "preview": "vite preview"
   },
   "dependencies": {

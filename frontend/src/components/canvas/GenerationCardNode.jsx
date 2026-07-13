@@ -14,6 +14,7 @@ import NodeLastEditedMeta from "./NodeLastEditedMeta"
 import { getCanvasTeamId, teamIdPayload } from "../../utils/teamContext"
 import MediaFullscreenViewer from "./MediaFullscreenViewer"
 import GenerationStopButton from "./GenerationStopButton"
+import GenerationBrandLoader from "./GenerationBrandLoader"
 import { cancelCanvasTask } from "../../services/cancelTask"
 import {
   buildClearGenerationTaskPatch,
@@ -29,6 +30,8 @@ import { MENU_SUBMENU_CLOSE_MS } from "../../utils/menuFlyoutTiming"
 import { parseGenerationError } from "./taskNetworkError"
 import { getRetryPolicy } from "../../utils/canvas/generationRetryPolicy"
 import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
+import { findScriptTableNode, resolveImageQualityPresetId } from "../../utils/canvas/scriptTableNode"
+import { collectConnectedCharacterFaceUrl } from "../../utils/canvas/entityRefs"
 import { uploadImageFile } from "../../services/uploadImage"
 import { ensureMediaUrl, stripMediaTicket } from "../../utils/mediaTicket"
 import { useLocale } from "../../utils/locale"
@@ -188,6 +191,7 @@ function normalizeInitialImageStatus(raw) {
 
 export default function GenerationCardNode({ id, data, selected, isConnectable }) {
   const { t } = useLocale()
+  const { getNodes, getEdges } = useReactFlow()
   const progressHints = useProgressHints()
   const [status, setStatus] = useState(() => normalizeInitialImageStatus(data.status))
   const [prompt, setPrompt] = useState(data.prompt || "")
@@ -389,13 +393,15 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
           const phase = deriveSlotPhase(task)
           phasesRef.current[index] = phase
           if (phase === SLOT_PHASE.GENERATING && typeof task.progress === "number") {
-            progressRef.current[index] = task.progress
-            staleGuardRef.current?.bump(task.progress)
+            const prev = progressRef.current[index] || 0
+            const next = Math.max(prev, Math.min(100, Math.max(0, Number(task.progress) || 0)))
+            progressRef.current[index] = next
+            staleGuardRef.current?.bump(next)
           } else if (phase === SLOT_PHASE.WAITING) {
             progressRef.current[index] = 0
           }
           if (totalCount <= 1 && typeof task.progress === "number") {
-            setPollProgress(task.progress)
+            setPollProgress((prev) => Math.max(prev, Math.min(100, Math.max(0, Number(task.progress) || 0))))
           }
           syncSlotUi()
 
@@ -588,16 +594,24 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     const refUrls = refs
       .map((r) => r.imageUrl)
       .filter((url) => url && !isInlineImageUrl(url))
+    const characterFaceUrl = collectConnectedCharacterFaceUrl(getNodes(), getEdges(), id)
+    const pulidFaceUrl = characterFaceUrl && !isInlineImageUrl(characterFaceUrl) ? characterFaceUrl : null
     const generationPrompt = (data.generationPrompt || "").trim()
     const displayPrompt = (data.displayPrompt || prompt || data.prompt || "").trim()
-    const rawRef = refUrls[0] || data.referenceImageUrl || null
+    const rawRef = pulidFaceUrl || refUrls[0] || data.referenceImageUrl || null
+    const selectedModel = pulidFaceUrl ? "flux-pulid" : (data.modelId || modelId)
+    const hasFaceRef = Boolean(pulidFaceUrl || (selectedModel === "flux-pulid" && rawRef))
     const payload = {
-      model: data.modelId || modelId,
+      model: selectedModel,
       prompt: generationPrompt || displayPrompt,
       display_prompt: displayPrompt || undefined,
       mentions: mentionsList,
       reference_image: rawRef && !isInlineImageUrl(rawRef) ? rawRef : null,
-      reference_images: refUrls.length ? refUrls : undefined,
+      reference_images: pulidFaceUrl
+        ? [pulidFaceUrl]
+        : refUrls.length
+          ? refUrls
+          : undefined,
       _inlineReferenceUrls: refs
         .map((r) => r.imageUrl)
         .filter((url) => url && isInlineImageUrl(url)),
@@ -605,6 +619,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       ratio: data.imgRatio || "1:1",
       count: data.count || 1,
       node_id: id,
+      use_reactor: hasFaceRef || Boolean(data.use_reactor),
     }
     const denoise = data.img2imgDenoise
     if (denoise != null && Number.isFinite(Number(denoise))) {
@@ -612,9 +627,14 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     }
     const negative = (data.negativePrompt || "").trim()
     if (negative) payload.negative_prompt = negative
+    const scriptTable = findScriptTableNode(getNodes())
+    const qualityPresetId = resolveImageQualityPresetId(data, scriptTable?.data || null)
+    if (qualityPresetId && qualityPresetId !== "auto") {
+      payload.quality_preset_id = qualityPresetId
+    }
     if (data.traceId) payload.trace_id = data.traceId
     return payload
-  }, [data, modelId, prompt, id])
+  }, [data, modelId, prompt, id, getNodes, getEdges])
 
   const submitImageTask = useCallback(async (payload) => {
     stopPolling()

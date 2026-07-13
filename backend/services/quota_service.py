@@ -144,6 +144,10 @@ def create_task_record(
     prompt_text: str | None = None,
     comfyui_prompt_id: str | None = None,
     node_id: str | None = None,
+    sound_note: str | None = None,
+    video_backend: str | None = None,
+    use_reactor: bool = False,
+    reactor_face_image: str | None = None,
 ) -> Task:
     existing = db.get(Task, task_id)
     if existing:
@@ -151,6 +155,14 @@ def create_task_record(
             existing.prompt_text = prompt_text
         if user_id is not None and existing.user_id is None:
             existing.user_id = user_id
+        if sound_note and not existing.sound_note:
+            existing.sound_note = sound_note
+        if video_backend and not existing.video_backend:
+            existing.video_backend = video_backend
+        if use_reactor and not existing.use_reactor:
+            existing.use_reactor = True
+        if reactor_face_image and not existing.reactor_face_image:
+            existing.reactor_face_image = reactor_face_image
         db.flush()
         return existing
     task = Task(
@@ -162,6 +174,10 @@ def create_task_record(
         prompt_text=prompt_text,
         comfyui_prompt_id=comfyui_prompt_id,
         node_id=node_id,
+        sound_note=sound_note,
+        video_backend=video_backend,
+        use_reactor=bool(use_reactor),
+        reactor_face_image=(reactor_face_image or "").strip() or None,
     )
     db.add(task)
     db.flush()

@@ -8,8 +8,20 @@ import ScriptShotDirectorPanel from "./ScriptShotDirectorPanel"
 import VideoStylePicker from "./VideoStylePicker"
 import { closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import "./ScriptShotCard.css"
+import "./ScriptKeyframeCard.css"
 import "./NodeBanner.css"
 import "./VideoStylePicker.css"
+
+function statusLabel(t, status) {
+  const map = {
+    idle: t("canvas.script.statusPending"),
+    pending: t("canvas.script.statusPending"),
+    generating: t("canvas.script.statusGenerating"),
+    completed: t("canvas.script.statusDone"),
+    failed: t("canvas.script.statusFailed"),
+  }
+  return map[status] || status
+}
 
 const DragHandleIcon = () => (
   <svg width="12" height="16" viewBox="0 0 12 16" fill="none" aria-hidden>
@@ -52,6 +64,7 @@ export default function ScriptShotCard({
   const directReady = rowDirectImageReady(row)
   const generating =
     batchRunning || row.directStatus === "generating" || row.status === "generating"
+  const rowStatus = row.directStatus || row.status || "idle"
   const shotPrompt = (row.prompt || row.description || "").trim()
   const presetId = row.qualityPresetId || "auto"
   const sceneOptions = (sceneLibrary || []).filter((s) => s?.name)
@@ -77,7 +90,7 @@ export default function ScriptShotCard({
 
   return (
     <article
-      className={`st-shot-card st-shot-card--${row.directStatus || row.status || "idle"}${readOnly ? " st-shot-card--readonly" : ""}${dragOver ? " st-shot-card--drag-over" : ""}`}
+      className={`st-shot-card st-shot-card--${rowStatus}${readOnly ? " st-shot-card--readonly" : ""}${dragOver ? " st-shot-card--drag-over" : ""}`}
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
@@ -137,6 +150,9 @@ export default function ScriptShotCard({
             title={t("canvas.script.shotStyleTitle")}
             onPresetChange={(id) => onUpdateRow(row.id, applyQualityPresetToRow(row, id))}
           />
+          <span className={`st-kf-status st-kf-status--${rowStatus}`}>
+            {statusLabel(t, rowStatus)}
+          </span>
           {sceneOptions.length > 0 ? (
             <label className="st-shot-card-scene nodrag">
               <span className="cn-label">{t("canvas.script.scene")}</span>

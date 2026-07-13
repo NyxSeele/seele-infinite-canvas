@@ -175,7 +175,14 @@ export function useCanvasInteraction({
             continuityMode: true,
             visualContinuity: false,
           }
-        : {}
+        : type === "character-card"
+          ? {
+              label: getT()("canvas.characterCard.title"),
+              name: "",
+              appearance: "",
+              referenceImages: [],
+            }
+          : {}
       const placement =
         pm?.fromEdge && pm?.sourceNodeId
           ? { anchorNodeId: pm.sourceNodeId }

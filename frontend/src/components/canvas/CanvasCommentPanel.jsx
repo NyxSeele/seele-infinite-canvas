@@ -5,6 +5,7 @@ import { useLocale } from "../../utils/locale"
 import { AVATAR_CHANGED_EVENT } from "../../utils/canvas/userAvatar"
 import { resolveCommentAuthorName, resolveCommentAvatar } from "../../utils/canvas/commentUserDisplay"
 import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_COMMENT_MSG_MENU } from "../../utils/zIndexLayers"
 import "./CanvasCommentPanel.css"
 
 const PANEL_WIDTH = 360
@@ -109,7 +110,7 @@ function MessageMenu({ onEdit, onDelete, t }) {
         top: r.bottom + 6,
         left: Math.max(8, r.right - menuW),
         minWidth: menuW,
-        zIndex: 10200,
+        zIndex: Z_COMMENT_MSG_MENU,
       })
     }
     update()

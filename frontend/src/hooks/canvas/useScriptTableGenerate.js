@@ -1,6 +1,7 @@
 import { useCallback } from "react"
 import { addEdge } from "reactflow"
 import api from "../../services/api"
+import { compilePrompt, modelTargetForImage, modelTargetForVideo } from "../../services/promptCompileApi"
 import { resolveReferenceUrlForApi } from "../../services/uploadImage"
 import { stripMediaTicket } from "../../utils/mediaTicket"
 import { getT } from "../../utils/locale"
@@ -8,6 +9,8 @@ import { normalizeCastLibrary } from "../../utils/canvas/castLibrary"
 import {
   buildEntityThemeContext,
   characterCastLibrary,
+  collectConnectedCharacterRefs,
+  mergeCharacterRefsForCompile,
   resolveCharacterRefsForRow,
   resolveSceneRefsForRow,
 } from "../../utils/canvas/entityRefs"
@@ -70,7 +73,7 @@ function beatCardKeyframes(nodes, row) {
   return asKeyframeArray(card?.data?.keyframes)
 }
 
-export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nodesRef, buildData, bumpZIndex }) {
+export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nodesRef, edgesRef, buildData, bumpZIndex }) {
   const patchScriptTableRow = useCallback((scriptTableNodeId, rowId, patch) => {
     setNodes((ns) =>
       ns.map((n) => {
@@ -192,6 +195,18 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         const globalAssets = useAssetStore.getState().assets || []
         const sceneLibrary = scriptNode.data?.sceneLibrary || []
         const matchedCast = resolveCharacterRefsForRow(rowForCast, castLibrary, globalAssets)
+        const connectedChars = collectConnectedCharacterRefs(
+          nodesRef.current,
+          edgesRef?.current || [],
+          scriptTableNodeId
+        )
+        const characterRefs = mergeCharacterRefsForCompile(
+          connectedChars,
+          matchedCast.map((c) => ({
+            name: c.name || "",
+            appearance: c.prompt || c.description || c.note || "",
+          }))
+        )
         const matchedScenes = resolveSceneRefsForRow(rowForCast, sceneLibrary)
         const castContext = buildEntityThemeContext(
           rowForCast,
@@ -214,8 +229,24 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         }
 
         const traceId = newTraceId()
+        let descriptionForBuild = rowDesc
+        try {
+          const compiled = await compilePrompt({
+            scene_desc: rowDesc,
+            character_refs: characterRefs,
+            style_preset: getEffectiveQualityPresetId(row, scriptNode.data) || "",
+            model_target: modelTargetForImage(modelId),
+            trace_id: traceId,
+          })
+          if (compiled?.positive_prompt?.trim()) {
+            descriptionForBuild = compiled.positive_prompt.trim()
+          }
+        } catch {
+          /* fallback to raw row description */
+        }
+
         const buildRes = await api.post("/api/prompt/build-shot", {
-          description: rowDesc,
+          description: descriptionForBuild,
           model_id: modelId,
           global_style: "",
           quality_preset_id: getEffectiveQualityPresetId(row, scriptNode.data),
@@ -229,6 +260,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           ),
           has_manual_reference: manualRefs.length > 0,
           trace_id: traceId,
+          character_refs_count: characterRefs.length,
         })
 
         const {
@@ -275,6 +307,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           }
         }
         const refUrl = resolvedRefs[0] || null
+        const pulidFaceRef = charRefs[0] || null
+        const effectiveModelId = pulidFaceRef ? "flux-pulid" : modelId
+        const pulidRefs = pulidFaceRef ? [pulidFaceRef] : resolvedRefs
 
         let imageGenId = row.directImageGenNodeId
         const existingImageGen = imageGenId
@@ -289,12 +324,12 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           prompt: uiPrompt,
           generationPrompt: prompt,
           displayPrompt: uiPrompt,
-          modelId,
+          modelId: effectiveModelId,
           traceId: sessionTraceId,
-          referenceImageUrl: refUrl,
-          referenceImage: refUrl,
-          referenceImages: resolvedRefs.length
-            ? resolvedRefs.map((url, i) => ({
+          referenceImageUrl: pulidRefs[0] || refUrl,
+          referenceImage: pulidRefs[0] || refUrl,
+          referenceImages: pulidRefs.length
+            ? pulidRefs.map((url, i) => ({
                 nodeId: "",
                 imageIndex: i,
                 imageUrl: url,
@@ -302,12 +337,13 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
                 label: i === 0 ? label : `${label} ref${i + 1}`,
               }))
             : [],
-          reference_images: resolvedRefs.length ? resolvedRefs : undefined,
+          reference_images: pulidRefs.length ? pulidRefs : undefined,
+          use_reactor: Boolean(pulidFaceRef),
           count: 1,
           expectedCount: 1,
           builtPrompt: prompt,
           negativePrompt,
-          img2imgDenoise: refUrl ? img2imgDenoise : null,
+          img2imgDenoise: pulidFaceRef ? null : refUrl ? img2imgDenoise : null,
           scriptTableRef: {
             nodeId: scriptTableNodeId,
             rowId,
@@ -452,6 +488,18 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         const globalAssets = useAssetStore.getState().assets || []
         const sceneLibrary = scriptNode.data?.sceneLibrary || []
         const matchedCast = resolveCharacterRefsForRow(rowForCast, castLibrary, globalAssets)
+        const connectedChars = collectConnectedCharacterRefs(
+          nodesRef.current,
+          edgesRef?.current || [],
+          scriptTableNodeId
+        )
+        const characterRefs = mergeCharacterRefsForCompile(
+          connectedChars,
+          matchedCast.map((c) => ({
+            name: c.name || "",
+            appearance: c.prompt || c.description || c.note || "",
+          }))
+        )
         const matchedScenes = resolveSceneRefsForRow(rowForCast, sceneLibrary)
         const castContext = buildEntityThemeContext(
           rowForCast,
@@ -474,8 +522,24 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         }
 
         const traceId = newTraceId()
+        let descriptionForBuild = rowDesc
+        try {
+          const compiled = await compilePrompt({
+            scene_desc: rowDesc,
+            character_refs: characterRefs,
+            style_preset: getEffectiveQualityPresetId(row, scriptNode.data) || "",
+            model_target: modelTargetForImage(modelId),
+            trace_id: traceId,
+          })
+          if (compiled?.positive_prompt?.trim()) {
+            descriptionForBuild = compiled.positive_prompt.trim()
+          }
+        } catch {
+          /* fallback to raw row description */
+        }
+
         const buildRes = await api.post("/api/prompt/build-shot", {
-          description: rowDesc,
+          description: descriptionForBuild,
           model_id: modelId,
           global_style: "",
           quality_preset_id: getEffectiveQualityPresetId(row, scriptNode.data),
@@ -489,6 +553,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           ),
           has_manual_reference: manualRefs.length > 0,
           trace_id: traceId,
+          character_refs_count: characterRefs.length,
         })
 
         const {
@@ -542,6 +607,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           }
         }
         const refUrl = resolvedRefs[0] || null
+        const pulidFaceRef = charRefs[0] || null
+        const effectiveModelId = pulidFaceRef ? "flux-pulid" : modelId
+        const pulidRefs = pulidFaceRef ? [pulidFaceRef] : resolvedRefs
 
         const kfIndex = keyframes.findIndex((k) => k.id === keyframeId)
         let imageGenId = keyframe.imageGenNodeId
@@ -556,12 +624,12 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           prompt: uiPrompt,
           generationPrompt: prompt,
           displayPrompt: uiPrompt,
-          modelId,
+          modelId: effectiveModelId,
           traceId: sessionTraceId,
-          referenceImageUrl: refUrl,
-          referenceImage: refUrl,
-          referenceImages: resolvedRefs.length
-            ? resolvedRefs.map((url, i) => ({
+          referenceImageUrl: pulidRefs[0] || refUrl,
+          referenceImage: pulidRefs[0] || refUrl,
+          referenceImages: pulidRefs.length
+            ? pulidRefs.map((url, i) => ({
                 nodeId: "",
                 imageIndex: i,
                 imageUrl: url,
@@ -569,12 +637,13 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
                 label: i === 0 ? label : `${label} ref${i + 1}`,
               }))
             : [],
-          reference_images: resolvedRefs.length ? resolvedRefs : undefined,
+          reference_images: pulidRefs.length ? pulidRefs : undefined,
+          use_reactor: Boolean(pulidFaceRef),
           count: 1,
           expectedCount: 1,
           builtPrompt: prompt,
           negativePrompt,
-          img2imgDenoise: refUrl ? img2imgDenoise : null,
+          img2imgDenoise: pulidFaceRef ? null : refUrl ? img2imgDenoise : null,
           scriptTableRef: {
             nodeId: scriptTableNodeId,
             rowId,
@@ -689,6 +758,67 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
     [nodesRef]
   )
 
+  const waitForScriptTableDirectImage = useCallback(
+    (scriptTableNodeId, rowId, timeoutMs = 300000) => {
+      return new Promise((resolve, reject) => {
+        const start = Date.now()
+        const tick = () => {
+          const scriptNode = nodesRef.current.find((n) => n.id === scriptTableNodeId)
+          const row = scriptNode?.data?.rows?.find((r) => r.id === rowId)
+          if (!row) {
+            reject(new Error(getT()("canvas.script.cellNotFound")))
+            return
+          }
+          if (row.directStatus === "completed" || row.directStatus === "failed") {
+            resolve(row)
+            return
+          }
+          if (Date.now() - start > timeoutMs) {
+            reject(new Error(getT()("canvas.gen.timeout")))
+            return
+          }
+          setTimeout(tick, 1500)
+        }
+        tick()
+      })
+    },
+    [nodesRef]
+  )
+
+  const waitForScriptTableDirectVideo = useCallback(
+    (scriptTableNodeId, rowId, timeoutMs = 600000) => {
+      return new Promise((resolve, reject) => {
+        const start = Date.now()
+        const tick = () => {
+          const scriptNode = nodesRef.current.find((n) => n.id === scriptTableNodeId)
+          const row = scriptNode?.data?.rows?.find((r) => r.id === rowId)
+          if (!row) {
+            reject(new Error(getT()("canvas.script.cellNotFound")))
+            return
+          }
+          const vid = row.directVideoGenNodeId
+          if (!vid) {
+            reject(new Error(getT()("canvas.gen.failed")))
+            return
+          }
+          const videoNode = nodesRef.current.find((n) => n.id === vid)
+          const status = videoNode?.data?.status
+          if (status === "completed" || status === "failed") {
+            resolve({ row, videoNode })
+            return
+          }
+          if (Date.now() - start > timeoutMs) {
+            reject(new Error(getT()("canvas.gen.timeout")))
+            return
+          }
+          setTimeout(tick, 2000)
+        }
+        tick()
+      })
+    },
+    [nodesRef]
+  )
+
   const runScriptTableRowGenerate = useCallback(
     async (scriptTableNodeId, rowId, options = {}) => {
       return runScriptTableDirectImageGenerate(scriptTableNodeId, rowId, options)
@@ -760,7 +890,60 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
 
       const durationSec = clampShotDuration(row.duration)
       const shotStyleRef = row.styleReference || null
-      const videoPrompt = appendStyleReferenceToDescription(shotPromptText(row), shotStyleRef)
+      const imageNode = row.directImageGenNodeId
+        ? nodesRef.current.find((n) => n.id === row.directImageGenNodeId)
+          || getNode(row.directImageGenNodeId)
+        : null
+      const l0GenerationPrompt = (imageNode?.data?.generationPrompt || "").trim()
+      const imageTraceId = imageNode?.data?.traceId || null
+      // G31: 出视频也注入运镜/景别；L0 已含「运镜：」时避免重复
+      const rowWithDirector = appendDirectorFieldsToDescription(shotPromptText(row), row)
+      const sceneDescForVideo =
+        l0GenerationPrompt && /运镜[：:]/.test(l0GenerationPrompt)
+          ? l0GenerationPrompt
+          : l0GenerationPrompt
+            ? appendDirectorFieldsToDescription(l0GenerationPrompt, row)
+            : rowWithDirector
+      const samplingProfile = String(row.movement || "").trim() ? "quality" : "fast"
+      let videoPrompt = appendStyleReferenceToDescription(sceneDescForVideo, shotStyleRef)
+      const priorVideoGenId = row.directVideoGenNodeId
+      const priorVideo = priorVideoGenId
+        ? nodesRef.current.find((n) => n.id === priorVideoGenId) || getNode(priorVideoGenId)
+        : null
+      try {
+        const castForPkg = normalizeCastLibrary(scriptNode.data.castLibrary || [])
+        const globalAssets = useAssetStore.getState().assets || []
+        const matchedCast = resolveCharacterRefsForRow(row, castForPkg, globalAssets)
+        const connectedChars = collectConnectedCharacterRefs(
+          nodesRef.current,
+          edgesRef?.current || [],
+          scriptTableNodeId
+        )
+        const characterRefs = mergeCharacterRefsForCompile(
+          connectedChars,
+          matchedCast.map((c) => ({
+            name: c.name || "",
+            appearance: c.prompt || c.description || c.note || "",
+          }))
+        )
+        const compiled = await compilePrompt({
+          scene_desc: sceneDescForVideo,
+          character_refs: characterRefs,
+          style_preset: getEffectiveQualityPresetId(row, scriptNode.data) || "",
+          model_target: modelTargetForVideo(videoModelId),
+          trace_id: imageTraceId || undefined,
+          camera_move: priorVideo?.data?.cameraMove || "auto",
+          shot_scale: priorVideo?.data?.shotScale || "auto",
+        })
+        if (compiled?.positive_prompt?.trim()) {
+          videoPrompt = appendStyleReferenceToDescription(
+            compiled.positive_prompt.trim(),
+            shotStyleRef
+          )
+        }
+      } catch {
+        /* keep shot prompt */
+      }
 
       const firstRef = buildRefItem({
         nodeId: row.directImageGenNodeId || scriptTableNodeId,
@@ -770,9 +953,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
       })
 
       let videoGenId = row.directVideoGenNodeId
-      const existingVideo = videoGenId
-        ? nodesRef.current.find((n) => n.id === videoGenId) || getNode(videoGenId)
-        : null
+      const existingVideo = priorVideo
 
       const label = getT()("canvas.script.shotVideo", { n: row.shotNumber ?? rowIndex + 1 })
       const videoPayload = {
@@ -780,11 +961,16 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         prompt: videoPrompt,
         modelId: videoModelId,
         qualityPresetId: getEffectiveQualityPresetId(row, scriptNode.data),
+        samplingProfile,
+        cameraMove: priorVideo?.data?.cameraMove || "auto",
+        shotScale: priorVideo?.data?.shotScale || "auto",
+        traceId: imageTraceId || newTraceId(),
         keyframes: { first: firstRef, last: firstRef },
         referenceMode: "keyframe",
         vidDuration: `${durationSec}s`,
         vidRatio: "16:9",
         vidQuality: "1080P",
+        vidAudio: "开启",
         scriptTableRef: { nodeId: scriptTableNodeId, rowId, lane: "direct" },
         pendingTrigger: Date.now(),
       }
@@ -832,7 +1018,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
       })
       return true
     },
-    [getNode, patchScriptTableRow, bumpZIndex, buildData, setNodes, setEdges, nodesRef]
+    [getNode, patchScriptTableRow, bumpZIndex, buildData, setNodes, setEdges, nodesRef, edgesRef]
   )
 
   const runScriptTableRowVideoGenerate = useCallback(
@@ -888,8 +1074,10 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         : null
       const shotStyleRef =
         existingVideo?.data?.styleReference || row.styleReference || null
+      const rowWithDirector = appendDirectorFieldsToDescription(shotPromptText(row), row)
+      const samplingProfile = String(row.movement || "").trim() ? "quality" : "fast"
       const videoPrompt = appendStyleReferenceToDescription(
-        [shotPromptText(row), beatLines].filter(Boolean).join("\n\n"),
+        [rowWithDirector, beatLines].filter(Boolean).join("\n\n"),
         shotStyleRef
       )
 
@@ -913,11 +1101,15 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         prompt: videoPrompt,
         modelId: videoModelId,
         qualityPresetId: getEffectiveQualityPresetId(row, scriptNode.data),
+        samplingProfile,
+        cameraMove: existingVideo?.data?.cameraMove || "auto",
+        shotScale: existingVideo?.data?.shotScale || "auto",
         keyframes: { first: firstRef, last: lastRef },
         referenceMode: "keyframe",
         vidDuration: `${durationSec}s`,
         vidRatio: "16:9",
         vidQuality: "1080P",
+        vidAudio: "开启",
         scriptTableRef: {
           nodeId: scriptTableNodeId,
           rowId,
@@ -1008,17 +1200,68 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
       }
 
       const continuityOn = scriptNode.data.continuityMode !== false
+      const visualOn = scriptNode.data.visualContinuity === true
+      const shouldWait = continuityOn || visualOn
       for (const row of rows) {
         const started = await runScriptTableDirectImageGenerate(scriptTableNodeId, row.id, {
           modelId,
         })
         if (!started) continue
-        if (continuityOn) {
-          await new Promise((r) => setTimeout(r, 2000))
+        if (shouldWait) {
+          try {
+            const finished = await waitForScriptTableDirectImage(scriptTableNodeId, row.id)
+            if (finished.directStatus === "failed") break
+          } catch {
+            break
+          }
         }
       }
     },
-    [getNode, runScriptTableDirectImageGenerate, setNodes, nodesRef]
+    [getNode, runScriptTableDirectImageGenerate, setNodes, nodesRef, waitForScriptTableDirectImage]
+  )
+
+  const runScriptTableGenerateAllVideo = useCallback(
+    async (scriptTableNodeId, options = {}) => {
+      const scriptNode =
+        nodesRef.current.find((n) => n.id === scriptTableNodeId) || getNode(scriptTableNodeId)
+      if (!scriptNode || scriptNode.type !== "script-table") return
+
+      const videoModelId = options.videoModelId || scriptNode.data.videoModelId
+      if (!videoModelId) return
+
+      const rows = sortScriptRows(scriptNode.data.rows || []).filter(
+        (r) => rowDirectImageReady(r) && shotPromptText(r)
+      )
+      if (rows.length === 0) return
+
+      if (videoModelId !== scriptNode.data.videoModelId) {
+        setNodes((ns) =>
+          ns.map((n) =>
+            n.id === scriptTableNodeId ? { ...n, data: { ...n.data, videoModelId } } : n
+          )
+        )
+      }
+
+      for (const row of rows) {
+        const started = await runScriptTableDirectVideoGenerate(scriptTableNodeId, row.id, {
+          videoModelId,
+        })
+        if (!started) continue
+        try {
+          const finished = await waitForScriptTableDirectVideo(scriptTableNodeId, row.id)
+          if (finished.videoNode?.data?.status === "failed") break
+        } catch {
+          break
+        }
+      }
+    },
+    [
+      getNode,
+      runScriptTableDirectVideoGenerate,
+      setNodes,
+      nodesRef,
+      waitForScriptTableDirectVideo,
+    ]
   )
 
   return {
@@ -1032,6 +1275,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
     runBeatCardRowGenerate,
     runScriptTableKeyframeGenerate,
     runScriptTableGenerateAll,
+    runScriptTableGenerateAllVideo,
     runScriptTableRowVideoGenerate,
   }
 }

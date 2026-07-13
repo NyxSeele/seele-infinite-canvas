@@ -1,4 +1,5 @@
 import api from "./api"
+import { pollTaskUntilDone } from "../utils/canvas/outlineStructureApi"
 
 export async function scanImportDocument({ projectId, file }) {
   const form = new FormData()
@@ -11,12 +12,24 @@ export async function scanImportDocument({ projectId, file }) {
 }
 
 export async function parseImportSheets({ projectId, importSessionId, sheetNames }) {
-  const res = await api.post("/api/import/document/parse", {
-    project_id: projectId,
-    import_session_id: importSessionId,
-    sheet_names: sheetNames,
+  const submit = await api.post(
+    "/api/import/document/parse",
+    {
+      project_id: projectId,
+      import_session_id: importSessionId,
+      sheet_names: sheetNames,
+    },
+    { timeout: 30000 }
+  )
+  const taskId = submit.data?.task_id
+  if (!taskId) {
+    // 兼容旧同步响应
+    return submit.data
+  }
+  const task = await pollTaskUntilDone(taskId, {
+    timeoutMessage: "文档解析超时，请稍后重试",
   })
-  return res.data
+  return task.result || {}
 }
 
 export async function suggestImportGroups({
@@ -35,8 +48,17 @@ export async function suggestImportGroups({
   if (mode === "rule") {
     body.target_duration = targetDuration
   }
-  const res = await api.post("/api/import/document/group-suggest", body)
-  return res.data
+  const submit = await api.post("/api/import/document/group-suggest", body, {
+    timeout: 30000,
+  })
+  const taskId = submit.data?.task_id
+  if (!taskId) {
+    return submit.data
+  }
+  const task = await pollTaskUntilDone(taskId, {
+    timeoutMessage: "分组建议超时，请稍后重试",
+  })
+  return task.result || {}
 }
 
 export async function applyImportDocument(payload) {

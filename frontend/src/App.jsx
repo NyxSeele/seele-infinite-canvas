@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react"
 import { createPortal } from "react-dom"
 import { getThemePortalRoot } from "./utils/themePortalRoot"
+import { Z_NODE_DOTS_MENU } from "./utils/zIndexLayers"
 import api, { API_BASE } from "./services/api"
 import { appendMediaTicket } from "./utils/mediaTicket"
 import { wsManager } from "./services/ws"
@@ -1147,14 +1148,14 @@ function ContextMenu({ x, y, taskId, tasks, onClose, onCancel, onDownload, onHid
   const canDownload = task.status === "done" && taskHasMedia(task)
   const saveLabel = taskIsPlayableVideo(task) ? "保存视频" : "保存图片"
 
-  return (
+  return createPortal(
     <div
       className="context-menu"
       style={{
         position: "fixed",
         left: x,
         top: y,
-        zIndex: 9999,
+        zIndex: Z_NODE_DOTS_MENU,
         background: "#fff",
         borderRadius: 8,
         boxShadow: "0 4px 20px rgba(0, 0, 0, 0.15)",
@@ -1177,7 +1178,8 @@ function ContextMenu({ x, y, taskId, tasks, onClose, onCancel, onDownload, onHid
       <button type="button" className="context-menu-item danger" onClick={() => { onHide(task.id); onClose() }}>
         删除记录
       </button>
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }
 

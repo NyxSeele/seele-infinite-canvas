@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom"
 import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_WS_MODAL } from "../../utils/zIndexLayers"
 
 /**
  * 带进出场动画的 Modal 壳（overlay + content）
@@ -36,7 +37,7 @@ export default function AnimatedModal({
   })
 
   return createPortal(
-    <div className={overlayClasses} onClick={onClose}>
+    <div className={overlayClasses} style={{ zIndex: Z_WS_MODAL }} onClick={onClose}>
       <div className={modalClasses} onClick={(e) => e.stopPropagation()}>
         {children}
       </div>
@@ -80,7 +81,7 @@ export function AnimatedDialog({
   })
 
   return createPortal(
-    <div className={overlayClasses} onMouseDown={onClose}>
+    <div className={overlayClasses} style={{ zIndex: Z_WS_MODAL }} onMouseDown={onClose}>
       <div className={modalClasses} onMouseDown={(e) => e.stopPropagation()}>
         {children}
       </div>

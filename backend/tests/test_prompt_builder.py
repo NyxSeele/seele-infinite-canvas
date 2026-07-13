@@ -2,6 +2,7 @@ import pytest
 
 from services.prompt_builder import (
     DEFAULT_NEGATIVE_ZH,
+    build_prompt,
     build_prompt_from_fields,
     build_script_shot_prompt,
     infer_fields_from_description_rule,
@@ -185,3 +186,97 @@ def test_rule_package_ignores_segment_context():
     )
     full_text = (pkg.get("full_text") or "") + (pkg.get("frames") or "")
     assert marker not in full_text
+
+
+def test_compile_prompt_flux_priority():
+    result = build_prompt(
+        "sunset over mountains",
+        character_refs=[{"name": "Alice", "appearance": "silver hair"}],
+        style_preset="电影感",
+        model_target="flux",
+    )
+    assert "Alice" in result.positive_prompt
+    assert "sunset" in result.positive_prompt
+    assert result.negative_prompt == ""
+    assert result.model_params.get("width") == 1344
+
+
+def test_compile_prompt_wan_i2v():
+    result = build_prompt(
+        "camera slowly pans left, girl turns her head",
+        character_refs=[{"name": "Mia", "appearance": "red dress"}],
+        style_preset="cinematic",
+        model_target="wan-i2v",
+    )
+    assert "camera slowly" in result.positive_prompt
+    assert result.negative_prompt
+    assert result.model_params.get("steps") == 4
+    assert result.model_params.get("width") == 640
+
+
+def test_g31_wan_prepend_movement_from_labels():
+    from services.prompt_builder import prepend_wan_motion_english
+
+    out = prepend_wan_motion_english(
+        "雨中街道，女子撑伞；运镜：缓慢推近；景别：中景"
+    )
+    assert "dollies in" in out.lower()
+    assert "medium shot" in out.lower()
+    assert "运镜" not in out
+
+
+def test_g31_build_prompt_wan_injects_dolly():
+    result = build_prompt(
+        "女子撑伞走入雨中；运镜：缓慢推近；景别：中景",
+        model_target="wan-i2v",
+    )
+    low = result.positive_prompt.lower()
+    assert "dollies in" in low or "dolly" in low
+    assert "medium shot" in low
+
+
+def test_g33_explicit_push_in():
+    result = build_prompt(
+        "rainy street, woman with umbrella",
+        model_target="wan-i2v",
+        camera_move="push_in",
+        shot_scale="auto",
+    )
+    assert "push in" in result.positive_prompt.lower()
+
+
+def test_g33_explicit_auto_no_motion_words():
+    result = build_prompt(
+        "rainy street, woman with umbrella",
+        model_target="wan-i2v",
+        camera_move="auto",
+        shot_scale="auto",
+    )
+    low = result.positive_prompt.lower()
+    for banned in ("push in", "pull out", "tracking shot", "static camera", "medium shot", "close-up", "wide shot", "full shot"):
+        assert banned not in low
+
+
+def test_g33_explicit_medium_shot():
+    result = build_prompt(
+        "rainy street, woman with umbrella",
+        model_target="wan-i2v",
+        camera_move="auto",
+        shot_scale="medium",
+    )
+    assert "medium shot" in result.positive_prompt.lower()
+
+
+def test_g33_explicit_overrides_text_labels():
+    """显式非 auto 时跳过文本运镜解析，避免双重注入。"""
+    result = build_prompt(
+        "女子撑伞；运镜：缓慢推近；景别：中景",
+        model_target="wan-i2v",
+        camera_move="pan",
+        shot_scale="close",
+    )
+    low = result.positive_prompt.lower()
+    assert "pan" in low
+    assert "close-up" in low
+    assert "dollies in" not in low
+    assert "medium shot" not in low

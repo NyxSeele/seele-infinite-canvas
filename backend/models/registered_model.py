@@ -14,7 +14,8 @@ class RegisteredModel(Base):
     type = Column(String, nullable=False)  # api | local
     provider = Column(String, nullable=True)
     api_base = Column(Text, nullable=True)
-    api_key = Column(Text, nullable=True)  # TODO: 后续改为加密存储
+    # API Key：应用层 Fernet 加密存储（enc:v1:…）；读写经 api_key_service
+    api_key = Column(Text, nullable=True)
     model_string = Column(String, nullable=True)
     comfyui_file = Column(String, nullable=True)
     enabled = Column(Boolean, nullable=False, default=False)

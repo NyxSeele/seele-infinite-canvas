@@ -2,8 +2,12 @@ import { flushSync } from "react-dom"
 import api from "../../services/api"
 import { formatScreenplayParagraphs } from "./textFormat"
 import { normalizeOutlineScene } from "./outlineSceneMeta"
+import { TASK_POLL_TIMEOUT_MS } from "../../components/canvas/taskPollTimeout"
 
-export const OUTLINE_API_TIMEOUT_MS = 120000
+const TASK_POLL_INTERVAL_MS = 2000
+
+/** 单次提交超时（入队应很快）；总等待走轮询超时 */
+export const OUTLINE_API_TIMEOUT_MS = TASK_POLL_TIMEOUT_MS
 /** 超过 API 超时仍未结束，视为僵死 loading，允许重试 */
 export const OUTLINE_LOADING_STALE_MS = OUTLINE_API_TIMEOUT_MS + 15000
 
@@ -23,14 +27,54 @@ export function outlineLoadingPatch(extra = {}) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+/**
+ * 轮询 GET /api/tasks/{id} 直至终态。
+ * @returns {Promise<object>} completed task payload (result already parsed for JSON async jobs)
+ */
+export async function pollTaskUntilDone(
+  taskId,
+  {
+    intervalMs = TASK_POLL_INTERVAL_MS,
+    timeoutMs = TASK_POLL_TIMEOUT_MS,
+    timeoutMessage = "任务超时，请稍后重试",
+  } = {}
+) {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const res = await api.get(`/api/tasks/${taskId}`, { timeout: 30000 })
+    const task = res.data
+    if (task?.status === "completed") return task
+    if (task?.status === "failed" || task?.status === "cancelled") {
+      throw new Error(task?.error || "任务失败")
+    }
+    await sleep(intervalMs)
+  }
+  throw new Error(timeoutMessage)
+}
+
+/**
+ * 提交 structure-from-text（异步）并轮询结果。
+ * 返回形态兼容旧同步接口：{ data: structureResult }
+ */
 export async function postOutlineStructure(payload) {
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), OUTLINE_API_TIMEOUT_MS)
   try {
-    return await api.post("/api/screenplay/structure-from-text", payload, {
-      signal: controller.signal,
-      timeout: OUTLINE_API_TIMEOUT_MS,
+    const submit = await api.post("/api/screenplay/structure-from-text", payload, {
+      timeout: 30000,
     })
+    const taskId = submit.data?.task_id
+    if (!taskId) {
+      // 兼容偶发同步响应
+      if (submit.data?.scenes || submit.data?.versions) return submit
+      throw new Error("未返回 task_id")
+    }
+    const task = await pollTaskUntilDone(taskId, {
+      timeoutMessage: "大纲生成超时，请稍后重试",
+    })
+    return { data: task.result || {} }
   } catch (err) {
     if (
       err.code === "ECONNABORTED"
@@ -40,9 +84,26 @@ export async function postOutlineStructure(payload) {
       throw new Error("大纲生成超时，请稍后重试")
     }
     throw err
-  } finally {
-    window.clearTimeout(timer)
   }
+}
+
+/**
+ * 提交 generate-shots（异步）并轮询结果。
+ * 返回形态兼容旧同步接口：{ data: shotsResult }
+ */
+export async function postGenerateShots(payload) {
+  const submit = await api.post("/api/screenplay/generate-shots", payload, {
+    timeout: 30000,
+  })
+  const taskId = submit.data?.task_id
+  if (!taskId) {
+    if (Array.isArray(submit.data?.segments)) return submit
+    throw new Error("未返回 task_id")
+  }
+  const task = await pollTaskUntilDone(taskId, {
+    timeoutMessage: "分镜生成超时，请稍后重试",
+  })
+  return { data: task.result || {} }
 }
 
 function formatOutlineScenes(scenes) {

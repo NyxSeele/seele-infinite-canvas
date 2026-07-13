@@ -1,6 +1,9 @@
 import { useEffect } from "react"
+import { createPortal } from "react-dom"
 import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_REF_PICKER } from "../../utils/zIndexLayers"
 import "./ImageReferencePicker.css"
 
 const sp = (e) => e.stopPropagation()
@@ -27,9 +30,10 @@ export default function ImageReferencePicker({
 
   if (!open) return null
 
-  return (
+  return createPortal(
     <div
       className={`img-ref-picker rf-page rf-page--${theme} nodrag nopan`}
+      style={{ zIndex: Z_REF_PICKER }}
       onPointerDown={sp}
       onClick={sp}
       onMouseLeave={() => onHover?.(null)}
@@ -84,6 +88,7 @@ export default function ImageReferencePicker({
           {t("canvas.ref.confirmAdd")}
         </button>
       </div>
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }

@@ -1,20 +1,68 @@
 # AI Studio 开发进度交接文档
 
-用于开启新对话时快速恢复上下文。最后更新：**2026-07-03**（**Phase 44 · 画布 UI 十四项优化 + 上传/加载页修补**）
+用于开启新对话时快速恢复上下文。最后更新：**2026-07-10**（清理债项四件套 ✅ · G45 · pytest **114** · 数据盘 **~31G** 可用）
 
 ---
 
-## 当前总览（2026-07-03 · 最新）
+## 当前总览（2026-07-10 · 最新）
 
-**画布 UI 十四项优化 + 修补完成（Phase 44）**：Portal / z-index / 下拉互斥基础设施落地；~22 处 `createPortal` 迁入主题作用域；上传 banner 最终为 **wrapper 内绝对定位**（整卡含标签上方，不参与 flex）；评论角标锚点统一 + hover tip 左右 flip；选中态 / a11y / 旧节点 X 坐标启发式迁移；**修复新建图片卡叠在已上传卡上导致「图片消失」**；**Velora 刷新加载页去掉中间脉冲圆环**。`npm run build` ✅；后端 pytest **56 passed**（未改 API 契约）。
+### 进度一句话
 
-上一轮：**Phase 43** 部署前收尾验收；再上一轮为画风预设统一 + `VideoStylePicker`、全片 LUT、视频画质增强等。
+**G31–G40 + G45 闭环**；清理债项四件套（SD1.5 / media_access / API_KEY_ENCRYPT_SECRET / Portal·z-index）已收口。pytest **114 passed**。机器：AutoDL **269** · 4090 24GB · 数据盘约 **31G** 可用。模型下拉能力说明行已收口（MaaS 文本 `MODEL_SUMMARY_OVERRIDES` + 视频模式/模型灰显纠偏）。视频三档：**文生 / 首尾帧 / 参考**（`referenceMode=t2v|keyframe|freeref`）。Agent 质量校准见 [`AGENT_TRACE_BASELINE.md`](AGENT_TRACE_BASELINE.md)「校准 2026-07-10」（编排 `_agent_quality_calibration_probe.py`；token golden **1600–2100**；对抗 4–5/6，不放宽断言）。
+
+### 本周关键交付（G31–G40 + Phase4–7）
+
+| ID | 主题 | 状态 | 要点 |
+|----|------|------|------|
+| **G31–G39** | 见下表 | ✅ | 运镜 / token / UI / fun_inpaint / Hunyuan / Seedance 框架 / AudioGen |
+| **新 G40** | ReActor 换脸 | ✅ | `use_reactor` + `buffalo_l`；Phase7 T2/T3 换脸 **completed**（`00066`/`00067`） |
+| **Phase4** | Hunyuan T2V | ✅ | T1–T4 completed · `00050`～`00053.mp4` |
+| **Phase5** | LTX2 fp4 | ✅ | T1–T4 completed · `LTX-2_00003_`～`00006_` |
+| **Phase6** | Wan T2V | ✅ | T1–T4 completed · `00054_`～`00057_.mp4`（shell 392838） |
+| **Phase7** | flux-pulid | ✅ | T1/T4 预期失败；T2/T3 `use_reactor=True` **completed**（`00066`/`00067`） |
+| **pytest** | 回归 | ✅ | **114 passed** |
+
+### 本周关键交付（G31–G39）
+
+| ID | 主题 | 状态 | 要点 |
+|----|------|------|------|
+| **G31** | 视频运动可控 | ✅ | 运镜/景别注入；`sampling_profile=quality`→8 步 |
+| **G32** | A1 token | ✅ | 继续轮 **~1.7–1.9k**（原 ~5.5k） |
+| **G33** | 运镜/景别 UI | ✅ | `CameraMotionPicker`（≠ 画风 VideoStylePicker） |
+| **G34** | fun_inpaint | ✅ | `wan-fun-inpaint`；与 `wan-i2v` FLF2V 并存 |
+| **G35/G38** | HunyuanVideo | ✅ | smoke PASS 正式上线；~109 分钟/条；峰值 ~22.5G；高级选项 |
+| **G36** | 卡片级运镜 | ✅ | VideoGenerationNode 折叠态 CameraMotionPicker |
+| **G37** | Seedance 框架 | ✅ | 框架就绪；`enabled=False`；待 `SEEDANCE_API_KEY` |
+| **G39** | AudioGen 音效 | ✅ | `audiogen-medium` + `/api/audio/generate` + `sound_note` 后混音（跳过 ltx2） |
+| **新 G40** | ReActor 换脸 | ✅ | `use_reactor` + `ReActorFaceSwap` + `buffalo_l`；≠ 旧 G40=Hunyuan |
+| **Phase4–7** | Prompt 调试 GPU | ✅ | Phase4–6 全绿；Phase7 鉴权+换脸复测通过；见 [`PHASE4`](PROMPT_DEBUG_PHASE4.md)–[`7`](PROMPT_DEBUG_PHASE7.md) |
+| **pytest** | 回归基线 | ✅ | **114 passed**（含 G45 + 清理债项；2026-07-10） |
+
+**G30 仍有效**：phash · flux-pulid · ltx2-fp4。运维见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md)。
+
+**既有闭环仍有效**：路线 A/B/C · Prompt 调试一～三 · Agent Trace A1–A5 · Phase 2/44/43。
 
 ### 近期完成一览
 
 | 阶段 | 主题 | 状态 | 要点 |
 |------|------|------|------|
-| **Phase 44** | 画布 UI 十四项 + 修补 | ✅ | Portal/z-index/下拉互斥；upload banner；评论锚点；选中态；`migrateGenNodePositions`；上传卡叠层修复；加载页去圆环 |
+| **G40 + Phase4–7** | ReActor 换脸 + Prompt GPU | ✅ | `use_reactor` + `buffalo_l`；Phase4–6 全绿；Phase7 T2/T3 换脸 completed；见下方详情 |
+| **G39** | AudioGen 音效 | ✅ | `audiogen-medium` + `/api/audio/generate` + `sound_note` 后混音 |
+| **G33** | 运镜/景别 UI | ✅ | CameraMotionPicker + compile 显式字段；[`GPU_DEBT.md`](GPU_DEBT.md) |
+| **G31** | 视频运动可控 | ✅ | 运镜注入 + quality 8 步；[`GPU_DEBT.md`](GPU_DEBT.md) |
+| **G32** | A1 token 成本 | ✅ | 继续轮 ~1.8k；[`AGENT_TRACE_BASELINE.md`](AGENT_TRACE_BASELINE.md) |
+| **G30** | 人物一致性 + LTX2-fp4 | ✅ | phash · flux-pulid 全栈 · ltx2-fp4 API；[`G30_RESUME.md`](G30_RESUME.md) |
+| **Server-Mig** | AutoDL 新机克隆 + 服务修复 | ✅ | 107→269 数据盘拷贝；Supervisor/Nginx/Redis；`python-multipart`；见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) §2.9 |
+| **Text-DB** | registered_models text 模型 | ✅ | `_enable_text_models.py`；默认 qwen-plus；A2 画布剧本文本可走 DB |
+| **Agent-Trace** | A1–A5 instrumentation + 基线 | ✅ | `_agent_trace_baseline_probe.py` exit 0；[`AGENT_TRACE_BASELINE.md`](AGENT_TRACE_BASELINE.md) |
+| **A3-Fix** | 剧本文本截断 → 大纲镜数不足 | ✅ | 探针存 `content` 全文；`STRUCTURE_SCENE_TITLES`；`scenes_count=3` 回归 |
+| **Route-C** | Agent 自动分镜 → 批量 GPU | ✅ | `_route_c_agent_gpu_probe.py` exit 0；3/3 图 + 3/3 视频；[`ROUTE_C_RESULT.md`](ROUTE_C_RESULT.md) |
+| **Route-B2** | L3 背影外貌 + L0 trace | ✅ | `llm.py` / `prompt.py` / 探针 003 断言；[`ROUTE_B_RESULT.md`](ROUTE_B_RESULT.md) |
+| **Route-A/B** | 图像 preset + 分镜表批量出图/转视频 | ✅ | VideoStylePicker；串行等待；一键转视频；路线 B **3/3 图 + 3/3 视频**（`POLL_TIMEOUT=1800`） |
+| **Prompt-2** | Wan i2v + 双参考图 + L3 背影 | ✅ | translate-only + suffix 后置；`/api/view` + uploads；L3 背影外貌保留；V1–V4 |
+| **Prompt-3** | 首尾帧 FLF2V + PT 字段 | ✅ | `build_wan_flf2v_workflow`；keyframe 路由；K1–K4 GPU；[`PROMPT_DEBUG_PHASE3.md`](PROMPT_DEBUG_PHASE3.md) |
+| **Prompt-1** | Flux 单卡 L1→L4 基线 | ✅ | 图像 translate-only；画布图像 suffix 注入；T1–T4 GPU；[`PROMPT_DEBUG_PHASE1.md`](PROMPT_DEBUG_PHASE1.md) |
+| **Phase 44** | 画布 UI 十四项 + 修补 | ✅ | Portal/z-index/下拉互斥；upload banner；评论锚点；`migrateGenNodePositions`；上传卡叠层修复；加载页去圆环 |
 | **Phase 44-WS** | Workspace / 评论二次修复 | ✅ | 上传 Tab 高度；左栏 hover portal；视频首尾帧误触；@ 向下展开；角标头像资料浮窗 |
 | **Phase 43** | 部署前收尾验收 | ✅ | pytest 56；探针 19 项；迁移 **022**；LUT 文档；`.env.example`；build；`tasks.py` settings 修复 |
 | **画风统一-1** | 画风预设 suffix 注入 | ✅ | `backend/services/quality_presets.py`；`quality_preset_id` 驱动 `prompt_builder`；移除 `contentStyle` |
@@ -102,22 +150,322 @@
 |----|------|
 | 前端构建 | `cd frontend && npm run build` ✅（2026-07-03 Phase 44；无 error；chunk >500kB 与 dynamic import 提示见 Phase 43） |
 | 前端刷新 | 改 UI 后 **Ctrl+Shift+R** 硬刷新；加载页见 `VeloraLoadingPage`（Logo 旋转 + 字标 + 文案，无中间圆环） |
-| 后端测试 | `cd backend && .venv\Scripts\python.exe -m pytest tests/ -q` → **56 passed** |
+| 后端测试 | `cd backend && PYTHONPATH=. .venv/bin/python -m pytest tests/ -q` → **114 passed**（含 G45 / media_access / secret_store / ReActor） |
+| Agent Trace 基线 | `AGENT_MOCK_GENERATION=false .venv/bin/python scripts/_agent_trace_baseline_probe.py` → exit 0；[`AGENT_TRACE_BASELINE.md`](AGENT_TRACE_BASELINE.md) |
+| 路线 C 探针 | `.venv/bin/python scripts/_route_c_agent_gpu_probe.py` → GPU + `consistency_phash`；[`ROUTE_C_RESULT.md`](ROUTE_C_RESULT.md) |
+| G30 phash 对照 | `scripts/_g30_phash_compare_probe.py` → `/root/autodl-tmp/logs/g30_phash_compare.json` |
+| G39 AudioGen 探针 | `scripts/_g39_audiogen_probe.py` → PASS（译英 + wav）；权重 `/root/autodl-tmp/models/audiogen-medium` |
+| G40 ReActor 探针 | `scripts/_g40_reactor_probe.py` → PASS；GPU 换脸见 Phase7 `00066`/`00067`；权重脚本 `_download_g40_buffalo_l.sh` |
+| 结构探针 | `scripts/_comfyui_workflow_structure_probe.py --model flux-pulid` / `ltx2-fp4` → PASS |
+| GPU 技术债 | [`GPU_DEBT.md`](GPU_DEBT.md) — G30–G45 / G43–G44 已闭环；开放：G46 Key、G47 主观质量 |
+| G45 视频换脸探针 | `scripts/_g45_reactor_video_probe.py` → PASS；日志 `/root/autodl-tmp/logs/g45_reactor_video_probe.json` |
+| text 模型运维 | `cd backend && source .env && .venv/bin/python scripts/_enable_text_models.py`（一次性；默认启用 qwen-plus） |
+| 全量探针日志 | `/root/autodl-tmp/logs/all_probes_20260708_1439.log`（22 探针批跑）；重跑见 `probes_rerun_1445.log` |
+| Prompt 调试文档 | Phase1–7 GPU 已实测：[`PHASE4`](PROMPT_DEBUG_PHASE4.md)·[`5`](PROMPT_DEBUG_PHASE5.md)·[`6`](PROMPT_DEBUG_PHASE6.md)·[`7`](PROMPT_DEBUG_PHASE7.md) |
+| 探针账号备忘 | [`backend/docs/PROBE_ACCOUNTS.md`](backend/docs/PROBE_ACCOUNTS.md)（admin / testuser / testuser2；GPU 探针建议 **admin**） |
 | 画风统一文档 | [`backend/docs/STYLE_PRESET_UNIFICATION.md`](backend/docs/STYLE_PRESET_UNIFICATION.md) |
 | 视频增强探针 | `scripts/_video_enhance_probe.py`（mock 全链路；GPU 前 workflow `enabled=False`） |
 | LUT 探针 | `scripts/_lut_probe.py`（内置 `.cube` + GET/PUT lut + mock `video-lut`） |
 | 探针覆盖文档 | [`backend/docs/V1_CANVAS_PROBE_COVERAGE.md`](backend/docs/V1_CANVAS_PROBE_COVERAGE.md)（功能清单 + 缺口 + 运行手册） |
-| 数据库迁移 | `alembic upgrade head`（含 **001–022**；**022** = `tasks.lut_applied`） |
+| 数据库迁移 | `alembic upgrade head`（含 **001–023**；**023** = `tasks.sound_note` / `video_backend`） |
 | 风格分析依赖 | `DASHSCOPE_API_KEY` + ffmpeg（`imageio-ffmpeg`） |
 | 后端重启 | 改 `style_reference.py` / `canvas_style_ref.py` / `shot_prompt_package.py` / `tasks.py` 后重启 uvicorn |
 
-### 待排期（自检结论，本轮未做）
+### 待排期（自检结论）
 
-- **非法上传路径**：画质增强 mock/真实链路偶发 `media_access` 鉴权失败（与本轮 UI 无关，待查视频 URL ticket）
+- ~~**registered_models 无 text 模型**~~：✅ 2026-07-08 `_enable_text_models.py` + 默认 qwen-plus（见 **Text-DB**）
+- **百炼 qwen-max/turbo 免费额度**：403 `AllocationQuota.FreeTierOnly`；仅保留 **qwen-plus**；需在阿里云控制台开通付费或关闭「仅免费档」
+- ~~**新机 Supervisor 未自启**~~：✅ 2026-07-08 `/usr/bin/supervisord -c /etc/supervisor/supervisord.conf`（见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) §3.1）
+- ~~**HiDream-i1 权重 + workflow 对齐**~~：✅ 2026-07-07 落盘 + smoke PASS（见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) §2.5）
+- ~~**wan-i2v API 实测**~~：✅ 2026-07-07 smoke PASS；**`/api/view` 参考图** ✅ 2026-07-07 晚修复
+- ~~**HunyuanVideo**~~：✅ G35/G38 smoke 通过正式上线（720p/50 步约 **109 分钟**；显存峰值 **23076 MiB (~22.5G)**；无致命 CUDA OOM；VAE 曾 tiled 回退告警）。**重负载**：建议高级选项，避免与 Wan/PuLID 同卡叠跑
+- ~~**LTX-2 fp4**~~：✅ 权重落盘 + API 接线 + 结构探针 PASS（2026-07-09）
+- ~~**G30 人物一致性**~~：✅ phash + flux-pulid 全栈 + GPU smoke PASS（2026-07-09）；详见 [`G30_RESUME.md`](G30_RESUME.md)
+- ~~**画质增强 media_access 绝对 URL 绕过**~~：✅ `normalize_media_reference_url` + 前端 enhance 用相对路径；单测覆盖绝对 `/api/view`
+- ~~**首尾帧 FLF2V API**~~：✅ 2026-07-07 Prompt-3（`WanFirstLastFrameToVideo` + **i2v UNET**；与 fun_inpaint 并存）
+- ~~**fun_inpaint 专用 UNET**~~：✅ G34（`wan-fun-inpaint` + `WanFunInpaintToVideo` + fun_inpaint 双 UNET；需双帧）
+- ~~**G36 视频卡运镜入口**~~：✅ VideoGenerationNode 折叠态 CameraMotionPicker
+- ~~**G37 Seedance 框架**~~：✅ `seedance-2.0` + `compress_for_seedance` + Ark client；**enabled=False**（待 Key）
+- ~~**G39 AudioGen**~~：✅ `audiocraft` + `audiogen-medium`；`POST /api/audio/generate`；`sound_note` 后混音（跳过 ltx2）；探针 PASS
+- ~~**ReActor face swap（新 G40）**~~：✅ 接线 + `buffalo_l` + Phase7 T2/T3 换脸 completed；视频逐帧二期（≠ 旧 GPU_DEBT G40=Hunyuan）
+- ~~**Prompt Phase4–7 GPU 实测**~~：✅ Phase4–6 全绿；Phase7 鉴权+换脸复测通过
+- ~~**分镜表多镜承接**~~：✅ 2026-07-08 路线 B/C 3 镜 GPU 探针 PASS（[`ROUTE_B_RESULT.md`](ROUTE_B_RESULT.md) · [`ROUTE_C_RESULT.md`](ROUTE_C_RESULT.md)）
+- ~~**Route B/C 第 3 镜视频超时**~~：✅ `POLL_TIMEOUT=1800`；路线 B/C 探针均 **3/3 视频 completed**
+- ~~**路线 C Agent→GPU**~~：✅ `_route_c_agent_gpu_probe.py` exit 0；A4 rows 动态驱动批量链路
+- ~~**人物一致性（模型级）**~~：✅ G30 闭环（phash + flux-pulid；002–003 phash 17→8）；见 [`GPU_DEBT.md`](GPU_DEBT.md) G30 · [`G30_RESUME.md`](G30_RESUME.md)
+- ~~**视频运动可控（4 步采样）**~~：✅ G31（运镜注入 + `sampling_profile=quality` 8 步）
+- ~~**A1 token 成本**~~：✅ G32（继续轮 ~1.7–1.9k；见 [`AGENT_TRACE_BASELINE.md`](AGENT_TRACE_BASELINE.md) §3.1）
+- ~~**LTX2 GPU T2V smoke**~~：✅ Phase5 探针 T1–T4 completed（`LTX-2_00003_`～`00006_`）；勿与 PuLID 同载 24GB
+- ~~**`GET /api/assets` 404（G44）**~~：✅ 误判已澄清——路由正常；原因为探针 `POST` 缺 `mock-cast-ref.jpg`；`generate_mock_assets` 已同步写入 `uploads/images/` + 探针自检
+- ~~**G42 SD1.5 产品残留**~~：✅ registry/脚本/文案已移除；DB 行已删；本机无权重；内部 `sd15` workflow 可暂留
+- ~~**API Key 独立加密密钥**~~：✅ `API_KEY_ENCRYPT_SECRET` + 旧 JWT 密文重加密迁移；`tests/test_secret_store.py`
+- **Seedance Key 上线（G46）**：**最后再说 / 不排期**；框架已就绪；配置 `SEEDANCE_API_KEY` 后改 `enabled=True`
+- ~~**ReActor 视频逐帧换脸（G45）**~~：✅ `CanvasVideoRequest.use_reactor` + `reactor_face_image`；`services/reactor_video.py` 独立帧工作流；成片后钩子；探针 `_g45_reactor_video_probe.py` PASS；`tmp_reactor_*` finally 清理
 - 批量出图前逐格预置构图参考（低频）：若强需求，在出图前于 `image-gen` 节点预填 `referenceImages`，约 **0.5–1 天**
 - 纯前端项自动化（可选）：`libraryUsage` / `generationRetryPolicy` 若需 Vitest，单独立项
-- **Portal 未迁尽**：少数组件仍挂 `document.body`（如部分 Modal / `MentionTextarea`）；可继续统一 `themePortalRoot.js`
-- **z-index 常量表**：已建 `zIndexLayers.js`，后续新 flyout 应引用常量而非散落 magic number
+- ~~**Portal / z-index 收口**~~：✅ 未 portal 化 overlay 迁 `getThemePortalRoot`；`zIndexLayers.js` 常量已引用
+
+### 下轮优先（2026-07-10）
+
+| 优先级 | 项 | 说明 |
+|--------|-----|------|
+| 1 | 主观质量表（G47） | 人工观看 MP4 |
+| — | **Seedance Key（G46）** | **最后再说 / 不排期**；框架就绪，被动等待 Key |
+
+~~G45 视频逐帧~~ / ~~G44 assets~~ / ~~清理债项四件套~~：✅ 已闭环
+
+---
+
+## 详情：2026-07-10 · G45 ReActor 视频逐帧（✅ 已闭环）
+
+| 交付 | 路径 / 命令 | 验收 |
+|------|-------------|------|
+| Schema / DB | `CanvasVideoRequest.use_reactor` + `reactor_face_image`；迁移 **024** | 有正脸才落库 `use_reactor=True` |
+| 独立帧工作流 | `build_reactor_frame_workflow`（LoadImage×2 + ReActorFaceSwap + SaveImage） | 不跑 PuLID |
+| 管线 | `services/reactor_video.py`：拆帧 → 逐帧换脸 → 合帧+原音轨 → `*_swapped.mp4` | `tmp_reactor_{task_id}` finally 清理 |
+| 钩子 | 视频 completed → `_schedule_video_postprocess`（G45→链式 G39） | 与模型无关，仅看开关 |
+| 前端 | `VideoGenerationNode`：character-card / cast 正脸 → `use_reactor` | |
+| 探针 / 单测 | `_g45_reactor_video_probe.py`；`tests/test_reactor_g45.py` | 探针 PASS；pytest **108**（其后清理债项 → **114**） |
+
+---
+
+## 详情：2026-07-10 · 清理债项四件套（✅）
+
+| 项 | 要点 |
+|----|------|
+| **G42 SD1.5** | 产品 registry/脚本/文案移除；DB `stable-diffusion` 已删；`tasks.py` 死桩删除；默认 profile 回退 flux |
+| **media_access** | `normalize_media_reference_url`；enhance 前端相对路径；绝对 `http://…/api/view` 可解析 |
+| **API Key** | 独立 `API_KEY_ENCRYPT_SECRET`；旧 JWT 密文启动时重加密；`.env.example` + `test_secret_store` |
+| **Portal / z-index** | 未 portal overlay 迁 `getThemePortalRoot`；`zIndexLayers.js` 常量收口 |
+| **验收** | `pytest tests/ -q` → **114 passed** |
+
+---
+
+## 详情：2026-07-10 · G40 ReActor + Phase4–7 GPU（✅ 已闭环）
+
+| 交付 | 路径 / 命令 | 验收 |
+|------|-------------|------|
+| ReActor 工作流 | `comfyui/workflows/flux_pulid_reactor.json`；`_attach_reactor_face_swap` | 节点 60 `ReActorFaceSwap`；SaveImage ← `["60",0]` |
+| API / Schema | `CanvasImageRequest.use_reactor` → `submit_image_prompt` | 有 CharacterCard 正脸时前端传 `use_reactor=True` |
+| 离线权重 | `ComfyUI/models/insightface/models/buffalo_l/*.onnx` | `_download_g40_buffalo_l.sh`（hf-mirror） |
+| 结构探针 / 单测 | `scripts/_g40_reactor_probe.py`；`tests/test_reactor_g40.py` | PASS；pytest **105** |
+| Phase4 Hunyuan | `scripts/_prompt_debug_phase4_hunyuan.py`（轻量 544×320） | T1–T4 completed · `00050`～`53` |
+| Phase5 LTX2 | `scripts/_phase5_ltx2.py` | T1–T4 completed · `LTX-2_00003_`～`06` |
+| Phase6 Wan T2V | `scripts/_phase6_wan_t2v.py` | T1–T4 completed · `00054_`～`57_` |
+| Phase7 flux-pulid | `scripts/_phase7_pulid.py` · `phase7_pulid_buffalo_rerun` | T1/T4 预期失败；**T2/T3 换脸 completed**（`00066`/`00067`） |
+
+**编号注意**：旧 GPU_DEBT **G40 = HunyuanVideo**（已由 G35/G38 闭环）；**新 G40 = ReActor 换脸**。视频逐帧换脸仍为二期。
+
+文档：[`PROMPT_DEBUG_PHASE4.md`](PROMPT_DEBUG_PHASE4.md)–[`7`](PROMPT_DEBUG_PHASE7.md) · [`GPU_DEBT.md`](GPU_DEBT.md) · [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md)。
+
+---
+
+## 详情：2026-07-09 · G30 人物一致性 + LTX2-fp4（✅ 已闭环）
+
+| 交付 | 路径 / 命令 | 验收 |
+|------|-------------|------|
+| phash 模块 | `backend/services/image_consistency.py` | pytest + route_c `consistency_phash` |
+| flux-pulid workflow | `providers/comfyui.py` `_build_flux_pulid_workflow` | GPU smoke `scripts/_g30_pulid_smoke.py` |
+| 前端自动切换 | `GenerationCardNode` / `useScriptTableGenerate` | 有角色参考图 → `flux-pulid` |
+| LTX2 API | `comfyui/client.py` `build_ltx2_fp4_t2v_workflow` / `submit_ltx2_video_prompt` | 结构探针 PASS |
+| phash 对照 | `scripts/_g30_phash_compare_probe.py` | flux-dev 17 → pulid **8**（002–003） |
+| 交接备忘 | [`G30_RESUME.md`](G30_RESUME.md) | 运维注意（facexlib 路径、VRAM） |
+
+**registry**：`flux-pulid`、`ltx2-fp4` 已 `_enable_gpu_models.py` enable。旧 `ltx-video`（2B）条目保留未删。
+
+---
+
+## 详情：2026-07-08 · 新机迁移 + Agent Trace + text 模型（✅ 已实现 · AutoDL 269 机验收）
+
+### A. AutoDL 实例迁移（107 → 269）
+
+| 项 | 说明 |
+|----|------|
+| 源实例 | `8b78499521`（107 机）克隆锁定 |
+| 目标实例 | `2db141bceb`（269 机）· RTX 4090 · 数据盘 **178G/200G** |
+| 验收 | `AIStudio/`、`ComfyUI/models`（~153G）、`aistudio.db`、`.env`、`frontend/dist` 完整 |
+
+### B. 服务修复（新机）
+
+| 项 | 说明 |
+|----|------|
+| Supervisor | `/usr/bin/supervisord -c /etc/supervisor/supervisord.conf`；`comfyui` / `aistudio-backend` / `nginx` **RUNNING** |
+| Nginx | `:6006` → `frontend/dist` + `/api/` 反代 `:7788` |
+| Redis | `service redis-server start` + 开机自启 |
+| 依赖 | `python-multipart` 写入 `requirements.txt` 并安装 |
+| PATH | miniconda `supervisorctl` 缺模块 → 用 **`/usr/bin/supervisorctl -c ...`** |
+
+### C. text 模型（registered_models）
+
+| 项 | 说明 |
+|----|------|
+| 根因 | `init_db` **不 seed** API 模型；`_enable_gpu_models.py` 仅写 image/video |
+| 脚本 | `backend/scripts/_enable_text_models.py` |
+| DB 状态 | `qwen-plus` enabled + `is_default_text`；`qwen-max`/`qwen-turbo` disabled（额度） |
+| A2 链路 | `POST /api/tasks/text` → `call_openai_compatible` 读 DB `api_key` + `api_base` |
+| A3/A4/Agent | `resolve_text_model()` 优先 DB；兜底 `.env` `DASHSCOPE_API_KEY` + `qwen-plus` |
+
+### D. model_checker
+
+| 项 | 说明 |
+|----|------|
+| 修复 | `model_checker.py` 除 `checkpoints` 外扫描 **`diffusion_models`** / `unet` |
+| 原因 | Flux/Wan/HiDream 权重在 `diffusion_models/`，非 `checkpoints/` |
+
+### E. Agent Trace（A1–A5）
+
+| 层 | 文件 | 标签 |
+|----|------|------|
+| A1 | `agent_service.py` | `AGENT_INPUT` / `AGENT_OUTPUT` / `CREATIVE_CARDS` |
+| A2 | `tasks.py` `_run_text_generation` | `TEXT_INPUT` / `TEXT_OUTPUT` |
+| A3 | `screenplay_structure.py` | `STRUCTURE_INPUT` / `STRUCTURE_OUTPUT` / `STRUCTURE_SCENE_TITLES` |
+| A4 | `qwen.py` `generate_shots` | `SHOTS_INPUT` / `SHOTS_OUTPUT` |
+| A5 | `split_shot_beats.py` | `BEATS_INPUT` / `BEATS_OUTPUT` |
+
+探针：`scripts/_agent_trace_baseline_probe.py`；输出 `/root/autodl-tmp/logs/agent_trace_baseline.json`；诊断 [`AGENT_TRACE_BASELINE.md`](AGENT_TRACE_BASELINE.md) §7–§8（A2 注册 · A3 截断修复）。
+
+### F. A3 剧本文本截断修复（2026-07-08 晚）
+
+| 根因 | 探针 `apply_text_response` 仅存 `content_preview[:500]`，`generate_outline` 误读 preview 导致 `only 2 scenes` |
+| 修复 | 探针增加 `content` 全文；`generate_outline` 优先 `content`；`screenplay_structure.py` 追加 `STRUCTURE_SCENE_TITLES` trace |
+| 验收 | `text_len≥700` · `scenes_count=3` · A4 `total_shots=3`；pytest **67 passed** |
+
+### G. 路线 B 二轮（L3 背影 + L0 trace）
+
+| 变更 | 文件 |
+|------|------|
+| 视频 L3 背影保留外貌 | `backend/comfyui/llm.py` `VIDEO_TRANSLATE_PLAIN_SYSTEM` |
+| compile async + trace | `routers/prompt.py` `push_trace(0,"COMPILED")` |
+| 前端 trace_id 传递 | `schemas/prompt_builder.py`、`promptCompileApi.js`、`useScriptTableGenerate.js` |
+| 探针 | `_route_b_batch_probe.py` 先 compile 再 build-shot；镜 003 外貌断言 |
+
+### H. 路线 C（Agent 自动分镜 → 批量 GPU）
+
+| 项 | 说明 |
+|----|------|
+| 探针 | `scripts/_route_c_agent_gpu_probe.py` |
+| 链路 | baseline A1–A4 + `segmentsToScriptPayload` 物化 rows + route_b 动态 `SHOTS` |
+| 验收 | **exit 0**；3/3 图 + 3/3 视频；`creative_cards_skipped` 可标注；`POLL_TIMEOUT=1800` |
+| 文档 | [`ROUTE_C_VALIDATION_PLAN.md`](ROUTE_C_VALIDATION_PLAN.md) · [`ROUTE_C_RESULT.md`](ROUTE_C_RESULT.md) |
+
+### I. 探针批跑摘要（2026-07-08 新机）
+
+| 结果 | 探针 |
+|------|------|
+| **PASS** | `admin_llm_routing` · `collab_api` · `export_project` · `import_document` · `style_reference` · `excel_import` · `adversarial_prompt` · `task_records` · `agent_trace_baseline` · **`route_c_agent_gpu`** · `gpu_acceptance_8b` · `real_media_pipeline` · pytest **67** |
+| **部分** | `route_b_batch`（历史 900s 超时；**1800s 重跑 3/3 PASS**）；`comfyui_workflow_structure`（flux/hidream/wan PASS；sd15/hunyuan 无权重） |
+| **环境/数据** | `lut`/`video_enhance`（繁忙期 500）；~~`entity_library`（`/api/assets` 404）~~ ✅ G44 澄清（mock 缺文件）；`paste_script` E1 PASS 整体 exit 3 |
+
+运维：批跑前清理 `tasks` 中 `pending`/`running` 避免 **429 并发槽位**；GPU 探针串行 + `SEED_ADMIN_PASSWORD=Admin@2026!`。
+
+---
+
+## 详情：Phase 2 — 模型补全 + Prompt Compiler + 画布增强（2026-07-07 · ✅ 已实现 · AutoDL 验收）
+
+**标注：服务器侧模型与 GPU 验收见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md)；本节记产品与代码变更**
+
+### A. 模型清理与补全（AutoDL）
+
+| 动作 | 说明 |
+|------|------|
+| 删除 | `anything-v5-PrtRE.safetensors`、`z_image_turbo_bf16.safetensors`、`qwen_3_4b.safetensors`（~21GB） |
+| 下载 | `wan2.2_i2v_high/low_noise_14B_fp8_scaled.safetensors` 各 ~14GB → `diffusion_models/`（aria2 + hf-mirror） |
+| 软链 | `flux1-dev.safetensors` → `flux1-dev-fp8.safetensors` |
+| 决策 | Z-Image **从未注册 API**，删权重腾磁盘；`fun_inpaint_*` **不能替代** `i2v_*` UNET |
+
+### B. Backend — Wan i2v workflow
+
+| 项 | 说明 |
+|----|------|
+| Builder | `comfyui/client.py` → `build_wan_i2v_workflow()`：`LoadImage` + `WanImageToVideo` + 双 UNET/Lightx2v i2v LoRA + 双 `KSamplerAdvanced` + `CreateVideo`/`SaveVideo` |
+| 路由 | `submit_wan_video_prompt()`：`mode=image2video` 上传参考图并走 i2v builder（不再 raise） |
+| Registry | `model_registry.py` → **`wan-i2v`**（`enabled=True`；DB seed 见 `_enable_gpu_models.py`） |
+| 探针 | `scripts/_comfyui_workflow_structure_probe.py --model wan-i2v` **PASS** |
+
+### C. Backend — Prompt Compiler
+
+| 项 | 说明 |
+|----|------|
+| Service | `services/prompt_builder.py` → `PromptResult` + `build_prompt(scene_desc, character_refs, style_preset, model_target)` |
+| 目标 | `flux` / `wan-t2v` / `wan-i2v`；聚合优先级：角色 > 场景 > 画风 > 模型默认 |
+| API | `POST /api/prompt/compile`（`routers/prompt.py`；schema `CompilePromptRequest/Response`） |
+| 测试 | `tests/test_prompt_builder.py`（compile 用例；全量 pytest **64 passed**） |
+
+### D. Frontend — CharacterCardNode + 分镜表增强
+
+| 项 | 说明 |
+|----|------|
+| **CharacterCardNode** | `frontend/src/components/canvas/CharacterCardNode.jsx`；字段 name/appearance/reference_images；读写 `POST/PATCH /api/assets`（`kind=character`）+ `assetStore`；画布 `nodeTypes["character-card"]` + 节点菜单 |
+| **分镜表 compile** | `useScriptTableGenerate.js`：出图/关键帧/出视频前 `compilePrompt` → 再 `build-shot`；`entityRefs` 合并相连人物卡 + cast/asset |
+| **文本卡 → 分镜表** | `useScreenplay.js`：`onImportScriptTable` 支持 `text-response`（`generate-shots` API）与 `shot-script` 迁移 |
+| **UI** | `ScriptShotCard` 行状态徽章对齐 `ScriptKeyframeCard`（`st-kf-status`） |
+| API 封装 | `frontend/src/services/promptCompileApi.js` |
+
+### E. GPU 验收（AutoDL · 2026-07-07）
+
+```bash
+cd backend
+AGENT_MOCK_GENERATION=false .venv/bin/python scripts/_comfyui_workflow_structure_probe.py --model wan-i2v   # PASS
+AGENT_MOCK_GENERATION=false .venv/bin/python scripts/_gpu_acceptance_8b_probe.py                          # PASS §八 B
+```
+
+启用模型：`.venv/bin/python scripts/_enable_gpu_models.py`（含 `wan-i2v`）。
+
+### F. 运维备忘（Supervisor）
+
+AutoDL 有**两个** Supervisor：平台进程 `unix:///tmp/supervisor.sock`；**AI Studio** 用：
+
+```bash
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf status
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf restart comfyui aistudio-backend
+```
+
+若 `refused connection`：先 `/usr/bin/supervisord -c /etc/supervisor/supervisord.conf`。
+
+---
+
+## 详情：Prompt 调试 阶段一～三（2026-07-07 · ✅ GPU 闭环）
+
+**标注**：本节为 **Prompt Trace（L1→L4）** 专项验收，与上文 Phase 2「模型/registry」互补。完整 trace 表见三份 `PROMPT_DEBUG_PHASE*.md`。
+
+### A. 阶段一 — Flux 单卡基线
+
+| 项 | 说明 |
+|----|------|
+| 范围 | 画布 `POST /api/tasks/image` + `flux-dev`，不含分镜表 compile |
+| 疑点修复 | **A** 图像中文 translate-only；**B** suffix 注入；**C** guidance 无冲突；**D** `L0 COMPILED` / `L0 BUILT` / L3 / L4 **trace 盲区补全** |
+| GPU | T1–T4 completed；日志 `prompt_debug_phase1*.json` |
+| 脚本 | `scripts/_prompt_debug_phase1.py` |
+
+### B. 阶段二 — Wan i2v
+
+| 项 | 说明 |
+|----|------|
+| 范围 | `wan-i2v` + `reference_image`；`duration=3`，720P，16:9 |
+| 疑点修复 | **A** 视频中文 translate-only + 运动词序保护；**B** `/api/view` 与 `/api/uploads` **双参考图路径**；**C** cinematic suffix L3 之后追加；**D** **L3 背影场景保留姓名/发型/服装**（路线 B 二轮） |
+| L4 trace | `positive/negative`、`reference_filename`、`WanImageToVideo` 尺寸帧数、`workflow_mode=image2video` |
+| GPU | V1–V4 + V3-retest **completed**；成片 `AIStudio_video_00008_`～`00011_` |
+| 脚本 | `scripts/_prompt_debug_phase2.py` |
+
+### C. 阶段三 — 首尾帧 FLF2V
+
+| 项 | 说明 |
+|----|------|
+| Backend | `build_wan_flf2v_workflow()`；`submit_wan_video_prompt(mode=flf2v)`；`tasks.py` keyframe 路由矩阵 |
+| 路由 | 双帧 → `flf2v`；仅首帧 → `image2video`；仅尾帧 → **400** |
+| L4 trace | `workflow_mode=flf2v`，`start_reference_filename` / `end_reference_filename` |
+| Frontend | `VideoGenerationNode`：双帧 keyframe 自动 `wan-i2v`；提交带 `trace_id` |
+| GPU | K1–K4 **completed**（K4 配额补跑后）；成片 `00013_`～`00016_` |
+| 测试 | `tests/test_wan_flf2v.py`（3 例）；`scripts/_prompt_debug_phase3_keyframe.py` |
+| 未接入 | —（`wan2.2_fun_inpaint_*` 已由 G34 `wan-fun-inpaint` 接入） |
+
+### D. 运维备忘
+
+| 项 | 说明 |
+|----|------|
+| 探针账号 | `admin` 无限配额；`testuser` 个人调试（曾 10 次/月撞 429）；团队探针见 `PROBE_ACCOUNTS.md` |
+| GPU 探针建议 | 连跑多段视频用 **admin**，避免 testuser 配额耗尽 |
+| 下一步 | ~~分镜表多镜 batch~~ ✅ 路线 B/C；~~Agent 自动分镜 GPU~~ ✅ 路线 C；主观质量表（PHASE3 Step 4）待填 |
 
 ---
 
@@ -226,7 +574,7 @@ frontend/src/pages/Canvas.jsx
 |----|------|
 | `routers/tasks.py` | 补 `from core.config import settings`；修复 mock 模式下 `canvas_video_task` / 画质增强等路径 `NameError` → HTTP 500 |
 | `scripts/_lut_probe.py` | `login("admin", password)` 对齐其它探针；读 `SEED_ADMIN_PASSWORD` / `PROBE_PASSWORD` |
-| Mock 参考图 | 运行 `generate_mock_assets.py`；复制 `uploads/images/mock-cast-ref.jpg` 等供实体库探针 |
+| Mock 参考图 | `generate_mock_assets.py` 写入 `assets/mock/` **并**同步 `uploads/images/mock-cast-ref.jpg` / `mock-scene-ref.jpg`；实体库探针启动自检缺则生成 |
 
 ### B. pytest
 
@@ -252,7 +600,7 @@ cd backend && .\.venv\Scripts\python.exe -m pytest tests/ -q
 | `_video_enhance_probe.py` | 0 | |
 | `_video_keyframe_mode_probe.py` | 0 | |
 | `_mock_pipeline_stage2_probe.py` | 0 | 2 镜 mock 全链路 |
-| `_entity_library_probe.py` | 0 | 重跑通过（需 mock 参考图文件） |
+| `_entity_library_probe.py` | 0 | ✅ G44：自检生成 mock-cast/scene；C1–C4 PASS（生产环境跳过 mock_reference_images 标记断言） |
 | `_paste_script_checklist_probe.py --only e1` | 0 | 重跑通过 |
 | `_adversarial_prompt_probe.py --category short_commands` | 0 | 记录型 |
 | `_real_media_pipeline_probe.py` | **2** | 预期 SKIP（mock 开启） |
@@ -2032,7 +2380,7 @@ finalizeAgentLayout → 仅 fitView（双帧 rAF），不再 applyAgentCanvasLay
 
 | 路径 | 一句话 | 文档 |
 |------|--------|------|
-| **AutoDL 云 GPU（内测推荐）** | 裸机 + Nginx `:6006` + Supervisor + 本机 ComfyUI | [`backend/docs/AUTODL_DEPLOY_RUNBOOK.md`](backend/docs/AUTODL_DEPLOY_RUNBOOK.md) |
+| **AutoDL 云 GPU（内测推荐）** | 裸机 + Nginx `:6006` + Supervisor + 本机 ComfyUI | [`backend/docs/AUTODL_DEPLOY_RUNBOOK.md`](backend/docs/AUTODL_DEPLOY_RUNBOOK.md) · **本机状态 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md)** |
 | **Docker Compose** | `bash deploy/deploy.sh` → Postgres + Redis + backend + web | [`DEPLOY.md`](DEPLOY.md) 方式二 |
 | **手动裸机** | venv + `alembic` + uvicorn + Nginx 反代 | [`DEPLOY.md`](DEPLOY.md) 方式三 |
 
@@ -2089,48 +2437,72 @@ $env:AGENT_MOCK_FAILURE_RATE="0"
 3. **空态 Tag**：点「角色/场景」打开 Flyout 对应筛选；五 chip 边框颜色一致
 4. **团队隔离**：异团队账号看不到对方团队资产
 
-### B. 真实模型环境（待 ComfyUI + 百炼额度）
+### B. 真实模型环境（✅ AutoDL 2026-07-07 已通过 §八 B 缩略验收）
 
-P1-2-lite（意图/UI/采纳/角色配图）已自测通过。下列为 **ComfyUI + 图像/视频模型就绪** 后最后一项：验证真实媒体生成落盘。`AGENT_MOCK_GENERATION=false`。
+`AGENT_MOCK_GENERATION=false`。本机 ComfyUI `:8000` + 已启用 `flux-dev` / `wan-2.6` / `wan-i2v` / `video-enhance-seedvr2`。
+
+```bash
+cd backend
+AGENT_MOCK_GENERATION=false .venv/bin/python scripts/_gpu_acceptance_8b_probe.py
+AGENT_MOCK_GENERATION=false .venv/bin/python scripts/_comfyui_workflow_structure_probe.py --model wan-i2v
+```
+
+| # | 检查项 | 状态 |
+|---|--------|------|
+| 1 | Flux API 出图 completed | ✅ 2026-07-07 |
+| 2 | Wan T2V workflow 结构探针 | ✅ |
+| 3 | Wan i2v workflow 结构探针 | ✅ 2026-07-07 |
+| 4 | SeedVR2 workflow/registry | ✅ |
+| 5 | 多镜分镜表 → 出图 → 视频全链路（手动） | ⏳ 可选复验 |
+| 6 | `wan-i2v` `mode=image2video` API 实测 | ⏳ 可选 |
+
+P1-2-lite（意图/UI/采纳/角色配图）已自测通过。下列为 **扩展** 真实媒体验收（非阻塞 Phase 2 收尾）：
 
 1. **环境**：Redis 开；`registered_models` 启用 image + video；分镜表默认模型已选；`alembic upgrade head`
-2. **后端稳定**：`python main.py` 启动后 `/api/auth/login` < 5s；避免热重载卡死
-3. **多镜 completed**：2 镜分镜表 → 节拍 → 分镜图 **completed** → 视频 **completed**
-4. **出图带角色+场景**：`reference_images` 含 cast + scene 参考图（`entityRefs.js`；mock 见 `mock_reference_images`）
-5. **失败 UX**：模型不可用时 `skipNotes` 覆盖乐观摘要（P1-2-lite 已验 UI；真实错误文案待模型环境复验）
+2. **多镜 completed**：2 镜分镜表 → 节拍 → 分镜图 **completed** → 视频 **completed**
+3. **出图带角色+场景**：`reference_images` 含 cast + scene 参考图（`entityRefs.js`）
+4. **失败 UX**：模型不可用时 `skipNotes` 覆盖乐观摘要
 
-**切换操作清单**：见 [backend/docs/COMFYUI_CUTOVER_RUNBOOK.md](backend/docs/COMFYUI_CUTOVER_RUNBOOK.md)（含回滚步骤与超时阈值复核表）。
+**切换操作清单**：见 [backend/docs/COMFYUI_CUTOVER_RUNBOOK.md](backend/docs/COMFYUI_CUTOVER_RUNBOOK.md)。
 
 ---
 
 ## 七、新对话建议起手
 
 ```
-继续 AI Studio 开发。请先读 HANDOFF.md 文首「2026-07-03 当前总览」+ **Phase 44** 详情节 + [`DEPLOY.md`](DEPLOY.md) + 「占位功能 — 永久不实现」。
+继续 AI Studio 开发。请先读 HANDOFF.md 文首「当前总览」+ [`G30_RESUME.md`](G30_RESUME.md) + [`GPU_DEBT.md`](GPU_DEBT.md) + [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md)（若在 AutoDL）+ [`DEPLOY.md`](DEPLOY.md)。
 
-【当前状态 · 2026-07-03】
-- **Phase 44 画布 UI 十四项 + 修补完成**（Portal/z-index/下拉互斥、upload banner、评论锚点、上传卡叠层修复、加载页去圆环；build ✅）
-- **Phase 43 部署前收尾验收完成**（pytest 56、mock 探针、文档 022/LUT、.env.example）
-- 画风预设统一 + VideoStylePicker（✅ 历史轮次）
-- ComfyUI workflow 代码已补全；真实 GPU 全链路仍待第八节 B
+【当前状态 · 2026-07-10】
+- **G31–G40 + G45 闭环**；**清理债项四件套**（SD / media_access / api_key / Portal）✅
+- **G30 仍有效**：phash · flux-pulid · ltx2-fp4
+- **路线 A/B/C** · Prompt 调试一～三 · Agent Trace A1–A5 · Phase 2/44/43 仍有效
+- 本机已启用：flux-dev / **flux-pulid** / hidream / wan-2.6 / wan-i2v / wan-fun-inpaint / **ltx2-fp4** / **hunyuan-video** / video-enhance-seedvr2
+- pytest **114 passed** · 数据盘 **~270G/300G**（剩余约 **31G**）
+- ~~**G39 AudioGen**~~：✅ 权重 + API + `sound_note` 后混音（跳过 ltx2）；探针 PASS
+- ~~**新 G40 ReActor**~~：✅ 接线 + buffalo_l + 换脸 GPU 复测（Phase7 T2/T3）
+- ~~**G45 视频逐帧换脸**~~：✅ `use_reactor` + 独立 ReActor 帧工作流；探针 PASS
+- ~~**Prompt Phase4–7**~~：✅ 全阶段探针完成
+- **Seedance（G46）**：**最后再说 / 不排期**
 
-【下轮起手 · 唯一阻塞项】
-1. AutoDL / 服务器：按 DEPLOY + AUTODL Runbook 部署 → ComfyUI 权重 → HANDOFF **第八节 B**
+【产品薄弱项 · 见 GPU_DEBT.md】
+1. ~~人物一致性~~：✅ G30（PuLID）
+2. ~~视频运动可控~~：✅ G31
+3. ~~A1 token 成本~~：✅ G32
+4. ~~运镜/景别 UI~~：✅ G33（CameraMotionPicker）
 
-【下轮可选】
-1. 服务器上重跑 `_comfyui_workflow_structure_probe.py`、`_real_media_pipeline_probe.py`
-2. LLM 探针各重跑 1 次（`_adversarial_regression`、`_agent_pipeline_e2e`）
-3. 画质增强非法上传路径（media_access ticket）
-4. 剩余 portal 迁移（MentionTextarea / 部分 Modal）与 z-index 常量收口
+【下轮可选 · 产品/质量】
+1. 主观质量表（G47）
+2. Seedance API（G46）— **最后再说**
 
-【本地 · 探针 mock 回归】
-  $env:AGENT_MOCK_GENERATION="true"
-  .\.venv\Scripts\python.exe -m pytest tests/ -q
-  .\.venv\Scripts\python.exe scripts\_mock_pipeline_stage2_probe.py
-  .\.venv\Scripts\python.exe scripts\_lut_probe.py
-  .\.venv\Scripts\python.exe scripts\_video_enhance_probe.py
+【AutoDL 运维 · 关机后需重启】
+  /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+  /usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf status
+  # facexlib 权重须在 ComfyUI/models/facexlib/*.pth 根目录（非子目录）
 
-Redis 必开；迁移：alembic upgrade head（**022**）
+【本地 · mock 回归】
+  AGENT_MOCK_GENERATION=true PYTHONPATH=. .venv/bin/python -m pytest tests/ -q
+
+Redis 必开；迁移：alembic upgrade head（**023**，含 sound_note / video_backend）
 ```
 
 ---
@@ -2139,6 +2511,14 @@ Redis 必开；迁移：alembic upgrade head（**022**）
 
 | Phase | 日期 | 摘要 |
 |-------|------|------|
+| **G40 + Phase4–7** | **07-10** | ReActor `use_reactor` + `buffalo_l`；Phase4–6 GPU 全绿；Phase7 T2/T3 换脸 completed；pytest **105**（✅） |
+| **G39** | 07-09 | AudioGen 权重 + `/api/audio/generate` + `sound_note` 后混音；迁移 **023**（✅） |
+| **G30–G38** | 07-09 | phash / flux-pulid / 运镜 / fun_inpaint / Hunyuan 上线 / Seedance 框架（✅） |
+| **Route-C** | 07-08 | Agent A1–A4 自动分镜 → 动态 rows → 3/3 图+视频 GPU；[`ROUTE_C_RESULT.md`](ROUTE_C_RESULT.md) |
+| **Prompt-1～3** | 07-07 | Flux/i2v/FLF2V Prompt Trace GPU 闭环；L3 翻译与 suffix 修复；L0 trace 盲区补全；K1–K4 completed |
+| **2** | 07-07 | 模型补全（i2v/Z-Image 清理）、Prompt Compiler、CharacterCardNode、分镜表 compile、GPU §八 B PASS |
+| 44 | 07-03 | 画布 UI 十四项 + 上传/加载页修补 |
+| 43 | 07-03 | 部署前收尾验收（pytest、探针、022/LUT） |
 | 1～8 | 06-15～16 | Agent 基础、SSE、持久化、大纲竞态修复、聊天归档 |
 | 9 | 06-16 | 分镜制作 pipeline 5～7、思考区时间线、命令路由 |
 | 10 | 06-16 | 阶段二 API 探测、创意卡片初版、create_node(video) |

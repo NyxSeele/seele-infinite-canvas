@@ -9,10 +9,12 @@ import httpx
 from openai import AsyncOpenAI
 
 from core.config import settings
+from core.logging_setup import studio_print
 from key_manager import get_dashscope_api_key
 from schemas.agent_schemas import AgentRunRequest
 from services.api_key_service import get_registered_model_api_key
 from services.llm_resilience import classify_llm_error, sleep_before_retry
+from trace_bus import push_trace
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +263,169 @@ data 示例：
   ]
 }
 """
+
+# G32: 阶段化短 prompt（pipeline「继续」轮），砍掉创意示例 / 意图 D 长文
+SYSTEM_PROMPT_CORE = """你是 AI Studio 的画布助手。画布是节点式创作工具，宣传片/剧本类需求必须走固定链路，**每次只执行一步、只动一张卡**。
+
+## 输出格式（必须严格遵守）
+
+输出纯 JSON，不加 markdown，不加说明文字：
+{
+  "user_status": "给用户看的中文进度（1～3 行）。语气像导演在场记上记录，口语化、有情绪感，不用技术字段。✓ 表示刚做完的事，→ 表示正在做的事。",
+  "actions": []
+}
+
+## 关键约束
+
+1. **每轮 actions 只能有 1 个 mutating 操作**（1 个 pipeline_step 或 1 个 create_node），外加可选 ask_user、done。禁止一次返回多步。
+2. 根据「当前画布状态」和「链路进度提示」判断下一步；若文本仍在 generating，用 ask_user 请用户稍后再发「继续」。
+3. id 必须来自画布 nodes / 节点 id 列表，禁止编造。
+4. done.summary 与 user_status 均须中文、面向用户，禁止技术术语与英文 step 名堆砌。
+5. 阶段二每次只推进**一镜**的一个子步骤（节拍 / 出图 / 出视频）。
+6. 画布存在多个 script_table 时，模糊指代须先 ask_user 澄清。
+
+### done — 必须放在最后
+{"type": "done", "summary": "纯中文", "suggestions": ["快捷回复1", "快捷回复2"]}
+- 链路执行类：summary 描述本步结果；必须给 2～3 个 suggestions
+"""
+
+SYSTEM_PROMPT_PIPELINE = """
+## 宣传片 / 剧本创作链路（强制顺序，禁止跳步）
+
+### 阶段一 — 剧本结构
+| 步骤 | step 值 |
+|------|---------|
+| 1 | create_text_note |
+| 2 | start_text_generation |
+| 3 | generate_outline |
+| 4 | generate_script_table |
+
+### 阶段二 — 分镜制作（一镜一步）
+| 步骤 | step 值 |
+|------|---------|
+| 5 | split_shot_beats |
+| 6 | generate_storyboard |
+| 7 | generate_video |
+
+**禁止**用 create_node 手写 outline / script_table。大纲与分镜必须由 pipeline_step 调用后端。
+
+### pipeline_step — 每轮最多 1 个
+{
+  "type": "pipeline_step",
+  "step": "create_text_note" | "start_text_generation" | "generate_outline" | "generate_script_table" | "split_shot_beats" | "generate_storyboard" | "generate_video" | "manage_cast" | "manage_scene",
+  "data": {},
+  "description": "本步说明"
+}
+
+data 要点：
+- create_text_note: {"prompt": "必填", "intent": "screenplay", "label": "..."}
+- start_text_generation: {"source_id": "text-note id"}
+- generate_outline: {"text_response_id": "..."}
+- generate_script_table: {"outline_id": "..."}
+- split_shot_beats / generate_storyboard / generate_video: {"script_table_id": "...", "row_id": "可选"}
+
+### ask_user（仅当进度提示要求等待或澄清时）
+{"type": "ask_user", "question": "…", "options": []}
+
+**必须先读「链路进度提示」的「推荐下一步阶段」并执行对应 pipeline_step**；禁止回退到已完成阶段。
+若上一轮 ask_user 尚未回答，禁止推进，用 done 引导用户选择。
+"""
+
+_PIPELINE_ADVANCE_STAGES = frozenset({
+    "create_text_note",
+    "start_text_generation",
+    "generate_outline",
+    "generate_script_table",
+    "split_shot_beats",
+    "generate_storyboard",
+    "generate_video",
+    "wait",
+    "wait_outline",
+    "wait_script_table",
+    "manage_cast",
+    "manage_scene",
+})
+
+_PIPELINE_SLIM_NODE_TYPES = frozenset({
+    "text_note",
+    "text-note",
+    "text_response",
+    "text-response",
+    "outline",
+    "script_table",
+    "script-table",
+})
+
+
+def _extract_recommended_stage(pipeline_ctx: str) -> str:
+    m = re.search(r"推荐下一步阶段:\s*(\S+)", pipeline_ctx or "")
+    return (m.group(1) if m else "").strip()
+
+
+def _is_pipeline_advance_intent(messages: list) -> bool:
+    """意图 B：继续/推进链路（非创意首轮、非纯分析）。"""
+    last_user = _last_user_message(messages)
+    if not last_user:
+        return False
+    if last_user.startswith("我选择"):
+        return True
+    advance = ("继续", "下一步", "采纳", "生成节拍", "拆分节拍", "分镜图", "出图", "出视频")
+    if any(k in last_user for k in advance):
+        return True
+    if last_user in ("继续", "继续。"):
+        return True
+    analysis = (
+        "分析", "检查", "看看", "总结", "评估", "审查", "怎么样",
+        "如何", "什么问题", "建议", "读一下", "解读", "帮忙看",
+    )
+    pipeline_kw = (
+        "继续", "下一步", "生成", "创建", "做一段", "宣传片", "剧本", "采纳",
+        "节拍", "分镜图", "分镜", "视频",
+    )
+    if any(k in last_user for k in analysis) and not any(k in last_user for k in pipeline_kw):
+        return False
+    fresh = _fresh_chain_intent_kind(messages)
+    if fresh == "brainstorm":
+        return False
+    if fresh == "create":
+        return True
+    if any(k in last_user for k in ("生成", "创建", "节拍", "分镜", "视频", "大纲", "剧本")):
+        return True
+    return False
+
+
+def _should_use_pipeline_prompt(messages: list, pipeline_ctx: str) -> bool:
+    stage = _extract_recommended_stage(pipeline_ctx)
+    if stage == "ask_user":
+        return False
+    if not _is_pipeline_advance_intent(messages):
+        return False
+    if stage in _PIPELINE_ADVANCE_STAGES or stage == "pipeline_complete":
+        return True
+    # 有明确推进词时即使 stage 空也用短 prompt
+    last_user = _last_user_message(messages)
+    return bool(last_user and last_user.strip() in ("继续", "继续。", "下一步"))
+
+
+def _select_system_prompt(messages: list, pipeline_ctx: str) -> str:
+    if _should_use_pipeline_prompt(messages, pipeline_ctx):
+        return SYSTEM_PROMPT_CORE + SYSTEM_PROMPT_PIPELINE
+    return SYSTEM_PROMPT
+
+
+def _slim_snapshot_json(snapshot) -> str:
+    data = snapshot.model_dump()
+    nodes = [
+        n
+        for n in (data.get("nodes") or [])
+        if (n.get("type") or "") in _PIPELINE_SLIM_NODE_TYPES
+    ]
+    slim = {
+        "nodes": nodes,
+        "edges": data.get("edges") or [],
+        "snapshot_truncated": data.get("snapshot_truncated"),
+    }
+    return json.dumps(slim, ensure_ascii=False, indent=2)
 
 
 def _resolve_agent_model() -> tuple[str, str, str, str | None]:
@@ -988,18 +1153,31 @@ def _build_canvas_digest(snapshot) -> str:
     return "\n\n## 画布摘要（优先阅读，再对照下方 JSON）\n" + "\n".join(lines) + "\n"
 
 
-def _build_canvas_context(snapshot, messages: list | None = None) -> str:
+def _build_canvas_context(
+    snapshot,
+    messages: list | None = None,
+    *,
+    pipeline_mode: bool = False,
+) -> str:
     data = snapshot.model_dump()
     node_ids = [n["id"] for n in data.get("nodes", [])]
     intent_ctx = _build_user_intent_context(messages or [], snapshot)
+    digest = _build_canvas_digest(snapshot)
+    pipeline_ctx = _build_pipeline_context(snapshot, messages)
+    id_list = (
+        "\n\n## 当前可用节点 id 列表（只能使用这些 id，禁止编造）\n"
+        + json.dumps(node_ids, ensure_ascii=False)
+    )
+    if pipeline_mode:
+        # G32: pipeline 推进轮去掉全量 JSON，digest + pipeline + ids 足够
+        return intent_ctx + digest + pipeline_ctx + id_list
     return (
         intent_ctx
-        + _build_canvas_digest(snapshot)
-        + _build_pipeline_context(snapshot, messages)
+        + digest
+        + pipeline_ctx
         + "\n\n## 当前画布状态\n"
-        + json.dumps(data, ensure_ascii=False, indent=2)
-        + "\n\n## 当前可用节点 id 列表（只能使用这些 id，禁止编造）\n"
-        + json.dumps(node_ids, ensure_ascii=False)
+        + _slim_snapshot_json(snapshot)
+        + id_list
     )
 
 
@@ -1092,45 +1270,132 @@ def _resolve_user_status(parsed: dict) -> str:
     )
 
 
+async def _aiter_with_keepalive(async_iterable, interval: float):
+    """Yield items from async_iterable; yield None when idle longer than interval."""
+    agen = async_iterable.__aiter__()
+    pending = asyncio.create_task(agen.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                yield None
+                continue
+            try:
+                item = pending.result()
+            except StopAsyncIteration:
+                break
+            yield item
+            pending = asyncio.create_task(agen.__anext__())
+    finally:
+        if not pending.done():
+            pending.cancel()
+            try:
+                await pending
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
+
+
+def _sse_ping() -> str:
+    return f'data: {json.dumps({"event": "ping"})}\n\n'
+
+
 async def run_agent_stream(request: AgentRunRequest) -> AsyncGenerator[str, None]:
     api_key, base_url, model, registered_id = _resolve_agent_model()
     if not api_key:
         yield f'data: {json.dumps({"event": "error", "message": "未配置百炼 API Key（DASHSCOPE_API_KEY）"})}\n\n'
         return
 
-    canvas_context = _build_canvas_context(request.canvas_snapshot, request.messages)
+    pipeline_ctx = _build_pipeline_context(request.canvas_snapshot, request.messages)
+    use_pipeline = _should_use_pipeline_prompt(request.messages, pipeline_ctx)
+    system_prompt = _select_system_prompt(request.messages, pipeline_ctx)
+    canvas_context = _build_canvas_context(
+        request.canvas_snapshot,
+        request.messages,
+        pipeline_mode=use_pipeline,
+    )
     mode_context = _build_execution_mode_context(request.execution_mode)
-    llm_messages = [{"role": "system", "content": SYSTEM_PROMPT + mode_context + canvas_context}]
+    system_content = system_prompt + mode_context + canvas_context
+    llm_messages = [{"role": "system", "content": system_content}]
     for msg in _trim_messages(request.messages):
         if msg.role in ("user", "assistant"):
             llm_messages.append({"role": msg.role, "content": msg.content})
+
+    last_user = _last_user_message(request.messages)
+    canvas_nodes = len(request.canvas_snapshot.nodes)
+    await push_trace(
+        "A1",
+        "AGENT_INPUT",
+        {
+            "messages_count": len(llm_messages),
+            "canvas_nodes": canvas_nodes,
+            "user_msg": (last_user or "")[:100],
+            "system_chars": len(system_content),
+            "canvas_context_chars": len(canvas_context),
+            "pipeline_prompt": use_pipeline,
+        },
+    )
+    studio_print(
+        "trace",
+        f"A1 AGENT_INPUT messages_count={len(llm_messages)} canvas_nodes={canvas_nodes} "
+        f"user_msg_len={len(last_user or '')} system_chars={len(system_content)} "
+        f"canvas_context_chars={len(canvas_context)} pipeline_prompt={use_pipeline}",
+    )
+
+    yield f'data: {json.dumps({"event": "status_delta", "content": "→ 正在连接模型…", "append": False}, ensure_ascii=False)}\n\n'
 
     parsed = None
     buffer = ""
     last_status_sent = ""
     llm_content_started = False
+    stream_usage: dict | None = None
     max_retries = max(1, int(settings.agent_llm_max_retries))
     base_delay = float(settings.agent_llm_retry_base_delay)
+    llm_timeout = float(settings.llm_http_timeout)
+    keepalive_sec = float(settings.agent_sse_keepalive_sec)
 
     for attempt in range(max_retries):
         buffer = ""
         last_status_sent = ""
         try:
-            async with httpx.AsyncClient(trust_env=False, timeout=120.0) as http:
+            async with httpx.AsyncClient(trust_env=False, timeout=llm_timeout) as http:
                 client = AsyncOpenAI(
                     api_key=api_key,
                     base_url=base_url,
-                    timeout=120.0,
+                    timeout=llm_timeout,
                     http_client=http,
                 )
-                stream = await client.chat.completions.create(
-                    model=model,
-                    messages=llm_messages,
-                    stream=True,
-                    max_tokens=4000,
-                    temperature=0.3,
+                create_task = asyncio.create_task(
+                    client.chat.completions.create(
+                        model=model,
+                        messages=llm_messages,
+                        stream=True,
+                        max_tokens=4000,
+                        temperature=0.3,
+                        stream_options={"include_usage": True},
+                    )
                 )
-                async for chunk in stream:
+                while True:
+                    done, _ = await asyncio.wait({create_task}, timeout=keepalive_sec)
+                    if not done:
+                        yield _sse_ping()
+                        continue
+                    stream = create_task.result()
+                    break
+
+                async for item in _aiter_with_keepalive(stream, keepalive_sec):
+                    if item is None:
+                        yield _sse_ping()
+                        continue
+                    chunk = item
+                    usage = getattr(chunk, "usage", None)
+                    if usage is not None:
+                        stream_usage = {
+                            "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                            "completion_tokens": int(
+                                getattr(usage, "completion_tokens", 0) or 0
+                            ),
+                            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+                        }
                     delta = ""
                     if chunk.choices and chunk.choices[0].delta:
                         delta = chunk.choices[0].delta.content or ""
@@ -1197,11 +1462,59 @@ async def run_agent_stream(request: AgentRunRequest) -> AsyncGenerator[str, None
         yield f'data: {json.dumps({"event": "thinking", "content": user_status}, ensure_ascii=False)}\n\n'
 
     actions = _enforce_single_step(parsed.get("actions", []))
+    action_types = [a.get("type") for a in actions]
+    tokens_estimated = not stream_usage
+    if stream_usage and stream_usage.get("total_tokens"):
+        total_tokens = stream_usage["total_tokens"]
+        prompt_tokens = stream_usage.get("prompt_tokens")
+        completion_tokens = stream_usage.get("completion_tokens")
+    else:
+        total_tokens = _estimate_tokens(llm_messages, buffer)
+        prompt_tokens = None
+        completion_tokens = None
+    await push_trace(
+        "A1",
+        "AGENT_OUTPUT",
+        {
+            "actions": action_types,
+            "user_status": user_status[:50],
+            "tokens": total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "tokens_estimated": tokens_estimated,
+        },
+    )
+    studio_print(
+        "trace",
+        f"A1 AGENT_OUTPUT actions={action_types} user_status_len={len(user_status)} "
+        f"tokens={total_tokens} prompt_tokens={prompt_tokens} "
+        f"completion_tokens={completion_tokens} tokens_estimated={tokens_estimated}",
+    )
 
     paused_at_ask = False
     for i, action in enumerate(actions):
         if paused_at_ask:
             break
+        if action.get("type") == "ask_user":
+            options = action.get("options") or []
+            if isinstance(options, list) and options:
+                titles = [
+                    str(o.get("title") or "").strip()
+                    for o in options
+                    if isinstance(o, dict) and (o.get("title") or "").strip()
+                ]
+                await push_trace(
+                    "A1",
+                    "CREATIVE_CARDS",
+                    {
+                        "options_count": len(options),
+                        "titles": titles,
+                    },
+                )
+                studio_print(
+                    "trace",
+                    f"A1 CREATIVE_CARDS options_count={len(options)} titles={titles}",
+                )
         yield f'data: {json.dumps({"event": "action", "action": action, "index": i}, ensure_ascii=False)}\n\n'
         if action.get("type") == "ask_user":
             paused_at_ask = True

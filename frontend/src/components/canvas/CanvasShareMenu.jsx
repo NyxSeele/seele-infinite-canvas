@@ -3,6 +3,7 @@ import { createPortal } from "react-dom"
 import { Link } from "lucide-react"
 import { useLocale } from "../../utils/locale"
 import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_SHARE_MENU } from "../../utils/zIndexLayers"
 import { showDevNotice } from "../common/ProductNoticeModal"
 
 function IconLink() {
@@ -162,7 +163,7 @@ export default function CanvasShareMenu({
     <div
       ref={panelRef}
       className={`ctb-share-menu ${getThemePageClass()}`}
-      style={{ top: pos.top, left: pos.left }}
+      style={{ top: pos.top, left: pos.left, zIndex: Z_SHARE_MENU }}
       role="menu"
       aria-label={t("canvas.topbar.share")}
       onClick={(e) => e.stopPropagation()}

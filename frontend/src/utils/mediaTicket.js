@@ -55,6 +55,23 @@ export function stripMediaTicket(url) {
   }
 }
 
+/** API 提交用：相对 /api/view|/api/uploads 路径（无 mt、无 host） */
+export function toRelativeMediaUrl(url) {
+  if (!url || typeof url !== "string") return url
+  const stripped = stripMediaTicket(url.trim())
+  if (!stripped) return stripped
+  if (stripped.startsWith("data:") || stripped.startsWith("blob:")) return stripped
+  if (stripped.startsWith("http://") || stripped.startsWith("https://")) {
+    try {
+      const parsed = new URL(stripped)
+      return `${parsed.pathname}${parsed.search}`
+    } catch {
+      return stripped
+    }
+  }
+  return stripped.startsWith("/") ? stripped : `/${stripped}`
+}
+
 export function ensureMediaUrl(url) {
   if (!url) return url
   if (typeof url !== "string") return url

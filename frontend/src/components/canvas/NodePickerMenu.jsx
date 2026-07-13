@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { MOTION_EXIT_MS, useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
 import { LineIcon } from "../icons/LineIcons"
 import { useLocale } from "../../utils/locale"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_NODE_DOTS_MENU } from "../../utils/zIndexLayers"
 
 function usePickerGroups(fromEdge, sourceNodeType) {
   const { t } = useLocale()
@@ -15,6 +18,7 @@ function usePickerGroups(fromEdge, sourceNodeType) {
           { type: "video-gen", action: "create-video", icon: "video", label: t("canvas.menu.videoGen"), sub: t("canvas.menu.subVideoStyle") },
           { type: "text-note", action: "create-text", icon: "text", label: t("canvas.menu.textNote"), sub: t("canvas.menu.subTextNote") },
           { type: "script-table", action: "create-script-table", icon: "script", label: t("canvas.menu.scriptTable"), sub: t("canvas.menu.subScriptTable") },
+          { type: "character-card", action: "create-character-card", icon: "text", label: t("canvas.menu.characterCard"), sub: t("canvas.menu.subCharacterCard") },
           { type: "import", action: "import-document", icon: "upload", label: t("canvas.menu.importDocument"), sub: t("canvas.menu.subImportDocument") },
         ],
       },
@@ -121,11 +125,11 @@ export default function NodePickerMenu({ x, y, fromEdge = false, sourceNodeType 
     exitClass: closing ? "motion-popover-out" : "",
   })
 
-  return (
+  return createPortal(
     <div
       ref={ref}
       className={menuClasses}
-      style={{ left: pos.left, top: pos.top }}
+      style={{ left: pos.left, top: pos.top, zIndex: Z_NODE_DOTS_MENU }}
       onPointerDown={(e) => e.stopPropagation()}
     >
       {groups.map((group) => (
@@ -150,6 +154,7 @@ export default function NodePickerMenu({ x, y, fromEdge = false, sourceNodeType 
           })}
         </div>
       ))}
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }

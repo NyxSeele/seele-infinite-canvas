@@ -9,6 +9,31 @@ import "./NodeBanner.css"
 
 const sp = (e) => e.stopPropagation()
 
+/** 模型下拉项：名称 + 可选能力说明；disabled 时灰显且不可选 */
+export function ModelDropupItem({ model, active, onSelect, disabled = false, disabledHint }) {
+  const id = model?.id || model?.display_name
+  const name = model?.display_name || model?.id || ""
+  const summary = (model?.summary || "").trim()
+  const hint = disabled ? (disabledHint || "当前模式不可用") : ""
+  const sub = disabled && hint ? hint : summary
+  return (
+    <button
+      type="button"
+      className={`nb-dropup-item nodrag${active ? " nb-dropup-item--active" : ""}${disabled ? " nb-dropup-item--disabled" : ""}`}
+      disabled={disabled}
+      title={disabled ? hint : undefined}
+      onClick={(e) => {
+        sp(e)
+        if (disabled) return
+        onSelect?.(id)
+      }}
+    >
+      <span className="nb-dropup-item-name">{name}</span>
+      {sub ? <span className="nb-dropup-item-summary">{sub}</span> : null}
+    </button>
+  )
+}
+
 /**
  * 与文本/图像卡一致的模型选择器：固定前置 tag + 下拉菜单（portal 避免被分镜卡遮挡）
  */
@@ -55,7 +80,7 @@ export default function CanvasModelDropup({
         position: "fixed",
         left: rect.left,
         bottom: window.innerHeight - rect.top + 6,
-        minWidth: Math.max(rect.width, 180),
+        minWidth: Math.max(rect.width, 220),
         zIndex: Z_DROPDOWN,
       })
     } else {
@@ -63,7 +88,7 @@ export default function CanvasModelDropup({
         position: "fixed",
         left: rect.left,
         top: rect.bottom + 6,
-        minWidth: Math.max(rect.width, 180),
+        minWidth: Math.max(rect.width, 220),
         zIndex: Z_DROPDOWN,
       })
     }
@@ -132,19 +157,19 @@ export default function CanvasModelDropup({
         >
           {models.map((m) => {
             const id = m.id || m.display_name
+            const itemDisabled = Boolean(isItemDisabled?.(m))
             return (
-              <button
+              <ModelDropupItem
                 key={id}
-                type="button"
-                className={`nb-dropup-item nodrag${value === id ? " nb-dropup-item--active" : ""}`}
-                onClick={(e) => {
-                  sp(e)
-                  onChange?.(id)
+                model={m}
+                active={value === id}
+                disabled={itemDisabled}
+                disabledHint={disabledHint}
+                onSelect={(nextId) => {
+                  onChange?.(nextId)
                   setOpen(false)
                 }}
-              >
-                {m.display_name || m.id}
-              </button>
+              />
             )
           })}
         </div>,

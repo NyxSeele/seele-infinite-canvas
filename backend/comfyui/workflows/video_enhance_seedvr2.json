@@ -14,7 +14,7 @@
   "2": {
     "class_type": "SeedVR2LoadDiTModel",
     "inputs": {
-      "model": "seedvr2_ema_7b_fp16.safetensors",
+      "model": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
       "device": "cuda",
       "blocks_to_swap": 0,
       "swap_io": false
@@ -23,7 +23,7 @@
   "3": {
     "class_type": "SeedVR2LoadVAEModel",
     "inputs": {
-      "model": "seedvr2_vae_fp16.safetensors",
+      "model": "ema_vae_fp16.safetensors",
       "device": "cuda",
       "encode_tiled": true,
       "encode_tile_size": 1024,

@@ -9,8 +9,10 @@ import useRefAssetEntries from "../../hooks/canvas/useRefAssetEntries"
 import { useLocale } from "../../utils/locale"
 import VideoStyleReferencePanel from "./VideoStyleReferencePanel"
 import VideoStylePicker from "./VideoStylePicker"
+import CameraMotionPicker from "./CameraMotionPicker"
 import { findScriptTableNode, resolveVideoQualityPresetId } from "../../utils/canvas/scriptTableNode"
 import "./VideoStylePicker.css"
+import "./CameraMotionPicker.css"
 import "./VideoReferencePanel.css"
 import "./CanvasImageQuickPicker.css"
 
@@ -96,15 +98,39 @@ export default function VideoReferencePanel({
   const [styleRefOpen, setStyleRefOpen] = useState(false)
 
   const onUpdate = data?.onUpdate
-  const referenceModeFromData = data?.referenceMode || "keyframe"
+  const forceKeyframe = (data?.modelId || "") === "wan-fun-inpaint"
+  const isT2vMode = !forceKeyframe && (
+    data?.referenceMode === "t2v"
+    || data?.vidMode === "文生"
+    || data?.panelMode === "t2v"
+  )
+  const referenceModeFromData = forceKeyframe
+    ? "keyframe"
+    : (data?.referenceMode || "keyframe")
   const panelModeFromData = data?.panelMode || referenceModeFromData
-  const [localPanelMode, setLocalPanelMode] = useState(panelModeFromData)
+  const [localPanelMode, setLocalPanelMode] = useState(
+    forceKeyframe && panelModeFromData === "freeref" ? "keyframe" : panelModeFromData
+  )
   const referenceMode = localPanelMode === "enhance" ? referenceModeFromData : localPanelMode
 
   useEffect(() => {
+    if (forceKeyframe) {
+      setLocalPanelMode((prev) => (prev === "enhance" ? prev : "keyframe"))
+      return
+    }
     const next = data?.panelMode || data?.referenceMode || "keyframe"
     setLocalPanelMode(next)
-  }, [data?.panelMode, data?.referenceMode, nodeId])
+  }, [data?.panelMode, data?.referenceMode, forceKeyframe, nodeId])
+
+  useEffect(() => {
+    if (!forceKeyframe || !onUpdate || !nodeId) return
+    if (data?.referenceMode === "keyframe" && data?.panelMode !== "freeref") return
+    onUpdate(nodeId, {
+      referenceMode: "keyframe",
+      panelMode: "keyframe",
+      vidMode: "首尾帧",
+    })
+  }, [forceKeyframe, data?.referenceMode, data?.panelMode, onUpdate, nodeId])
 
   const [keyframes, setKeyframes] = useState(data?.keyframes || DEFAULT_KEYFRAMES)
   const [freeRefs, setFreeRefs] = useState(data?.freeRefs || [])
@@ -150,7 +176,7 @@ export default function VideoReferencePanel({
     persist({
       panelMode: mode,
       referenceMode: mode,
-      vidMode: mode === "freeref" ? "参考" : "首尾帧",
+      vidMode: mode === "freeref" ? "参考" : mode === "t2v" ? "文生" : "首尾帧",
     })
     onSlotsExpandedChange?.(true)
   }, [
@@ -163,8 +189,9 @@ export default function VideoReferencePanel({
   ])
 
   const setMode = useCallback((mode) => {
+    if (forceKeyframe && mode === "freeref") return
     handleModeClick(mode)
-  }, [handleModeClick])
+  }, [handleModeClick, forceKeyframe])
 
   const updateKeyframes = useCallback((updater) => {
     setKeyframes((prev) => {
@@ -315,6 +342,30 @@ export default function VideoReferencePanel({
     [data, nodeId, onSlotsExpandedChange]
   )
 
+  const handleCameraMotionChange = useCallback(
+    ({ cameraMove, shotScale, samplingProfile }) => {
+      data?.onUpdate?.(nodeId, {
+        cameraMove: cameraMove || "auto",
+        shotScale: shotScale || "auto",
+        samplingProfile: samplingProfile || "fast",
+      })
+    },
+    [data, nodeId]
+  )
+
+  const cameraMove = data?.cameraMove || "auto"
+  const shotScale = data?.shotScale || "auto"
+
+  const cameraMotionSlot =
+    localPanelMode === "enhance" ? null : (
+      <CameraMotionPicker
+        cameraMove={cameraMove}
+        shotScale={shotScale}
+        readOnly={readOnly}
+        onChange={handleCameraMotionChange}
+      />
+    )
+
   const handleStyleReferenceChange = useCallback(
     (ref) => {
       onUpdate?.(nodeId, { styleReference: ref ?? null, referenceSlotsOpen: true })
@@ -352,6 +403,8 @@ export default function VideoReferencePanel({
           type="button"
           className={`mode-tab nodrag nopan${localPanelMode === "freeref" ? ` active${tabExpandedClass}` : ""}`}
           onClick={() => setMode("freeref")}
+          disabled={forceKeyframe}
+          title={forceKeyframe ? "Wan Fun Inpaint 需使用首尾帧" : undefined}
         >
           {t("canvas.image.slotFreeref")}
         </button>
@@ -363,7 +416,7 @@ export default function VideoReferencePanel({
           {t("canvas.video.enhance")}
         </button>
       </div>
-      {localPanelMode !== "enhance" && (
+      {localPanelMode !== "enhance" && !isT2vMode && (
         <>
           <div className="video-top-divider" aria-hidden />
           <div className="add-ref-wrapper">
@@ -394,10 +447,22 @@ export default function VideoReferencePanel({
           )}
         </>
       )}
+      {isT2vMode && projectId && localPanelMode !== "enhance" && (
+        <>
+          <div className="video-top-divider" aria-hidden />
+          <VideoStylePicker
+            value={qualityPresetId}
+            styleReference={styleReference}
+            readOnly={readOnly}
+            onPresetChange={handlePresetChange}
+            onUploadClick={() => setStyleRefOpen(true)}
+          />
+        </>
+      )}
     </div>
   )
 
-  const slotsSection = !slotsExpanded ? null : referenceMode === "keyframe" ? (
+  const slotsSection = (!slotsExpanded || isT2vMode || referenceMode === "t2v") ? null : referenceMode === "keyframe" ? (
         <div className="keyframe-slots nodrag nopan">
           <KeyframeSlot
             slotLabel={t("canvas.image.slotFirst")}
@@ -492,6 +557,7 @@ export default function VideoReferencePanel({
     return (
       <>
         {topBar}
+        {cameraMotionSlot}
         {styleRefModal}
       </>
     )
@@ -501,6 +567,7 @@ export default function VideoReferencePanel({
     return (
       <div className="video-ref-promptbar nodrag nopan">
         {topBar}
+        {cameraMotionSlot}
         {slotsExpanded ? (
           <div className="video-ref-promptbar-media">
             {localPanelMode === "enhance" ? (
@@ -538,6 +605,7 @@ export default function VideoReferencePanel({
   return (
     <div className="video-ref-panel nodrag nopan" onPointerDown={sp} onClick={sp}>
       {topBar}
+      {cameraMotionSlot}
       {slotsSection}
       {keyframePickPop}
       {styleRefModal}

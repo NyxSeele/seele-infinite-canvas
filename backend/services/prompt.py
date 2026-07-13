@@ -8,7 +8,9 @@ from services.mention_context import strip_mention_tokens
 _CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
-async def _translate_chinese_fallback(text: str) -> tuple[str | None, str | None]:
+async def _translate_chinese_fallback(
+    text: str, *, mode: str = "image"
+) -> tuple[str | None, str | None]:
     """L3 优化未生效时的英译回退，返回 (译文, 失败说明)。"""
     if not _CHINESE_RE.search(text or ""):
         return None, None
@@ -17,7 +19,7 @@ async def _translate_chinese_fallback(text: str) -> tuple[str | None, str | None
 
     try:
         plain = await asyncio.wait_for(
-            llm.translate_to_english(text),
+            llm.translate_to_english(text, mode=mode),
             timeout=min(settings.optimize_timeout, 20.0),
         )
         if plain.get("error"):
@@ -55,8 +57,20 @@ async def maybe_optimize_prompt(
     prompt = strip_mention_tokens(prompt)
     translate_note: str | None = None
 
+    if auto_optimize and mode == "image" and _CHINESE_RE.search(prompt):
+        translated, note = await _translate_chinese_fallback(prompt, mode="image")
+        if translated:
+            return translated, negative_prompt, True, None
+        translate_note = note
+
+    if auto_optimize and mode == "video" and _CHINESE_RE.search(prompt):
+        translated, note = await _translate_chinese_fallback(prompt, mode="video")
+        if translated:
+            return translated, negative_prompt, True, None
+        translate_note = note
+
     if not auto_optimize:
-        translated, note = await _translate_chinese_fallback(prompt)
+        translated, note = await _translate_chinese_fallback(prompt, mode=mode)
         if translated:
             return translated, negative_prompt, True, None
         return prompt, negative_prompt, False, note
@@ -82,7 +96,7 @@ async def maybe_optimize_prompt(
         translate_note = f"提示词优化异常: {exc}"
 
     if not optimized and _CHINESE_RE.search(positive):
-        translated, note = await _translate_chinese_fallback(positive)
+        translated, note = await _translate_chinese_fallback(positive, mode=mode)
         if translated:
             positive = translated
             optimized = True

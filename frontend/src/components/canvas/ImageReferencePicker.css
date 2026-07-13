@@ -3,7 +3,7 @@
   left: 50%;
   bottom: 88px;
   transform: translateX(-50%);
-  z-index: 10020;
+  z-index: 10020; /* Z_REF_PICKER */
   width: min(560px, calc(100vw - 32px));
   max-height: min(420px, calc(100vh - 160px));
   display: flex;

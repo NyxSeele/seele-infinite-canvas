@@ -1,10 +1,20 @@
-/** 画布 overlay 层级常量（由内到外） */
+/** 画布 / 工作区 overlay 层级常量（由内到外） */
 export const Z_NODE_CHROME = 30
 export const Z_COMMENT_MARKERS = 85
 export const Z_CANVAS_FLYOUT = 200
+export const Z_MENUS_PORTAL = 1000
+export const Z_WS_NOTIFY = 500
+export const Z_WS_FLYOUT = 520
+export const Z_WS_MODAL = 10000
+export const Z_WS_MODAL_NESTED = 6000
+export const Z_AVATAR_CROP = 8000
 export const Z_NODE_DOTS_MENU = 9999
 export const Z_DROPDOWN = 10050
+export const Z_REF_PICKER = 10020
+export const Z_HOVER_PILL = 10060
 export const Z_COMMENT_MSG_MENU = 10200
 export const Z_MODAL = 12000
 export const Z_REF_HOVER = 12050
 export const Z_TOOLTIP = 13000
+export const Z_TOAST = 30000
+export const Z_SHARE_MENU = 30010

@@ -11,6 +11,18 @@ from services.script_shot_strategy import detect_new_subject, new_subject_emphas
 from services.style_reference_service import format_style_for_prompt
 
 WorkflowType = Literal["sd15", "sdxl", "flux"]
+ModelTarget = Literal["flux", "wan-t2v", "wan-i2v", "seedance"]
+
+SEEDANCE_MIN_WORDS = 30
+SEEDANCE_MAX_WORDS = 100
+SEEDANCE_MODEL_PARAMS = {
+    "steps": 0,
+    "cfg": 0,
+    "width": 1280,
+    "height": 720,
+    "fps": 24,
+    "prompt_style": "short",
+}
 
 MAX_POSITIVE_LENGTH: dict[str, int] = {
     "sd15": 500,
@@ -27,6 +39,165 @@ VALID_WORKFLOW_TYPES = frozenset(MAX_POSITIVE_LENGTH.keys())
 _CAMERA_RE = re.compile(
     r"(特写|近景|中景|全景|远景|俯拍|仰拍|跟拍|推拉|长镜头)"
 )
+
+_MOVEMENT_LABEL_RE = re.compile(r"运镜[：:]\s*([^；;\n]+)")
+_CAMERA_LABEL_RE = re.compile(r"景别[：:]\s*([^；;\n]+)")
+
+# G31: 中文运镜 → 英文前置句（Wan L3/compile）
+_MOVEMENT_EN = (
+    ("缓慢推近", "The camera slowly dollies in"),
+    ("缓慢推进", "The camera slowly dollies in"),
+    ("推近", "The camera dollies in"),
+    ("推进", "The camera dollies in"),
+    ("推轨", "The camera dollies forward on a track"),
+    ("缓慢拉远", "The camera slowly pulls back"),
+    ("拉远", "The camera pulls back"),
+    ("拉开", "The camera pulls back"),
+    ("横摇", "The camera pans horizontally"),
+    ("左右摇", "The camera pans horizontally"),
+    ("摇镜", "The camera pans"),
+    ("俯摇", "The camera tilts down"),
+    ("仰摇", "The camera tilts up"),
+    ("跟拍", "The camera follows the subject"),
+    ("环绕", "The camera orbits around the subject"),
+    ("固定", "Static shot, locked-off camera"),
+    ("稳定运镜", "Smooth stabilized camera move"),
+)
+
+_CAMERA_EN = (
+    ("特写", "close-up shot"),
+    ("近景", "close shot"),
+    ("中景", "medium shot"),
+    ("全景", "wide shot"),
+    ("远景", "extreme wide shot"),
+    ("俯拍", "high-angle shot"),
+    ("仰拍", "low-angle shot"),
+)
+
+
+def _map_movement_en(value: str) -> str:
+    v = _clean(value)
+    if not v:
+        return ""
+    lower = v.lower()
+    if any(k in lower for k in ("dolly", "pan", "tilt", "orbit", "static", "camera")):
+        return v if v[0].isupper() or v.lower().startswith("the ") else f"The camera: {v}"
+    for zh, en in _MOVEMENT_EN:
+        if zh in v:
+            return en
+    return f"Camera movement: {v}"
+
+
+def _map_camera_en(value: str) -> str:
+    v = _clean(value)
+    if not v:
+        return ""
+    lower = v.lower()
+    if "shot" in lower or "angle" in lower:
+        return v
+    for zh, en in _CAMERA_EN:
+        if zh in v:
+            return en
+    return _format_camera(v)
+
+
+def extract_director_fields_from_scene(scene_desc: str) -> tuple[str, str]:
+    """从「运镜：…；景别：…」片段提取 movement / camera。"""
+    raw = scene_desc or ""
+    movement = ""
+    camera = ""
+    m = _MOVEMENT_LABEL_RE.search(raw)
+    if m:
+        movement = m.group(1).strip()
+    c = _CAMERA_LABEL_RE.search(raw)
+    if c:
+        camera = c.group(1).strip()
+    return movement, camera
+
+
+def prepend_wan_motion_english(
+    scene: str,
+    *,
+    movement: str = "",
+    camera: str = "",
+    camera_move: str = "auto",
+    shot_scale: str = "auto",
+) -> str:
+    """将运镜/景别英文句前置到 Wan scene 描述。
+
+    G33：若 camera_move / shot_scale 非 auto，用显式 ID 映射，并跳过文本「运镜：/景别：」解析以免双重注入。
+    二者皆 auto 时保持 G31 文本解析路径。
+    """
+    explicit_move = _map_explicit_camera_move(camera_move)
+    explicit_scale = _map_explicit_shot_scale(shot_scale)
+    use_explicit = bool(explicit_move or explicit_scale)
+
+    mov = _clean(movement)
+    cam = _clean(camera)
+    if use_explicit:
+        # 显式 UI 优先；不再从 scene 文本抽运镜/景别
+        pass
+    elif not mov and not cam:
+        mov, cam = extract_director_fields_from_scene(scene)
+
+    parts: list[str] = []
+    if explicit_move:
+        parts.append(explicit_move)
+    elif mov:
+        parts.append(_map_movement_en(mov))
+    if explicit_scale:
+        parts.append(explicit_scale)
+    elif cam:
+        parts.append(_map_camera_en(cam))
+    if not parts:
+        return scene
+    head = ". ".join(parts)
+    body = _clean(scene)
+    # 去掉中文标签段，避免与英文前置重复堆叠
+    if body:
+        body = _MOVEMENT_LABEL_RE.sub("", body)
+        body = _CAMERA_LABEL_RE.sub("", body)
+        body = re.sub(r"[；;]\s*[；;]", "；", body).strip("；; \n")
+        body = _clean(body)
+    if body:
+        return f"{head}. {body}"
+    return head
+
+
+# G33: UI 显式运镜 / 景别 ID → 英文（验收探针断言用词）
+_EXPLICIT_CAMERA_MOVE_EN: dict[str, str] = {
+    "push_in": "push in",
+    "pull_out": "pull out",
+    "pan": "pan",
+    "track": "tracking shot",
+    "static": "static camera",
+}
+_EXPLICIT_SHOT_SCALE_EN: dict[str, str] = {
+    "close": "close-up",
+    "medium": "medium shot",
+    "wide": "wide shot",
+    "full": "full shot",
+}
+
+
+def _normalize_explicit_id(value: str | None) -> str:
+    v = (value or "auto").strip().lower()
+    return v or "auto"
+
+
+def _map_explicit_camera_move(camera_move: str | None) -> str:
+    key = _normalize_explicit_id(camera_move)
+    if key == "auto":
+        return ""
+    return _EXPLICIT_CAMERA_MOVE_EN.get(key, "")
+
+
+def _map_explicit_shot_scale(shot_scale: str | None) -> str:
+    key = _normalize_explicit_id(shot_scale)
+    if key == "auto":
+        return ""
+    return _EXPLICIT_SHOT_SCALE_EN.get(key, "")
+
 
 STYLE_EN_TAGS: dict[str, str] = {
     "二次元": "anime style, 2D illustration, cel shading",
@@ -48,6 +219,26 @@ class BuiltPrompt:
     segments: tuple[str, ...]
     display_prompt: str = ""
     parsed_fields: dict | None = None
+
+
+@dataclass(frozen=True)
+class PromptResult:
+    positive_prompt: str
+    negative_prompt: str
+    model_params: dict
+
+
+WAN_VIDEO_NEGATIVE = (
+    "worst quality, inconsistent motion, blurry, jittery, distorted, "
+    "static, text, watermark"
+)
+
+WAN_MODEL_PARAMS: dict[str, dict] = {
+    "wan-t2v": {"steps": 4, "cfg": 1.0, "width": 848, "height": 480, "fps": 24},
+    "wan-i2v": {"steps": 4, "cfg": 1.0, "width": 640, "height": 640, "fps": 24},
+}
+
+FLUX_MODEL_PARAMS = {"steps": 20, "cfg": 1.0, "width": 1344, "height": 768}
 
 
 def normalize_workflow_type(value: str | None) -> str:
@@ -294,4 +485,190 @@ def build_script_shot_prompt(
         segments=tuple(gen_parts),
         display_prompt=display,
         parsed_fields={"description": desc, "theme": theme, "style": style},
+    )
+
+
+def summarize_character_refs_for_trace(character_refs: list) -> list[dict]:
+    """Compile trace 用：name + appearance 前 50 字摘要。"""
+    summary: list[dict] = []
+    for item in character_refs or []:
+        if not isinstance(item, dict):
+            continue
+        name = _clean(item.get("name"))
+        appearance = _clean(item.get("appearance") or item.get("desc"))
+        if not name and not appearance:
+            continue
+        summary.append({
+            "name": name,
+            "appearance": appearance[:50] if appearance else "",
+        })
+    return summary
+
+
+def _character_ref_lines(character_refs: list) -> list[str]:
+    lines: list[str] = []
+    for item in character_refs or []:
+        if not isinstance(item, dict):
+            continue
+        name = _clean(item.get("name"))
+        appearance = _clean(item.get("appearance") or item.get("desc"))
+        if name and appearance:
+            lines.append(f"{name}: {appearance}")
+        elif name:
+            lines.append(name)
+        elif appearance:
+            lines.append(appearance)
+    return lines
+
+
+def _apply_style_preset(style_preset: str) -> str:
+    preset = _clean(style_preset)
+    if not preset:
+        return ""
+    if preset in STYLE_EN_TAGS:
+        return STYLE_EN_TAGS[preset]
+    return resolve_style_en_tags(preset) or preset
+
+
+def compress_for_seedance(
+    source: str,
+    *,
+    camera_move: str = "auto",
+    shot_scale: str = "auto",
+    max_words: int = SEEDANCE_MAX_WORDS,
+    min_words: int = SEEDANCE_MIN_WORDS,
+) -> PromptResult:
+    """
+    将长描述压缩为 Seedance 短 prompt（默认 30–100 英文词）。
+    运镜/景别短标签前置；去掉 Wan 式长堆砌。
+    """
+    move = _map_explicit_camera_move(camera_move)
+    scale = _map_explicit_shot_scale(shot_scale)
+    body = _clean(source)
+    # 去掉常见冗余填充
+    for noise in (
+        "highly detailed",
+        "masterpiece",
+        "best quality",
+        "8k",
+        "4k uhd",
+        "ultra realistic",
+        "intricate details",
+    ):
+        body = re.sub(re.escape(noise), "", body, flags=re.IGNORECASE)
+    body = _clean(body)
+
+    prefix_parts = [p for p in (move, scale) if p]
+    prefix = ", ".join(prefix_parts)
+
+    words = body.split()
+    # 预留前缀词数
+    prefix_n = len(prefix.split()) if prefix else 0
+    budget = max(8, int(max_words) - prefix_n)
+    if len(words) > budget:
+        words = words[:budget]
+    body = " ".join(words)
+
+    if prefix and body:
+        positive = f"{prefix}. {body}"
+    elif prefix:
+        positive = prefix
+    else:
+        positive = body
+
+    # 保证至少 min_words：过短时用中性补全（仍控制在 max_words）
+    tokens = positive.split()
+    if len(tokens) < min_words:
+        filler = (
+            "natural lighting clear subject action continuous motion "
+            "cinematic framing coherent environment steady pace "
+            "visible beat grounded performance clean silhouette "
+            "consistent wardrobe practical light soft contrast"
+        ).split()
+        while len(tokens) < min_words:
+            need = min_words - len(tokens)
+            tokens.extend(filler[:need])
+        positive = " ".join(tokens[:max_words])
+    elif len(tokens) > max_words:
+        positive = " ".join(tokens[:max_words])
+
+    return PromptResult(
+        positive_prompt=positive,
+        negative_prompt="",
+        model_params=dict(SEEDANCE_MODEL_PARAMS),
+    )
+
+
+def build_prompt(
+    scene_desc: str,
+    character_refs: list | None = None,
+    style_preset: str = "",
+    model_target: str = "flux",
+    camera_move: str = "auto",
+    shot_scale: str = "auto",
+) -> PromptResult:
+    """
+    Prompt Compiler 统一入口。
+    优先级：character_refs > scene_desc > style_preset > 模型默认值。
+    G33：Wan 路径可接受显式 camera_move / shot_scale（非 auto 时优先于文本解析）。
+    """
+    target = (model_target or "flux").strip().lower()
+    if target not in ("flux", "wan-t2v", "wan-i2v", "seedance"):
+        target = "flux"
+
+    scene = _clean(scene_desc)
+    char_lines = _character_ref_lines(character_refs or [])
+    style_tag = _apply_style_preset(style_preset)
+
+    if target == "seedance":
+        parts: list[str] = []
+        if char_lines:
+            parts.append(", ".join(char_lines))
+        if scene:
+            parts.append(scene)
+        if style_tag and style_tag not in scene:
+            parts.append(style_tag)
+        long_text = ". ".join(p for p in parts if p)
+        return compress_for_seedance(
+            long_text,
+            camera_move=camera_move,
+            shot_scale=shot_scale,
+        )
+
+    if target == "flux":
+        parts = []
+        if char_lines:
+            parts.append(", ".join(char_lines))
+        if scene:
+            parts.append(scene)
+        if style_tag and style_tag not in scene:
+            parts.append(style_tag)
+        positive = ", ".join(p for p in parts if p)
+        positive, _ = _truncate_positive(positive, MAX_POSITIVE_LENGTH["flux"])
+        return PromptResult(
+            positive_prompt=positive,
+            negative_prompt="",
+            model_params=dict(FLUX_MODEL_PARAMS),
+        )
+
+    # Wan：英文优先，运动/运镜描述前置（G31 + G33 显式字段）
+    motion = prepend_wan_motion_english(
+        scene,
+        camera_move=camera_move,
+        shot_scale=shot_scale,
+    )
+    char_en = ", ".join(char_lines)
+    wan_parts: list[str] = []
+    if motion:
+        wan_parts.append(motion)
+    if char_en:
+        wan_parts.append(char_en)
+    if style_tag:
+        wan_parts.append(style_tag)
+    positive = ". ".join(p for p in wan_parts if p)
+    params = dict(WAN_MODEL_PARAMS.get(target, WAN_MODEL_PARAMS["wan-t2v"]))
+    return PromptResult(
+        positive_prompt=positive,
+        negative_prompt=WAN_VIDEO_NEGATIVE,
+        model_params=params,
     )

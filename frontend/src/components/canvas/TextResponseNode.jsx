@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useReactFlow } from "reactflow"
 import { useCanvasStore, useModelStore } from "../../stores"
-import { formatScreenplayParagraphs, titleCaseWords } from "../../utils/canvas/textFormat"
-import { normalizeOutlineScene } from "../../utils/canvas/outlineSceneMeta"
+import { titleCaseWords } from "../../utils/canvas/textFormat"
+import {
+  parseOutlineStructureResponse,
+  postOutlineStructure,
+} from "../../utils/canvas/outlineStructureApi"
 import { parseTargetDurationSec } from "../../utils/canvas/videoDurationIntent"
 import { useLocale } from "../../utils/locale"
 import GenerationStopButton from "./GenerationStopButton"
@@ -17,25 +20,6 @@ import "./TextResponseNode.css"
 
 const OUTLINE_OFFSET_X = 520
 const OUTLINE_NODE_WIDTH = 540
-
-function formatOutlineScenes(scenes) {
-  if (!Array.isArray(scenes)) return []
-  return scenes.map((s) => {
-    const scene = normalizeOutlineScene(s)
-    return {
-      ...scene,
-      content: formatScreenplayParagraphs(scene.content || ""),
-    }
-  })
-}
-
-function formatOutlineVersions(versions) {
-  if (!Array.isArray(versions)) return []
-  return versions.map((v) => ({
-    ...v,
-    scenes: formatOutlineScenes(v.scenes),
-  }))
-}
 
 export default function TextResponseNode({ id, data, selected }) {
   const { t } = useLocale()
@@ -59,6 +43,8 @@ export default function TextResponseNode({ id, data, selected }) {
 
   const [screenplayError, setScreenplayError] = useState("")
   const [screenplayLoading, setScreenplayLoading] = useState(false)
+  const [importingScriptTable, setImportingScriptTable] = useState(false)
+  const [importScriptError, setImportScriptError] = useState("")
   const outlineSynced = data.outlineSynced === true
   const outlineNodeIdRef = useRef(null)
   const autoOutlineStartedRef = useRef(false)
@@ -170,21 +156,15 @@ export default function TextResponseNode({ id, data, selected }) {
       data.connectOutlineFromResponse?.(id, outlineId)
 
       try {
-        const res = await api.post("/api/screenplay/structure-from-text", {
+        const res = await postOutlineStructure({
           text: screenplayText,
           target_duration_sec: targetVideoDurationSec ?? null,
           source_idea: sourceIdea || screenplayText,
         })
-        const rawVersions = Array.isArray(res.data?.versions) && res.data.versions.length > 0
-          ? res.data.versions
-          : [{
-              title: res.data?.title || "",
-              scenes: Array.isArray(res.data?.scenes) ? res.data.scenes : [],
-            }]
-        const versions = formatOutlineVersions(rawVersions)
-        const first = versions[0] || { title: "", scenes: [] }
-        const title = first.title || res.data?.title || ""
-        const scenes = formatOutlineScenes(first.scenes)
+        const outlineFields = parseOutlineStructureResponse(res, {
+          sourceIdea: sourceIdea || screenplayText,
+          targetVideoDurationSec,
+        })
         const targetId = outlineNodeIdRef.current
 
         setNodes((ns) =>
@@ -194,18 +174,7 @@ export default function TextResponseNode({ id, data, selected }) {
                   ...n,
                   data: {
                     ...n.data,
-                    loading: false,
-                    title,
-                    scenes,
-                    versions,
-                    selectedVersionIndex: 0,
-                    error: null,
-                    truncated: res.data?.truncated === true,
-                    targetVideoDurationSec:
-                      res.data?.target_video_duration_sec ??
-                      targetVideoDurationSec ??
-                      null,
-                    sourceIdea: sourceIdea || screenplayText,
+                    ...outlineFields,
                   },
                 }
               : n
@@ -264,6 +233,28 @@ export default function TextResponseNode({ id, data, selected }) {
     if (readOnly || status !== "completed" || !content) return
     setEditing(true)
   }, [status, content, readOnly])
+
+  const importHandler = data.onImportScriptTable
+  const migratedToScriptTable = Boolean(data.migratedToScriptTableId)
+
+  const handleImportScriptTable = useCallback(
+    async (e) => {
+      e.stopPropagation()
+      if (readOnly || importingScriptTable || !importHandler) return
+      const text = (content || "").trim()
+      if (!text) return
+      setImportScriptError("")
+      setImportingScriptTable(true)
+      try {
+        await importHandler(id)
+      } catch (err) {
+        setImportScriptError(err.message || t("canvas.common.unknownError"))
+      } finally {
+        setImportingScriptTable(false)
+      }
+    },
+    [readOnly, importingScriptTable, importHandler, content, id, t]
+  )
 
   const sp = (e) => e.stopPropagation()
   const nodeZIndex = data.zIndex ?? 0
@@ -385,6 +376,26 @@ export default function TextResponseNode({ id, data, selected }) {
                 : outlineSynced
                   ? t("canvas.text.reorganize")
                   : t("canvas.text.organizeOutline")}
+            </button>
+          </div>
+        )}
+
+        {status === "completed" && content?.trim() && importHandler && !screenplayMode && (
+          <div className="tr-footer-bar nodrag">
+            {importScriptError && (
+              <p className="tr-screenplay-error">{importScriptError}</p>
+            )}
+            <button
+              type="button"
+              className="tr-screenplay-btn nodrag"
+              disabled={readOnly || importingScriptTable || migratedToScriptTable}
+              onClick={handleImportScriptTable}
+            >
+              {importingScriptTable
+                ? t("canvas.text.importingScriptTable")
+                : migratedToScriptTable
+                  ? t("canvas.script.legacyReadonlyBanner")
+                  : t("canvas.text.importScriptTable")}
             </button>
           </div>
         )}

@@ -16,6 +16,7 @@ import VideoGenerationNode from "../components/canvas/VideoGenerationNode"
 import TextNode from "../components/canvas/TextNode"
 import TextResponseNode from "../components/canvas/TextResponseNode"
 import ScriptTableNode from "../components/canvas/ScriptTableNode"
+import CharacterCardNode from "../components/canvas/CharacterCardNode"
 import ScriptBeatCardNode from "../components/canvas/ScriptBeatCardNode"
 import OutlineNode from "../components/canvas/OutlineNode"
 import ShotScriptNode from "../components/canvas/ShotScriptNode"
@@ -135,6 +136,7 @@ const NODE_TYPES = {
   "text-note": TextNode,
   "text-response": TextResponseNode,
   "script-table": ScriptTableNode,
+  "character-card": CharacterCardNode,
   "script-beat-card": ScriptBeatCardNode,
   outline: OutlineNode,
   "shot-script": ShotScriptNode,
@@ -459,6 +461,7 @@ function CanvasInner() {
     runBeatCardRowGenerate,
     runScriptTableKeyframeGenerate,
     runScriptTableGenerateAll,
+    runScriptTableGenerateAllVideo,
     runScriptTableRowVideoGenerate,
     patchScriptTableRow,
     patchBeatCard,
@@ -468,6 +471,7 @@ function CanvasInner() {
     setEdges,
     getNode,
     nodesRef,
+    edgesRef,
     buildData,
     bumpZIndex,
   })
@@ -1348,6 +1352,7 @@ function CanvasInner() {
     runBeatCardRowGenerate,
     runScriptTableKeyframeGenerate,
     runScriptTableGenerateAll,
+    runScriptTableGenerateAllVideo,
     runScriptTableRowVideoGenerate,
     createBeatCardForRow,
     unlinkBeatCard,
@@ -1359,6 +1364,7 @@ function CanvasInner() {
     runBeatCardRowGenerate,
     runScriptTableKeyframeGenerate,
     runScriptTableGenerateAll,
+    runScriptTableGenerateAllVideo,
     runScriptTableRowVideoGenerate,
     createBeatCardForRow,
     unlinkBeatCard,

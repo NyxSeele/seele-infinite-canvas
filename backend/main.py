@@ -20,6 +20,7 @@ from routers import (
     admin_models,
     agent,
     assets,
+    audio,
     auth,
     canvas,
     canvas_ws,
@@ -100,6 +101,7 @@ os.makedirs("uploads/images", exist_ok=True)
 os.makedirs("uploads/videos", exist_ok=True)
 os.makedirs("uploads/exports", exist_ok=True)
 os.makedirs("uploads/luts", exist_ok=True)
+os.makedirs("uploads/audio", exist_ok=True)
 
 app.include_router(auth.router)
 app.include_router(teams.router)
@@ -122,6 +124,7 @@ app.include_router(exports.router)
 app.include_router(import_document.router)
 app.include_router(style_reference.router)
 app.include_router(lut.router)
+app.include_router(audio.router)
 
 if not settings.is_production:
     from routers import debug_trace

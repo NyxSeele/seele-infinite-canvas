@@ -72,8 +72,12 @@ FLUX_SAVE_IMAGE = "32"
 
 # Flux 伴随模型占位文件名 — 服务器就绪后按 ComfyUI models/ 实际安装名替换
 _FLUX_CLIP_L = "clip_l.safetensors"
-_FLUX_CLIP_T5 = "t5xxl_fp16.safetensors"
+_FLUX_CLIP_T5 = "t5xxl_fp8_e4m3fn.safetensors"
+_FLUX_CLIP_T5_FP16 = "t5xxl_fp16.safetensors"
 _FLUX_VAE = "ae.safetensors"
+_PULID_CKPT = "pulid_flux_v0.9.1.safetensors"
+_PULID_EVA_CLIP = "EVA02_CLIP_L_336_psz14_s6B.pt"
+_COMFY_MODELS = Path("/root/autodl-tmp/ComfyUI/models")
 
 # HiDream 专用节点 ID（ComfyUI 原生 SD3 风格链路）
 HIDREAM_UNET = "40"
@@ -88,9 +92,9 @@ HIDREAM_VAE_DECODE = "47"
 HIDREAM_SAVE_IMAGE = "48"
 
 # HiDream QuadrupleCLIPLoader 伴随编码器 — 服务器就绪后按实际安装名替换
-_HIDREAM_CLIP_L = "clip_l.safetensors"
-_HIDREAM_CLIP_G = "clip_g.safetensors"
-_HIDREAM_T5 = "t5xxl_fp16.safetensors"
+_HIDREAM_CLIP_L = "clip_l_hidream.safetensors"
+_HIDREAM_CLIP_G = "clip_g_hidream.safetensors"
+_HIDREAM_T5 = "t5xxl_fp8_e4m3fn_scaled.safetensors"
 _HIDREAM_LLAMA = "llama_3.1_8b_instruct_fp8_scaled.safetensors"
 _HIDREAM_VAE = "ae.safetensors"
 
@@ -193,18 +197,15 @@ async def translate_if_chinese(text: str) -> str:
 
 def _normalize_reference_url(image_url: str) -> str:
     """将前端/API 完整 URL 规范化为本地路径或 http URL。"""
-    url = (image_url or "").strip()
+    from services.media_access import normalize_media_reference_url
+
+    url = normalize_media_reference_url((image_url or "").strip())
     if not url:
         return url
-    if url.startswith("data:"):
+    if url.startswith("data:") or url.startswith("blob:"):
         return url
-    if url.startswith("blob:"):
-        return url
-    if url.startswith("http"):
-        parsed = urlparse(url)
-        path = (parsed.path or "").split("?", 1)[0]
-        if path.startswith("/api/uploads/") or path.startswith("/uploads/"):
-            return path
+    if url.startswith("/api/view"):
+        return url  # 保留 query（filename/subfolder）
     if url.startswith("/api/uploads/") or url.startswith("/uploads/"):
         return url.split("?", 1)[0]
     return url
@@ -290,13 +291,13 @@ async def _upload_reference_image(
 
 
 def _resolve_local_upload_path(image_url: str, *, db: Session, user: User) -> Path:
-    """解析受鉴权保护的上传文件路径（仅 uploads/images|videos）。"""
+    """解析受鉴权保护的参考图路径（uploads 或 ComfyUI 输出）。"""
     from models import User as UserModel
-    from services.media_access import assert_user_can_read_upload_url
+    from services.media_access import resolve_image_reference_path
 
     if not isinstance(user, UserModel):
         raise ComfyUIError("参考图鉴权失败")
-    return assert_user_can_read_upload_url(db, user, image_url)
+    return resolve_image_reference_path(db, user, image_url)
 
 
 async def _upload_image_from_url(
@@ -685,6 +686,250 @@ def _build_flux_workflow(
     }
 
 
+def _resolve_pulid_t5_encoder() -> str:
+    te = _COMFY_MODELS / "text_encoders"
+    if (te / _FLUX_CLIP_T5_FP16).exists():
+        return _FLUX_CLIP_T5_FP16
+    return _FLUX_CLIP_T5
+
+
+_REACTOR_SWAP_MODEL = "inswapper_128.onnx"
+_REACTOR_RESTORE_MODEL = "GFPGANv1.4.pth"
+_FLUX_PULID_REACTOR_TEMPLATE = (
+    Path(__file__).resolve().parent.parent / "comfyui" / "workflows" / "flux_pulid_reactor.json"
+)
+
+
+def _attach_reactor_face_swap(workflow: dict) -> dict:
+    """VAEDecode(8) 后接 ReActorFaceSwap(60)；SaveImage 吃换脸输出；源脸复用 LoadImage(49)。"""
+    workflow = dict(workflow)
+    workflow["60"] = {
+        "class_type": "ReActorFaceSwap",
+        "inputs": {
+            "enabled": True,
+            "input_image": ["8", 0],
+            "swap_model": _REACTOR_SWAP_MODEL,
+            "facedetection": "retinaface_resnet50",
+            "face_restore_model": _REACTOR_RESTORE_MODEL,
+            "face_restore_visibility": 1.0,
+            "codeformer_weight": 0.5,
+            "detect_gender_input": "no",
+            "detect_gender_source": "no",
+            "input_faces_index": "0",
+            "source_faces_index": "0",
+            "console_log_level": 1,
+            "source_image": ["49", 0],
+        },
+    }
+    save = dict(workflow.get("9") or {})
+    save_inputs = dict(save.get("inputs") or {})
+    save_inputs["images"] = ["60", 0]
+    save_inputs["filename_prefix"] = save_inputs.get("filename_prefix") or "AIStudio_pulid_reactor"
+    save["class_type"] = "SaveImage"
+    save["inputs"] = save_inputs
+    workflow["9"] = save
+    return workflow
+
+
+def build_reactor_frame_workflow(
+    *,
+    frame_filename: str,
+    face_filename: str,
+    filename_prefix: str = "AIStudio_reactor_frame",
+) -> dict:
+    """
+    G45 独立逐帧换脸工作流（不跑 PuLID）：
+    LoadImage(1)=帧 · LoadImage(2)=正脸 · ReActorFaceSwap(60) · SaveImage(9)
+    """
+    return {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {"image": frame_filename},
+        },
+        "2": {
+            "class_type": "LoadImage",
+            "inputs": {"image": face_filename},
+        },
+        "60": {
+            "class_type": "ReActorFaceSwap",
+            "inputs": {
+                "enabled": True,
+                "input_image": ["1", 0],
+                "swap_model": _REACTOR_SWAP_MODEL,
+                "facedetection": "retinaface_resnet50",
+                "face_restore_model": _REACTOR_RESTORE_MODEL,
+                "face_restore_visibility": 1.0,
+                "codeformer_weight": 0.5,
+                "detect_gender_input": "no",
+                "detect_gender_source": "no",
+                "input_faces_index": "0",
+                "source_faces_index": "0",
+                "console_log_level": 1,
+                "source_image": ["2", 0],
+            },
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": filename_prefix,
+                "images": ["60", 0],
+            },
+        },
+    }
+
+
+def _build_flux_pulid_workflow(
+    prompt_text: str,
+    model_filename: str,
+    width: int,
+    height: int,
+    seed: int,
+    profile: dict,
+    *,
+    reference_face_image: str,
+    pulid_weight: float | None = None,
+    use_reactor: bool = False,
+) -> dict:
+    """
+    Flux + Nunchaku PuLID：基于官方 api.json 节点链。
+    reference_face_image 为 ComfyUI input 目录内文件名。
+    use_reactor=True 时在出图后接 ReActorFaceSwap（源脸=节点49）。
+    """
+    gen_defaults = profile.get("generation_defaults") or {}
+    steps = int(gen_defaults.get("steps", 20))
+    sampler_name = str(gen_defaults.get("sampler_name", "euler"))
+    scheduler = str(gen_defaults.get("scheduler", "simple"))
+    guidance = _flux_guidance_value(profile, schnell=False)
+    weight = float(pulid_weight if pulid_weight is not None else gen_defaults.get("pulid_weight", 0.8))
+    t5_name = _resolve_pulid_t5_encoder()
+    dit_name = model_filename or "svdq-int4_r32-flux.1-dev.safetensors"
+
+    studio_print(
+        "comfyui-image",
+        f"Flux PuLID workflow: {dit_name} {width}x{height} steps={steps} "
+        f"pulid={weight} use_reactor={bool(use_reactor)}",
+    )
+
+    workflow = {
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": str(prompt_text).strip(), "clip": ["54", 0]},
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["13", 0], "vae": ["10", 0]},
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "ComfyUI", "images": ["8", 0]},
+        },
+        "10": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": _FLUX_VAE},
+        },
+        "13": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["17", 0],
+                "latent_image": ["27", 0],
+            },
+        },
+        "16": {
+            "class_type": "KSamplerSelect",
+            "inputs": {"sampler_name": sampler_name},
+        },
+        "17": {
+            "class_type": "BasicScheduler",
+            "inputs": {
+                "scheduler": scheduler,
+                "steps": steps,
+                "denoise": 1.0,
+                "model": ["30", 0],
+            },
+        },
+        "22": {
+            "class_type": "BasicGuider",
+            "inputs": {"model": ["30", 0], "conditioning": ["26", 0]},
+        },
+        "25": {
+            "class_type": "RandomNoise",
+            "inputs": {"noise_seed": int(seed)},
+        },
+        "26": {
+            "class_type": "FluxGuidance",
+            "inputs": {"guidance": guidance, "conditioning": ["6", 0]},
+        },
+        "27": {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {"width": int(width), "height": int(height), "batch_size": 1},
+        },
+        "30": {
+            "class_type": "ModelSamplingFlux",
+            "inputs": {
+                "max_shift": 1.15,
+                "base_shift": 0.5,
+                "width": int(width),
+                "height": int(height),
+                "model": ["52", 0],
+            },
+        },
+        "49": {
+            "class_type": "LoadImage",
+            "inputs": {"image": reference_face_image},
+        },
+        "50": {
+            "class_type": "NunchakuFluxDiTLoader",
+            "inputs": {
+                "model_path": dit_name,
+                "cache_threshold": 0.09,
+                "attention": "nunchaku-fp16",
+                "cpu_offload": "auto",
+                "device_id": 0,
+                "data_type": "bfloat16",
+                "i2f_mode": "enabled",
+            },
+        },
+        "52": {
+            "class_type": "NunchakuFluxPuLIDApplyV2",
+            "inputs": {
+                "weight": weight,
+                "start_at": 0.0,
+                "end_at": 1.0,
+                "model": ["53", 0],
+                "pulid_pipline": ["53", 1],
+                "image": ["49", 0],
+            },
+        },
+        "53": {
+            "class_type": "NunchakuPuLIDLoaderV2",
+            "inputs": {
+                "pulid_file": _PULID_CKPT,
+                "eva_clip_file": _PULID_EVA_CLIP,
+                "insight_face_provider": "gpu",
+                "model": ["50", 0],
+            },
+        },
+        "54": {
+            "class_type": "NunchakuTextEncoderLoaderV2",
+            "inputs": {
+                "model_type": "flux.1",
+                "text_encoder1": _FLUX_CLIP_L,
+                "text_encoder2": t5_name,
+                "t5_min_length": 512,
+            },
+        },
+    }
+    if use_reactor:
+        # 模板文件供文档/探针对照；运行时以动态拼装为准
+        if _FLUX_PULID_REACTOR_TEMPLATE.is_file():
+            pass
+        workflow = _attach_reactor_face_swap(workflow)
+    return workflow
+
+
 def _build_hidream_workflow(
     prompt_text: str,
     model_filename: str,
@@ -850,6 +1095,7 @@ def _build_workflow(
     *,
     denoise_override: float | None = None,
     negative_prompt: str | None = None,
+    use_reactor: bool = False,
 ) -> tuple[dict, str]:
     ref_count = len(reference_images) if reference_images else 0
     print(
@@ -865,7 +1111,11 @@ def _build_workflow(
     )
 
     effective_reference = reference_filename
-    if reference_filename and profile.get("img2img_support") == "unsupported":
+    if (
+        reference_filename
+        and profile.get("img2img_support") == "unsupported"
+        and workflow_type != "flux_pulid"
+    ):
         print(
             "[comfyui] 警告: 当前模型不支持传统 img2img，已降级为 txt2img "
             f"(model={model_filename!r}, workflow_type={workflow_type})"
@@ -881,6 +1131,24 @@ def _build_workflow(
 
     if seed is None:
         seed = random.randint(0, 2**53 - 1)
+
+    if workflow_type == "flux_pulid":
+        if not effective_reference:
+            raise ComfyUIError("flux-pulid 需要角色正脸参考图 (reference_image)")
+        gen_defaults = profile.get("generation_defaults") or {}
+        pulid_weight = gen_defaults.get("pulid_weight", 0.8)
+        workflow = _build_flux_pulid_workflow(
+            prompt_text,
+            model_filename,
+            width,
+            height,
+            seed,
+            profile,
+            reference_face_image=effective_reference,
+            pulid_weight=float(pulid_weight) if pulid_weight is not None else 0.8,
+            use_reactor=bool(use_reactor),
+        )
+        return workflow, "pulid_reactor" if use_reactor else "pulid"
 
     if workflow_type == "flux":
         workflow = _build_flux_workflow(
@@ -952,6 +1220,7 @@ async def submit_image_prompt(
     skip_translate: bool = False,
     denoise: float | None = None,
     negative_prompt: str | None = None,
+    use_reactor: bool = False,
     db: Session | None = None,
     user: User | None = None,
 ) -> tuple[str, dict]:
@@ -1016,6 +1285,7 @@ async def submit_image_prompt(
         model_id=model_id,
         denoise_override=denoise_override,
         negative_prompt=negative_prompt,
+        use_reactor=bool(use_reactor),
     )
     workflow_trace = extract_workflow_trace(workflow, model_filename)
     workflow_trace["reference_count"] = reference_count
@@ -1081,6 +1351,14 @@ async def submit_image_prompt(
         studio_print("comfyui-image", f"无 prompt_id: {data}")
         raise ComfyUIError("ComfyUI 未返回 prompt_id")
     studio_print("comfyui-image", f"ComfyUI 返回 prompt_id={prompt_id}")
+    try:
+        from services import comfyui_progress
+        from comfyui.client import count_workflow_sampler_stages
+
+        stages = count_workflow_sampler_stages(workflow)
+        comfyui_progress.set_expected_stages(str(prompt_id), stages)
+    except Exception:
+        pass
     return str(prompt_id), trace_meta
 
 

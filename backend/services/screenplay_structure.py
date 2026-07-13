@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 
+from core.logging_setup import studio_print
 from services.qwen import _call_llm, _validate_scenes, clean_json_response
 
 logger = logging.getLogger(__name__)
@@ -120,6 +122,8 @@ async def structure_screenplay_from_text(
     user_parts.append("【待整理文稿】\n" + body)
     user_prompt = "\n\n".join(user_parts)
 
+    studio_print("trace", f"A3 STRUCTURE_INPUT input_len={len(user_prompt)}")
+    t0 = time.perf_counter()
     raw, finish_reason = await _call_llm(
         STRUCTURE_FROM_TEXT_SYSTEM, user_prompt, max_tokens=8000
     )
@@ -130,6 +134,20 @@ async def structure_screenplay_from_text(
     except (json.JSONDecodeError, ValueError) as exc:
         logger.warning("structure JSON failed, retry validate path: %s", exc)
         raise ValueError(f"结构化失败: {exc}") from exc
+
+    scenes = parsed["scenes"]
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    studio_print(
+        "trace",
+        f"A3 STRUCTURE_OUTPUT scenes_count={len(scenes)} elapsed_ms={elapsed_ms}",
+    )
+    titles = " | ".join(
+        (sc.get("title") or "").strip() for sc in scenes if (sc.get("title") or "").strip()
+    )
+    if len(titles) > 200:
+        titles = titles[:197] + "..."
+    if titles:
+        studio_print("trace", f"A3 STRUCTURE_SCENE_TITLES {titles}")
 
     truncated = finish_reason == "length"
     return {

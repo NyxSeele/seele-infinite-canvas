@@ -6,16 +6,23 @@ import {
   TEXT_CONFIRM_MIN,
 } from "../utils/canvas/promptIntentConfig"
 
+/** 意图识别应快返回；超时后由调用方失败放行，避免卡在 CF 边缘 */
+export const CLASSIFY_INTENT_TIMEOUT_MS = 20000
+
 /**
  * @param {string} text
  * @param {{ context?: 'text'|'image'|'video', currentTextMode?: string }} options
  */
 export async function classifyPromptIntent(text, options = {}) {
-  const res = await api.post("/api/prompt/classify-intent", {
-    text: text.trim(),
-    context: options.context || "text",
-    current_text_mode: options.currentTextMode || null,
-  })
+  const res = await api.post(
+    "/api/prompt/classify-intent",
+    {
+      text: text.trim(),
+      context: options.context || "text",
+      current_text_mode: options.currentTextMode || null,
+    },
+    { timeout: CLASSIFY_INTENT_TIMEOUT_MS }
+  )
   return res.data
 }
 

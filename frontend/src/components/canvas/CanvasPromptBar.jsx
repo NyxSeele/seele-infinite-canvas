@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { useReactFlow, useStore } from "reactflow"
 import { useReferenceSelect } from "./CanvasActionsContext"
 import VideoReferencePanel from "./VideoReferencePanel"
+import VideoStylePicker from "./VideoStylePicker"
 import { VideoAtMentionList } from "./VideoAtMentionList"
 import VideoEnhancePanel from "./VideoEnhancePanel"
 import {
@@ -41,9 +42,20 @@ import { TEXT_CLASSIFY_MIN } from "../../utils/canvas/promptIntentConfig"
 import { usePromptIntentGate } from "./PromptIntentGateContext"
 import { useLocale } from "../../utils/locale"
 import { appendStyleReferenceToDescription } from "../../utils/canvas/styleReferenceFormat"
+import { findScriptTableNode, resolveImageQualityPresetId } from "../../utils/canvas/scriptTableNode"
+import { ModelDropupItem } from "./CanvasModelDropup"
+import {
+  T2V_ONLY,
+  isVideoModelCompatible,
+  preferredModelForMode,
+  reconcileVideoModelAndMode,
+  referenceModeForVidMode,
+  vidModeFromReferenceMode,
+} from "../../utils/canvas/videoModelCompat"
 import "./NodeBanner.css"
 import "./PromptRefChips.css"
 import "./VideoReferencePanel.css"
+import "./VideoStylePicker.css"
 
 // ── Image config ──────────────────────────────────────────
 const DEFAULT_IMAGE_RESOLUTIONS = ["1024x1024", "512x512", "768x768"]
@@ -57,7 +69,7 @@ const IMAGE_RATIOS = [
   { key: "2:3",   w: 2, h: 3 },
   { key: "21:9",  w: 21, h: 9 },
 ]
-const VIDEO_MODES   = ["首尾帧", "参考"]
+const VIDEO_MODES   = ["文生", "首尾帧", "参考"]
 const VIDEO_RATIOS  = [
   { key: "16:9", w: 16, h: 9 },
   { key: "9:16", w: 9, h: 16 },
@@ -284,7 +296,11 @@ function VideoPanelContent({
 
   const renderVidModeLabel = (opt) => (
     <>
-      {opt === "参考" ? t("canvas.prompt.freeref") : t("canvas.prompt.keyframe")}
+      {opt === "文生"
+        ? t("canvas.prompt.t2v")
+        : opt === "参考"
+          ? t("canvas.prompt.freeref")
+          : t("canvas.prompt.keyframe")}
       {opt === "参考" && <InfoIcon />}
     </>
   )
@@ -593,9 +609,28 @@ export default function CanvasPromptBar({
       )
     }
     if (isVideo) {
-      if (n.data?.referenceMode === "freeref") setVidMode("参考")
-      else if (n.data?.referenceMode === "keyframe") setVidMode("首尾帧")
-      else if (n.data?.vidMode) setVidMode(n.data.vidMode)
+      const rawMode = vidModeFromReferenceMode(n.data?.referenceMode, n.data?.vidMode)
+      const modelFromNode = n.data?.modelId || ""
+      const reconciled = reconcileVideoModelAndMode({
+        modelId: modelFromNode,
+        vidMode: rawMode,
+        models: videoModels,
+      })
+      setVidMode(reconciled.vidMode)
+      if (reconciled.modelId) setVidModel(reconciled.modelId)
+      if (
+        n.data?.onUpdate
+        && (
+          reconciled.vidMode !== rawMode
+          || (reconciled.modelId && reconciled.modelId !== modelFromNode)
+        )
+      ) {
+        n.data.onUpdate(selectedNodeId, {
+          vidMode: reconciled.vidMode,
+          referenceMode: referenceModeForVidMode(reconciled.vidMode),
+          ...(reconciled.modelId ? { modelId: reconciled.modelId } : {}),
+        })
+      }
       setReferenceSlotsExpanded(!!n.data?.referenceSlotsOpen)
       if (n.data?.vidRatio) setVidRatio(n.data.vidRatio)
       if (n.data?.vidQuality) setVidQuality(n.data.vidQuality)
@@ -607,7 +642,7 @@ export default function CanvasPromptBar({
       if (n.data?.imgRatio) setImgRatio(n.data.imgRatio)
       if (n.data?.imgResolution) setImgResolution(n.data.imgResolution)
     }
-  }, [selectedNodeId, selectedNodeType, getNode, isImage, isVideo, isText])
+  }, [selectedNodeId, selectedNodeType, getNode, isImage, isVideo, isText, videoModels])
 
   useEffect(() => {
     if (!selectedNodeId || !promptBarSync?.nodeId) return
@@ -648,10 +683,30 @@ export default function CanvasPromptBar({
   useEffect(() => {
     if (isText  && !textModel  && textModels.length  > 0) setTextModel(textModels[0].id)
     if (isImage && !imgModel   && imageModels.length > 0) setImgModel(imageModels[0].id)
-    if (isVideo && !vidModel   && videoModels.length > 0) setVidModel(videoModels[0].id)
-  }, [isText, isImage, isVideo, textModels, imageModels, videoModels])
+    if (isVideo && !vidModel   && videoModels.length > 0) {
+      setVidModel(preferredModelForMode(vidMode, videoModels) || videoModels[0].id)
+    }
+  }, [isText, isImage, isVideo, textModels, imageModels, videoModels, vidMode, vidModel])
 
   const node = mounted ? getNode(selectedNodeId) : null
+
+  const scriptTableNode = useMemo(() => {
+    if (!isImage || !node) return null
+    return findScriptTableNode(getNodes())
+  }, [isImage, node, getNodes])
+
+  const imageQualityPresetId = useMemo(
+    () => resolveImageQualityPresetId(node?.data || {}, scriptTableNode?.data || null),
+    [node?.data, scriptTableNode?.data]
+  )
+
+  const handleImagePresetChange = useCallback(
+    (presetId) => {
+      if (!selectedNodeId || !node?.data?.onUpdate) return
+      node.data.onUpdate(selectedNodeId, { qualityPresetId: presetId })
+    },
+    [selectedNodeId, node]
+  )
 
   const syncVideoNodePatch = useCallback((patch) => {
     if (!selectedNodeId || !node?.data?.onUpdate) return
@@ -659,12 +714,21 @@ export default function CanvasPromptBar({
   }, [selectedNodeId, node])
 
   const handleVidModeChange = useCallback((mode) => {
-    setVidMode(mode)
-    syncVideoNodePatch({
+    const reconciled = reconcileVideoModelAndMode({
+      modelId: vidModel,
       vidMode: mode,
-      referenceMode: mode === "参考" ? "freeref" : "keyframe",
+      models: videoModels,
     })
-  }, [syncVideoNodePatch])
+    setVidMode(reconciled.vidMode)
+    if (reconciled.modelId && reconciled.modelId !== vidModel) {
+      setVidModel(reconciled.modelId)
+    }
+    syncVideoNodePatch({
+      vidMode: reconciled.vidMode,
+      referenceMode: referenceModeForVidMode(reconciled.vidMode),
+      ...(reconciled.modelId ? { modelId: reconciled.modelId } : {}),
+    })
+  }, [syncVideoNodePatch, vidModel, videoModels])
 
   const handleTextModeChange = useCallback(
     (mode) => {
@@ -915,12 +979,13 @@ export default function CanvasPromptBar({
     const refUrl = imageRefs[0]?.imageUrl || referenceImageUrl
 
     let videoPatch = null
+    const forceFunInpaintKeyframe = isVideo && model === "wan-fun-inpaint"
     if (isVideo && node?.data?.onUpdate) {
       const hasImageMentions = mentionPayload.some((m) => {
         const t = String(m.type || "image").toLowerCase()
         return t === "image" || t === "image-gen"
       })
-      if (hasImageMentions) {
+      if (hasImageMentions && !forceFunInpaintKeyframe) {
         const freeRefs = mergeMentionRefsIntoFreeRefs(
           node.data.freeRefs,
           mentionPayload,
@@ -932,6 +997,15 @@ export default function CanvasPromptBar({
           mentions: mentionPayload,
         }
         node.data.onUpdate(selectedNodeId, videoPatch)
+      } else if (forceFunInpaintKeyframe) {
+        videoPatch = {
+          referenceMode: "keyframe",
+          panelMode: "keyframe",
+          vidMode: "首尾帧",
+          mentions: mentionPayload,
+        }
+        node.data.onUpdate(selectedNodeId, videoPatch)
+        setVidMode("首尾帧")
       }
     }
 
@@ -940,7 +1014,12 @@ export default function CanvasPromptBar({
       ? appendStyleReferenceToDescription(basePrompt, node?.data?.styleReference)
       : basePrompt
 
-    const generationMode = vidMode === "参考" ? "freeref" : "keyframe"
+    const generationMode = forceFunInpaintKeyframe
+      ? "keyframe"
+      : (vidMode === "参考" ? "freeref" : "keyframe")
+    const referenceMode = forceFunInpaintKeyframe
+      ? "keyframe"
+      : referenceModeForVidMode(vidMode)
     const refUrls = imageRefs.map((r) => r.imageUrl).filter(Boolean)
     const generateParams = {
       prompt: promptForSubmit,
@@ -954,7 +1033,7 @@ export default function CanvasPromptBar({
       vidDuration: safeVidDuration,
       vidAudio,
       generationMode,
-      referenceMode: generationMode,
+      referenceMode,
       width: isImage ? ratio.w * 256 : 1280,
       height: isImage ? ratio.h * 256 : 720,
       referenceImage: refUrl || null,
@@ -1299,6 +1378,18 @@ export default function CanvasPromptBar({
           onUpload={handleRefUploadFile}
         />
       </div>
+      {projectId && (
+        <>
+          <div className="video-top-divider" aria-hidden />
+          <VideoStylePicker
+            value={imageQualityPresetId}
+            showUploadSection={false}
+            readOnly={readOnly}
+            title={t("canvas.script.shotStyleTitle")}
+            onPresetChange={handleImagePresetChange}
+          />
+        </>
+      )}
       <input
         ref={refUploadInputRef}
         type="file"
@@ -1351,8 +1442,15 @@ export default function CanvasPromptBar({
           {textModelOpen && textModels.length > 0 && (
             <div className="nb-dropup-menu" onPointerDown={sp}>
               {textModels.map((m) => (
-                <button key={m.id} className={`nb-dropup-item nodrag${textModel === m.id ? " nb-dropup-item--active" : ""}`}
-                  onClick={(e) => { sp(e); setTextModel(m.id); setTextModelOpen(false) }}>{m.display_name}</button>
+                <ModelDropupItem
+                  key={m.id}
+                  model={m}
+                  active={textModel === m.id}
+                  onSelect={(id) => {
+                    setTextModel(id)
+                    setTextModelOpen(false)
+                  }}
+                />
               ))}
             </div>
           )}
@@ -1381,8 +1479,15 @@ export default function CanvasPromptBar({
             {imgModelOpen && imageModels.length > 0 && (
               <div className="nb-dropup-menu" onPointerDown={sp}>
                 {imageModels.map((m) => (
-                  <button key={m.id} className={`nb-dropup-item nodrag${imgModel === m.id ? " nb-dropup-item--active" : ""}`}
-                    onClick={(e) => { sp(e); setImgModel(m.id); setImgModelOpen(false) }}>{m.display_name}</button>
+                  <ModelDropupItem
+                    key={m.id}
+                    model={m}
+                    active={imgModel === m.id}
+                    onSelect={(id) => {
+                      setImgModel(id)
+                      setImgModelOpen(false)
+                    }}
+                  />
                 ))}
               </div>
             )}
@@ -1426,10 +1531,45 @@ export default function CanvasPromptBar({
         <div className="nb-dropup-wrap">
           {vidModelOpen && videoModels.length > 0 && (
             <div className="nb-dropup-menu" onPointerDown={sp}>
-              {videoModels.map((m) => (
-                <button key={m.id} className={`nb-dropup-item nodrag${vidModel === m.id ? " nb-dropup-item--active" : ""}`}
-                  onClick={(e) => { sp(e); setVidModel(m.id); setVidModelOpen(false) }}>{m.display_name}</button>
-              ))}
+              {videoModels.map((m) => {
+                const incompatible = !isVideoModelCompatible(m.id, vidMode)
+                return (
+                  <ModelDropupItem
+                    key={m.id}
+                    model={m}
+                    active={vidModel === m.id}
+                    disabled={incompatible}
+                    disabledHint="当前模式不可用"
+                    onSelect={(id) => {
+                      setVidModelOpen(false)
+                      if (id === "wan-fun-inpaint") {
+                        setVidModel(id)
+                        setVidMode("首尾帧")
+                        syncVideoNodePatch({
+                          modelId: id,
+                          referenceMode: "keyframe",
+                          panelMode: "keyframe",
+                          vidMode: "首尾帧",
+                        })
+                        return
+                      }
+                      if (T2V_ONLY.has(id)) {
+                        setVidModel(id)
+                        setVidMode("文生")
+                        syncVideoNodePatch({
+                          modelId: id,
+                          referenceMode: "t2v",
+                          panelMode: "t2v",
+                          vidMode: "文生",
+                        })
+                        return
+                      }
+                      setVidModel(id)
+                      syncVideoNodePatch({ modelId: id })
+                    }}
+                  />
+                )
+              })}
             </div>
           )}
           <button className="nb-model-btn-bare nodrag" onPointerDown={sp}
@@ -1452,10 +1592,17 @@ export default function CanvasPromptBar({
               >
                 <span>
                   {[
-                    vidMode === "参考" ? t("canvas.prompt.freeref") : t("canvas.prompt.keyframe"),
+                    vidMode === "文生"
+                      ? t("canvas.prompt.t2v")
+                      : vidMode === "参考"
+                        ? t("canvas.prompt.freeref")
+                        : t("canvas.prompt.keyframe"),
                     vidCapabilities?.aspect_ratios?.length ? vidRatio : null,
                     vidQuality,
                     vidCapabilities?.durations?.length ? vidDuration : null,
+                    vidModel === "ltx2-fp4"
+                      ? (vidAudio === "开启" ? "有声" : "静音")
+                      : null,
                   ].filter(Boolean).join(" · ")}
                 </span>
                 <SoundIcon />

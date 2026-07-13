@@ -437,21 +437,62 @@
 }
 
 .nb-dropup-item {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   width: 100%;
   text-align: left;
   background: none;
   border: none;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border-radius: 6px;
   font-size: 13px;
   color: var(--text-primary);
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
 }
+.nb-dropup-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: inherit;
+}
+.nb-dropup-item-summary {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.55));
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 100%;
+}
+body:has(.rf-page--light) .nb-dropup-item-summary,
+.rf-page--light .nb-dropup-item-summary {
+  color: rgba(0, 0, 0, 0.48);
+}
 .nb-dropup-item:hover {
   background: var(--tl-menu-hover);
   color: var(--text-primary);
+}
+.nb-dropup-item--disabled,
+.nb-dropup-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.45));
+}
+.nb-dropup-item--disabled:hover,
+.nb-dropup-item:disabled:hover {
+  background: none;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.45));
+}
+body:has(.rf-page--light) .nb-dropup-item--disabled,
+body:has(.rf-page--light) .nb-dropup-item:disabled,
+.rf-page--light .nb-dropup-item--disabled,
+.rf-page--light .nb-dropup-item:disabled {
+  color: rgba(0, 0, 0, 0.38);
 }
 .nb-dropup-item--active {
   color: var(--text-primary);

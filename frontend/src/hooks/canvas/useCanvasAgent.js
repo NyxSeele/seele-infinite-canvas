@@ -814,7 +814,9 @@ export function useCanvasAgent({
 
             lastEventAt = Date.now()
 
-            if (data.event === "thinking_delta") {
+            if (data.event === "ping") {
+              /* Cloudflare Tunnel keepalive — ignore */
+            } else if (data.event === "thinking_delta") {
               streamBuffer += data.content || ""
             } else if (data.event === "status_delta") {
               const piece = data.content || ""

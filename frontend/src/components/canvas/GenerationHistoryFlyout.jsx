@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useStore } from "reactflow"
 import { useCanvasStore, useTeamStore } from "../../stores"
 import { getCanvasTeamId } from "../../utils/teamContext"
@@ -14,6 +15,8 @@ import {
 import { useFlyoutMount } from "../../hooks/useFlyoutMount"
 import ScopeSwitchPanel from "../common/ScopeSwitchPanel"
 import { useLocale } from "../../utils/locale"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_CANVAS_FLYOUT } from "../../utils/zIndexLayers"
 import "./GenerationHistoryFlyout.css"
 
 const sp = (e) => e.stopPropagation()
@@ -152,9 +155,10 @@ export default function GenerationHistoryFlyout({ open, onClose, getCardPointerH
 
   if (!mounted) return null
 
-  return (
+  return createPortal(
     <aside
       className={`ghf-flyout nodrag nopan${open && !closing ? " ghf-flyout--open" : ""}${closing ? " ghf-flyout--closing" : ""}${expanded ? " ghf-flyout--expanded" : ""}`}
+      style={{ zIndex: Z_CANVAS_FLYOUT }}
       onPointerDown={sp}
       onDoubleClick={sp}
       role="dialog"
@@ -260,6 +264,7 @@ export default function GenerationHistoryFlyout({ open, onClose, getCardPointerH
         )}
       </div>
       </ScopeSwitchPanel>
-    </aside>
+    </aside>,
+    getThemePortalRoot(),
   )
 }

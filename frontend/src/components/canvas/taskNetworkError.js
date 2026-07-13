@@ -26,13 +26,35 @@ export function comfyUnavailableMessage() {
   return getT()("canvas.error.comfyDown")
 }
 
+function coerceErrorText(value) {
+  if (value == null) return ""
+  if (typeof value === "string") return value.trim()
+  if (typeof value === "object") {
+    const msg =
+      value.exception_message
+      || value.message
+      || value.detail
+      || value.error
+    if (typeof msg === "string" && msg.trim()) {
+      const excType = value.exception_type ? `${value.exception_type}: ` : ""
+      return `${excType}${msg}`.trim()
+    }
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return String(value)
+    }
+  }
+  return String(value).trim()
+}
+
 /** 从轮询接口响应或 axios 错误中解析用户可见文案 */
 export function parseGenerationError(err, task) {
   if (typeof err === "string" && err.trim()) {
     return mapEnhanceError(err)
   }
   if (task?.status === "failed" && task.error) {
-    return mapEnhanceError(String(task.error))
+    return mapEnhanceError(coerceErrorText(task.error))
   }
   if (err) {
     if (isNetworkError(err)) {
@@ -45,9 +67,15 @@ export function parseGenerationError(err, task) {
     if (Array.isArray(detail)) {
       return detail.map((d) => d.msg || d).filter(Boolean).join("; ")
     }
+    if (detail && typeof detail === "object") {
+      return mapEnhanceError(coerceErrorText(detail))
+    }
     const status = err.response?.status
     if (status === 502 || status === 503) {
       return comfyUnavailableMessage()
+    }
+    if (err.message) {
+      return mapEnhanceError(String(err.message))
     }
   }
   return getT()("canvas.error.genRetry")
@@ -55,10 +83,19 @@ export function parseGenerationError(err, task) {
 
 /** 画质增强 / Comfy 错误文案映射 */
 export function mapEnhanceError(detail) {
-  const raw = String(detail || "").trim()
+  const raw = coerceErrorText(detail)
   if (!raw) return getT()("canvas.error.genRetry")
   const lower = raw.toLowerCase()
   const t = getT()
+  if (
+    lower.includes("out of memory")
+    || lower.includes("outofmemory")
+    || lower.includes("cuda oom")
+    || lower.includes("allocation on device")
+    || raw.includes("显存不足")
+  ) {
+    return t("canvas.error.oom")
+  }
   if (raw.includes("非法上传路径") || raw.includes("视频源无效")) {
     return t("canvas.video.enhanceInvalidSource")
   }
@@ -73,10 +110,11 @@ export function mapEnhanceError(detail) {
     || lower.includes("seedvr")
     || lower.includes("realesrgan")
   ) {
-    return t("canvas.video.enhanceModelMissing", { detail: raw })
+    return t("canvas.video.enhanceModelMissing", { detail: raw.slice(0, 180) })
   }
   if (lower.includes("vhs") || lower.includes("video helper suite")) {
     return t("canvas.video.enhancePluginMissing")
   }
+  if (raw.length > 240) return `${raw.slice(0, 240).trimEnd()}…`
   return raw
 }

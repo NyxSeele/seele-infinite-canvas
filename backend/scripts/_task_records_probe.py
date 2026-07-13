@@ -43,7 +43,7 @@ def main() -> int:
             f"{BASE}/api/tasks/image",
             headers=headers(token),
             json={
-                "model": "stable-diffusion",
+                "model": "flux-dev",
                 "prompt": "task records probe image",
                 "ratio": "1:1",
                 "quality": "2K",

@@ -71,6 +71,11 @@ class BuildScriptShotRequest(BaseModel):
         default=None,
         description="Prompt Trace 会话 ID（可选，由前端传入以串联 L0–L4）",
     )
+    character_refs_count: int = Field(
+        default=0,
+        ge=0,
+        description="compile 阶段传入的角色引用数量（供 L0 trace 日志）",
+    )
 
 
 class ShotLinkingMeta(BaseModel):
@@ -117,6 +122,37 @@ class BuildPromptResponse(BaseModel):
     )
 
 
+class CharacterRefPayload(BaseModel):
+    name: str = ""
+    appearance: str = Field(default="", description="外貌/人设描述")
+    desc: str = Field(default="", description="兼容旧字段")
+
+
+class CompilePromptRequest(BaseModel):
+    scene_desc: str = Field(default="", description="分镜/场景描述")
+    character_refs: list[CharacterRefPayload] = Field(default_factory=list)
+    style_preset: str = Field(default="", description="画风预设 id 或名称")
+    model_target: Literal["flux", "wan-t2v", "wan-i2v", "seedance"] = "flux"
+    trace_id: Optional[str] = Field(
+        default=None,
+        description="Prompt Trace 会话 ID（与 build-shot 串联 L0 COMPILED / BUILT）",
+    )
+    camera_move: Optional[str] = Field(
+        default="auto",
+        description="G33 显式运镜：auto|push_in|pull_out|pan|track|static",
+    )
+    shot_scale: Optional[str] = Field(
+        default="auto",
+        description="G33 显式景别：auto|close|medium|wide|full",
+    )
+
+
+class CompilePromptResponse(BaseModel):
+    positive_prompt: str
+    negative_prompt: str
+    model_params: dict
+
+
 class ScriptTableGenerateRequest(BaseModel):
     node_id: str = Field(..., description="画布分镜表节点 ID")
     row_id: str = Field(..., description="分镜行 ID")
@@ -161,9 +197,16 @@ class CastItemPayload(BaseModel):
     type: str = "character"
 
 
+class SceneItemPayload(BaseModel):
+    id: Optional[str] = None
+    name: str = ""
+    type: str = "scene"
+
+
 class ExpandShotPackageRequest(BaseModel):
     row: ShotRowPayload
     cast_library: list[CastItemPayload] = Field(default_factory=list)
+    scene_library: list[SceneItemPayload] = Field(default_factory=list)
     keyframe_id: Optional[str] = Field(
         default=None,
         description="仅扩写单格时传入",
@@ -196,6 +239,7 @@ class ShotBeatItem(BaseModel):
 class SplitShotBeatsRequest(BaseModel):
     row: ShotRowPayload
     cast_library: list[CastItemPayload] = Field(default_factory=list)
+    scene_library: list[SceneItemPayload] = Field(default_factory=list)
     use_llm: bool = Field(default=True, description="是否用 LLM 拆分节拍")
 
 

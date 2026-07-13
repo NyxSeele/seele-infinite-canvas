@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from core.logging_setup import studio_print
 from core.dependencies import get_current_user
+from db.session import get_db
 from model_registry import resolve_generation_profile
-from models import User
+from models import Task, User
 from schemas.prompt_builder import (
     BuildPromptRequest,
     BuildPromptResponse,
     BuildScriptShotRequest,
+    CompilePromptRequest,
+    CompilePromptResponse,
     ExpandShotPackageRequest,
     ExpandShotPackageResponse,
     SplitShotBeatsRequest,
@@ -21,10 +29,13 @@ from schemas.prompt_builder import (
     ShotLinkingMeta,
 )
 from services.prompt_builder import (
+    build_prompt,
     build_prompt_from_fields,
     build_script_shot_prompt,
     resolve_style_en_tags,
+    summarize_character_refs_for_trace,
 )
+from services.quota_service import create_task_record
 from services.shot_prompt_package import build_shot_prompt_package
 from services.split_shot_beats import split_shot_beats
 from services.script_shot_strategy import evaluate_visual_reference
@@ -32,6 +43,10 @@ from services.prompt_intent import classify_user_intent
 from trace_bus import push_trace
 
 router = APIRouter(tags=["prompt"])
+logger = logging.getLogger(__name__)
+
+TASK_TYPE_EXPAND = "sp_expand"
+TASK_TYPE_BEATS = "sp_beats"
 
 
 class ClassifyIntentRequest(BaseModel):
@@ -112,6 +127,77 @@ def _to_response(
     )
 
 
+def _mark_json_task_done(
+    db: Session, task_id: str, *, result: dict | None = None, error: str | None = None
+) -> None:
+    task = db.get(Task, task_id)
+    if not task or task.status == "cancelled":
+        return
+    if error:
+        task.status = "failed"
+        task.error = error[:2000]
+        task.result = None
+    else:
+        task.status = "completed"
+        task.error = None
+        task.result = json.dumps(result or {}, ensure_ascii=False)
+    db.commit()
+
+
+def _expand_payload_from_body(body: ExpandShotPackageRequest | SplitShotBeatsRequest) -> dict:
+    row = body.row.model_dump()
+    payload = {
+        "row": {
+            **row,
+            "keyframes": [k.model_dump() for k in body.row.keyframes],
+        },
+        "cast_library": [c.model_dump() for c in body.cast_library],
+        "scene_library": [s.model_dump() for s in (body.scene_library or [])],
+    }
+    if isinstance(body, ExpandShotPackageRequest):
+        payload["keyframe_id"] = body.keyframe_id
+        payload["style_reference"] = body.style_reference
+    return payload
+
+
+async def _run_expand_task(task_id: str, payload: dict) -> None:
+    from db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        task = db.get(Task, task_id)
+        if task:
+            task.status = "processing"
+            task.error = None
+            db.commit()
+        result = await build_shot_prompt_package(payload, use_llm=True)
+        _mark_json_task_done(db, task_id, result=result)
+    except Exception as exc:
+        logger.exception("expand-shot-package async failed task_id=%s", task_id)
+        _mark_json_task_done(db, task_id, error=f"扩写失败: {str(exc)[:200]}")
+    finally:
+        db.close()
+
+
+async def _run_beats_task(task_id: str, payload: dict) -> None:
+    from db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        task = db.get(Task, task_id)
+        if task:
+            task.status = "processing"
+            task.error = None
+            db.commit()
+        result = await split_shot_beats(payload, use_llm=True)
+        _mark_json_task_done(db, task_id, result=result)
+    except Exception as exc:
+        logger.exception("split-shot-beats async failed task_id=%s", task_id)
+        _mark_json_task_done(db, task_id, error=f"节拍拆分失败: {str(exc)[:200]}")
+    finally:
+        db.close()
+
+
 @router.post("/api/prompt/classify-intent", response_model=ClassifyIntentResponse)
 async def api_classify_intent(
     body: ClassifyIntentRequest,
@@ -135,7 +221,7 @@ async def api_classify_intent(
 
 
 @router.post("/api/prompt/build", response_model=BuildPromptResponse)
-def build_prompt(
+def build_prompt_api(
     body: BuildPromptRequest,
     _user: User = Depends(get_current_user),
 ):
@@ -146,6 +232,46 @@ def build_prompt(
         global_style=body.global_style,
     )
     return _to_response(built)
+
+
+@router.post("/api/prompt/compile", response_model=CompilePromptResponse)
+async def compile_prompt(
+    body: CompilePromptRequest,
+    _user: User = Depends(get_current_user),
+):
+    """Prompt Compiler：按 model_target 聚合 scene / character / style。"""
+    refs = [c.model_dump() for c in body.character_refs]
+    result = build_prompt(
+        body.scene_desc,
+        character_refs=refs,
+        style_preset=body.style_preset,
+        model_target=body.model_target,
+        camera_move=body.camera_move or "auto",
+        shot_scale=body.shot_scale or "auto",
+    )
+    trace_id = (body.trace_id or "").strip() or str(uuid.uuid4())
+    refs_summary = summarize_character_refs_for_trace(refs)
+    await push_trace(
+        0,
+        "COMPILED",
+        {
+            "trace_id": trace_id,
+            "character_refs": refs_summary,
+            "positive_preview": result.positive_prompt[:100],
+            "character_refs_count": len(refs),
+            "positive_len": len(result.positive_prompt),
+        },
+    )
+    studio_print(
+        "trace",
+        f"L0 COMPILED trace_id={trace_id} character_refs_count={len(refs)} "
+        f"positive_len={len(result.positive_prompt)}",
+    )
+    return CompilePromptResponse(
+        positive_prompt=result.positive_prompt,
+        negative_prompt=result.negative_prompt,
+        model_params=result.model_params,
+    )
 
 
 @router.post("/api/prompt/build-shot", response_model=BuildPromptResponse)
@@ -195,6 +321,12 @@ async def build_script_shot(
             "shot_number": body.shot_number,
         },
     )
+    studio_print(
+        "trace",
+        f"L0 BUILT trace_id={trace_id} shot_number={body.shot_number} "
+        f"character_refs_count={body.character_refs_count} "
+        f"positive_len={len(built.positive)}",
+    )
     return _to_response(
         built,
         visual_decision=visual_decision,
@@ -203,42 +335,56 @@ async def build_script_shot(
     )
 
 
-@router.post("/api/prompt/expand-shot-package", response_model=ExpandShotPackageResponse)
+@router.post("/api/prompt/expand-shot-package")
 async def expand_shot_package(
     body: ExpandShotPackageRequest,
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """分镜镜/格：扩写为小云雀式三层 prompt（规则兜底 + 可选 LLM）。"""
-    row = body.row.model_dump()
-    payload = {
-        "row": {
-            **row,
-            "keyframes": [k.model_dump() for k in body.row.keyframes],
-        },
-        "cast_library": [c.model_dump() for c in body.cast_library],
-        "keyframe_id": body.keyframe_id,
-        "style_reference": body.style_reference,
-    }
-    result = await build_shot_prompt_package(payload, use_llm=body.use_llm)
-    return ExpandShotPackageResponse(**result)
+    """分镜镜/格：扩写为小云雀式三层 prompt。use_llm=false 同步；true 时返回 task_id。"""
+    payload = _expand_payload_from_body(body)
+    if not body.use_llm:
+        result = await build_shot_prompt_package(payload, use_llm=False)
+        return ExpandShotPackageResponse(**result)
+
+    task_id = str(uuid.uuid4())
+    create_task_record(
+        db,
+        task_id,
+        TASK_TYPE_EXPAND,
+        "queued",
+        user_id=user.id,
+        prompt_text=(payload.get("row") or {}).get("prompt") or "",
+    )
+    db.commit()
+    asyncio.create_task(_run_expand_task(task_id, payload))
+    return {"task_id": task_id, "status": "queued"}
 
 
-@router.post("/api/prompt/split-shot-beats", response_model=SplitShotBeatsResponse)
+@router.post("/api/prompt/split-shot-beats")
 async def api_split_shot_beats(
     body: SplitShotBeatsRequest,
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """根据镜级剧情与时长，LLM 拆分为连续分镜节拍（含每格出图 prompt）。"""
-    row = body.row.model_dump()
-    payload = {
-        "row": {
-            **row,
-            "keyframes": [k.model_dump() for k in body.row.keyframes],
-        },
-        "cast_library": [c.model_dump() for c in body.cast_library],
-    }
-    result = await split_shot_beats(payload, use_llm=body.use_llm)
-    return SplitShotBeatsResponse(**result)
+    """节拍拆分。use_llm=false 同步；true 时返回 task_id。"""
+    payload = _expand_payload_from_body(body)
+    if not body.use_llm:
+        result = await split_shot_beats(payload, use_llm=False)
+        return SplitShotBeatsResponse(**result)
+
+    task_id = str(uuid.uuid4())
+    create_task_record(
+        db,
+        task_id,
+        TASK_TYPE_BEATS,
+        "queued",
+        user_id=user.id,
+        prompt_text=(payload.get("row") or {}).get("prompt") or "",
+    )
+    db.commit()
+    asyncio.create_task(_run_beats_task(task_id, payload))
+    return {"task_id": task_id, "status": "queued"}
 
 
 @router.post(

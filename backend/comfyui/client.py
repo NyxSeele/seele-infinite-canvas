@@ -23,13 +23,54 @@ DEFAULT_IMAGE_MODEL = "v1-5-pruned-emaonly.safetensors"
 DEFAULT_VIDEO_MODEL = "ltx-video-2b-v0.9.5.safetensors"
 DEFAULT_CKPT = DEFAULT_IMAGE_MODEL
 LTX_CKPT = DEFAULT_VIDEO_MODEL
-WAN_CKPT = "wan2.6.safetensors"
+WAN_CKPT = "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"
+WAN22_T2V_HIGH = "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"
+WAN22_T2V_LOW = "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
+WAN22_LORA_HIGH = "wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors"
+WAN22_LORA_LOW = "wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors"
+WAN22_I2V_HIGH = "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
+WAN22_I2V_LOW = "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"
+WAN22_I2V_LORA_HIGH = "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"
+WAN22_I2V_LORA_LOW = "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+WAN22_FUN_INPAINT_HIGH = "wan2.2_fun_inpaint_high_noise_14B_fp8_scaled.safetensors"
+WAN22_FUN_INPAINT_LOW = "wan2.2_fun_inpaint_low_noise_14B_fp8_scaled.safetensors"
+WAN_VAE = "wan_2.1_vae.safetensors"
+WAN22_MODEL_SAMPLING_SHIFT = 5.0
+WAN22_T2V_STEPS = 4
+WAN22_T2V_CFG = 1.0
+WAN22_QUALITY_STEPS = 8  # G31 sampling_profile=quality
+
+
+def resolve_wan_steps(sampling_profile: str | None = None, steps: int | None = None) -> int:
+    """fast→4，quality→8；显式 steps 优先。"""
+    if steps is not None:
+        return max(2, int(steps))
+    profile = (sampling_profile or "fast").strip().lower()
+    if profile == "quality":
+        return int(WAN22_QUALITY_STEPS)
+    return int(WAN22_T2V_STEPS)
+
+
+def _wan_sampler_split(steps: int) -> tuple[int, int]:
+    """KSamplerAdvanced 高低噪分段：0→mid, mid→steps。"""
+    s = max(2, int(steps))
+    mid = max(1, s // 2)
+    return mid, s
+
 HUNYUAN_CKPT = "hunyuan_video_t2v_720p_bf16.safetensors"
 HUNYUAN_VAE = "hunyuan_video_vae_bf16.safetensors"
 HUNYUAN_CLIP_L = "clip_l.safetensors"
 HUNYUAN_CLIP_LLAVA = "llava_llama3_fp8_scaled.safetensors"
 WAN_T5_ENCODER = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 LTX_T5_ENCODER = "t5xxl_fp16.safetensors"
+LTX2_CKPT = "ltx-2-19b-dev-fp4.safetensors"
+LTX2_GEMMA_ENCODER = "gemma_3_12B_it_fp4_mixed.safetensors"
+LTX2_UPSCALER = "ltx-2-spatial-upscaler-x2-1.0.safetensors"
+LTX2_DISTILLED_LORA = "ltx-2-19b-distilled-lora-384.safetensors"
+LTX2_CAMERA_LORA = "ltx-2-19b-lora-camera-control-dolly-left.safetensors"
+LTX2_WORKFLOW_TEMPLATE = (
+    Path(__file__).resolve().parent / "workflows" / "ltx2_fp4_t2v_api.json"
+)
 LTX_T5_DOWNLOAD_HINT = (
     "LTX 视频需要 T5 文本编码器。请将 t5xxl_fp16.safetensors 放入 "
     "ComfyUI/models/text_encoders/ 目录后重试。"
@@ -100,7 +141,10 @@ VIDEO_WORKFLOW_CLASS = VIDEO_SAVE_CLASS | {
     "WanVideoSampler",
     "WanVideoDecode",
     "WanVideoTextEncode",
-    "EmptyHunyuanLatentVideo",
+    "WanImageToVideo",
+    "WanFirstLastFrameToVideo",
+    "WanFunInpaintToVideo",
+    "LoadImage",
     "HunyuanVideoModelLoader",
     "HunyuanVideoSampler",
     "SeedVR2LoadDiTModel",
@@ -158,12 +202,89 @@ VHS_INSTALL_HINT = (
 
 VC_CREATE_VIDEO = "16"
 
-# Wan 2.6 视频节点（ComfyUI-WanVideoWrapper）
-WAN_MODEL_LOADER = "50"
-WAN_TEXT_ENCODE = "51"
-WAN_SAMPLER = "52"
-WAN_DECODE = "53"
-WAN_SAVE = "54"
+# Wan 2.2 T2V 四步（原生 ComfyUI 节点链，对齐云绘 Wan2.2-14B文生视频-4步）
+W22_CLIP = "w22_clip"
+W22_POS = "w22_pos"
+W22_NEG = "w22_neg"
+W22_VAE = "w22_vae"
+W22_EMPTY = "w22_empty"
+W22_UNET_H = "w22_unet_h"
+W22_UNET_L = "w22_unet_l"
+W22_LORA_H = "w22_lora_h"
+W22_LORA_L = "w22_lora_l"
+W22_MS_H = "w22_ms_h"
+W22_MS_L = "w22_ms_l"
+W22_SAMPLE_H = "w22_sample_h"
+W22_SAMPLE_L = "w22_sample_l"
+W22_DECODE = "w22_decode"
+W22_CREATE = "w22_create"
+W22_SAVE = "w22_save"
+
+# Wan 2.2 I2V 四步（LoadImage + WanImageToVideo + 双 KSamplerAdvanced）
+W22I_CLIP = "w22i_clip"
+W22I_POS = "w22i_pos"
+W22I_NEG = "w22i_neg"
+W22I_VAE = "w22i_vae"
+W22I_LOAD = "w22i_load"
+W22I_I2V = "w22i_i2v"
+W22I_UNET_H = "w22i_unet_h"
+W22I_UNET_L = "w22i_unet_l"
+W22I_LORA_H = "w22i_lora_h"
+W22I_LORA_L = "w22i_lora_l"
+W22I_MS_H = "w22i_ms_h"
+W22I_MS_L = "w22i_ms_l"
+W22I_SAMPLE_H = "w22i_sample_h"
+W22I_SAMPLE_L = "w22i_sample_l"
+W22I_DECODE = "w22i_decode"
+W22I_CREATE = "w22i_create"
+W22I_SAVE = "w22i_save"
+
+# Wan 2.2 FLF2V 四步（双 LoadImage + WanFirstLastFrameToVideo + 双 KSamplerAdvanced）
+W22F_CLIP = "w22f_clip"
+W22F_POS = "w22f_pos"
+W22F_NEG = "w22f_neg"
+W22F_VAE = "w22f_vae"
+W22F_LOAD_START = "w22f_load_start"
+W22F_LOAD_END = "w22f_load_end"
+W22F_FLF2V = "w22f_flf2v"
+W22F_UNET_H = "w22f_unet_h"
+W22F_UNET_L = "w22f_unet_l"
+W22F_LORA_H = "w22f_lora_h"
+W22F_LORA_L = "w22f_lora_l"
+W22F_MS_H = "w22f_ms_h"
+W22F_MS_L = "w22f_ms_l"
+W22F_SAMPLE_H = "w22f_sample_h"
+W22F_SAMPLE_L = "w22f_sample_l"
+W22F_DECODE = "w22f_decode"
+W22F_CREATE = "w22f_create"
+W22F_SAVE = "w22f_save"
+
+# Wan 2.2 Fun Inpaint（双 LoadImage + WanFunInpaintToVideo + fun_inpaint UNET）
+W22N_CLIP = "w22n_clip"
+W22N_POS = "w22n_pos"
+W22N_NEG = "w22n_neg"
+W22N_VAE = "w22n_vae"
+W22N_LOAD_START = "w22n_load_start"
+W22N_LOAD_END = "w22n_load_end"
+W22N_FUN = "w22n_fun"
+W22N_UNET_H = "w22n_unet_h"
+W22N_UNET_L = "w22n_unet_l"
+W22N_LORA_H = "w22n_lora_h"
+W22N_LORA_L = "w22n_lora_l"
+W22N_MS_H = "w22n_ms_h"
+W22N_MS_L = "w22n_ms_l"
+W22N_SAMPLE_H = "w22n_sample_h"
+W22N_SAMPLE_L = "w22n_sample_l"
+W22N_DECODE = "w22n_decode"
+W22N_CREATE = "w22n_create"
+W22N_SAVE = "w22n_save"
+
+# 兼容旧探针常量名
+WAN_MODEL_LOADER = W22_UNET_H
+WAN_TEXT_ENCODE = W22_POS
+WAN_SAMPLER = W22_SAMPLE_L
+WAN_DECODE = W22_DECODE
+WAN_SAVE = W22_SAVE
 
 # HunyuanVideo 原生 T2V 节点
 HY_UNET = "60"
@@ -840,6 +961,91 @@ def build_ltx_video_workflow(
     }
 
 
+def _load_ltx2_fp4_template() -> dict:
+    path = LTX2_WORKFLOW_TEMPLATE
+    if not path.is_file():
+        raise FileNotFoundError(f"LTX2 workflow 模板不存在: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _strip_ltx2_audio_branch(workflow: dict) -> None:
+    """Remove AV concat/separate/audio VAE nodes and rewire video-only sampling."""
+    # Drop audio-only + AV glue nodes (IDs from ltx2_fp4_t2v_api.json).
+    for node_id in ("106", "109", "116", "117", "123", "124", "127"):
+        workflow.pop(node_id, None)
+
+    if "98" in workflow:
+        workflow["98"]["inputs"]["latent"] = ["108", 0]
+    if "113" in workflow:
+        workflow["113"]["inputs"]["latent_image"] = ["108", 0]
+    if "102" in workflow:
+        workflow["102"]["inputs"]["latent"] = ["113", 0]
+    if "119" in workflow:
+        workflow["119"]["inputs"]["latent_image"] = ["118", 0]
+    if "125" in workflow:
+        workflow["125"]["inputs"]["samples"] = ["119", 1]
+    if "126" in workflow:
+        workflow["126"]["inputs"]["samples"] = ["119", 1]
+    if "122" in workflow:
+        workflow["122"]["inputs"].pop("audio", None)
+        workflow["122"]["inputs"]["audio"] = None
+
+
+def build_ltx2_fp4_t2v_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    width: int = 848,
+    height: int = 480,
+    duration_sec: int = 5,
+    seed: int | None = None,
+    *,
+    model_filename: str | None = None,
+    ckpt_name: str | None = None,
+    audio: bool = True,
+) -> dict:
+    """
+    LTX-2 19B fp4 文生视频（云绘 fp4 工作流 API 平坦子图）。
+    两阶段采样 + 空间 2x 上采样；输出 SaveVideo MP4。
+    audio=False 时旁路删除音画支路，仅输出静音视频。
+    """
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    workflow = _load_ltx2_fp4_template()
+    positive = str(positive_prompt).strip()
+    negative = str(negative_prompt).strip()
+    out_w, out_h = align_ltx_dimensions(width, height)
+    latent_w, latent_h = align_ltx_dimensions(out_w // 2, out_h // 2)
+    length = ltx_video_length(duration_sec)
+    ckpt = (ckpt_name or model_filename or LTX2_CKPT).strip() or LTX2_CKPT
+
+    workflow["121"]["inputs"]["text"] = positive
+    workflow["110"]["inputs"]["text"] = negative
+    workflow["111"]["inputs"]["width"] = out_w
+    workflow["111"]["inputs"]["height"] = out_h
+    workflow["108"]["inputs"]["width"] = latent_w
+    workflow["108"]["inputs"]["height"] = latent_h
+    workflow["108"]["inputs"]["length"] = length
+    if "106" in workflow:
+        workflow["106"]["inputs"]["frames_number"] = length
+        workflow["106"]["inputs"]["frame_rate"] = VIDEO_FPS
+    workflow["107"]["inputs"]["frame_rate"] = float(VIDEO_FPS)
+    workflow["122"]["inputs"]["fps"] = float(VIDEO_FPS)
+    workflow["115"]["inputs"]["noise_seed"] = int(seed)
+    workflow["114"]["inputs"]["noise_seed"] = 0
+
+    for node_id in ("99", "123", "138"):
+        if node_id in workflow:
+            workflow[node_id]["inputs"]["ckpt_name"] = ckpt
+    if "99" in workflow:
+        workflow["99"]["inputs"]["text_encoder"] = LTX2_GEMMA_ENCODER
+
+    if not audio:
+        _strip_ltx2_audio_branch(workflow)
+
+    return workflow
+
+
 def build_ltx_video_workflow_compat(
     positive_prompt: str,
     negative_prompt: str,
@@ -1014,119 +1220,764 @@ def build_wan_video_workflow(
     seed: int | None = None,
     *,
     model_filename: str | None = None,
+    steps: int | None = None,
 ) -> dict:
     """
-    Wan 2.6 T2V：WanVideoModelLoader + LoadWanVideoT5TextEncoder + WanVideoEmptyEmbeds
-    + WanVideoSampler + WanVideoDecode + VHS_VideoCombine。
-    依赖 ComfyUI-WanVideoWrapper 自定义节点。
+    Wan 2.2 T2V：双 UNET + Lightx2v LoRA + 双 KSamplerAdvanced。
+    默认 4 步；G31 quality 可传 steps=8（分段按 steps//2）。
+    model_filename 保留兼容，当前忽略（固定使用 WAN22_T2V_* 权重名）。
     """
     if seed is None:
         seed = random.randint(0, 2**32)
 
-    ckpt = (model_filename or WAN_CKPT).strip() or WAN_CKPT
     num_frames = video_frame_length(duration_sec)
     positive = str(positive_prompt).strip()
     negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
+    shift = float(WAN22_MODEL_SAMPLING_SHIFT)
+    steps = resolve_wan_steps(steps=steps)
+    cfg = float(WAN22_T2V_CFG)
+    mid, end = _wan_sampler_split(steps)
 
     studio_print(
         "comfyui-video",
-        f"Wan workflow: {ckpt} {width}x{height} frames={num_frames}",
+        f"Wan2.2 T2V workflow: {width}x{height} frames={num_frames} seed={seed} steps={steps}",
     )
 
     return {
-        WAN_MODEL_LOADER: {
-            "class_type": "WanVideoModelLoader",
+        W22_CLIP: {
+            "class_type": "CLIPLoader",
             "inputs": {
-                "model": ckpt,
-                "base_precision": "bf16",
-                "quantization": "disabled",
-                "load_device": "main_device",
+                "clip_name": WAN_T5_ENCODER,
+                "type": "wan",
+                "device": "default",
             },
         },
-        "55": {
-            "class_type": "LoadWanVideoT5TextEncoder",
+        W22_POS: {
+            "class_type": "CLIPTextEncode",
             "inputs": {
-                "model_name": WAN_T5_ENCODER,
-                "precision": "bf16",
-                "load_device": "main_device",
-                "quantization": "disabled",
+                "text": positive,
+                "clip": [W22_CLIP, 0],
             },
         },
-        "56": {
-            "class_type": "WanVideoVAELoader",
+        W22_NEG: {
+            "class_type": "CLIPTextEncode",
             "inputs": {
-                "model_name": "wan_2.1_vae.safetensors",
-                "precision": "bf16",
+                "text": negative,
+                "clip": [W22_CLIP, 0],
             },
         },
-        WAN_TEXT_ENCODE: {
-            "class_type": "WanVideoTextEncode",
-            "inputs": {
-                "positive_prompt": positive,
-                "negative_prompt": negative,
-                "t5": ["55", 0],
-                "force_offload": True,
-                "model_to_offload": [WAN_MODEL_LOADER, 0],
-                "use_disk_cache": False,
-                "device": "gpu",
-            },
+        W22_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": WAN_VAE},
         },
-        "57": {
-            "class_type": "WanVideoEmptyEmbeds",
+        W22_EMPTY: {
+            "class_type": "EmptyHunyuanLatentVideo",
             "inputs": {
                 "width": int(width),
                 "height": int(height),
-                "num_frames": num_frames,
+                "length": int(num_frames),
+                "batch_size": 1,
             },
         },
-        WAN_SAMPLER: {
-            "class_type": "WanVideoSampler",
+        W22_UNET_H: {
+            "class_type": "UNETLoader",
             "inputs": {
-                "model": [WAN_MODEL_LOADER, 0],
-                "image_embeds": ["57", 0],
-                "text_embeds": [WAN_TEXT_ENCODE, 0],
-                "steps": 30,
-                "cfg": 6.0,
-                "shift": 5.0,
-                "seed": int(seed),
-                "force_offload": True,
-                "scheduler": "unipc",
-                "riflex_freq_index": 0,
+                "unet_name": WAN22_T2V_HIGH,
+                "weight_dtype": "default",
             },
         },
-        WAN_DECODE: {
-            "class_type": "WanVideoDecode",
+        W22_UNET_L: {
+            "class_type": "UNETLoader",
             "inputs": {
-                "vae": ["56", 0],
-                "samples": [WAN_SAMPLER, 0],
-                "enable_vae_tiling": False,
-                "tile_x": 272,
-                "tile_y": 272,
-                "tile_stride_x": 144,
-                "tile_stride_y": 128,
-                "normalization": "default",
+                "unet_name": WAN22_T2V_LOW,
+                "weight_dtype": "default",
             },
         },
-        WAN_SAVE: {
-            "class_type": "VHS_VideoCombine",
-            "inputs": _vhs_video_combine_inputs(WAN_DECODE),
+        W22_LORA_H: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [W22_UNET_H, 0],
+                "lora_name": WAN22_LORA_HIGH,
+                "strength_model": 1.0,
+            },
+        },
+        W22_LORA_L: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [W22_UNET_L, 0],
+                "lora_name": WAN22_LORA_LOW,
+                "strength_model": 1.0,
+            },
+        },
+        W22_MS_H: {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {
+                "model": [W22_LORA_H, 0],
+                "shift": shift,
+            },
+        },
+        W22_MS_L: {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {
+                "model": [W22_LORA_L, 0],
+                "shift": shift,
+            },
+        },
+        W22_SAMPLE_H: {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [W22_MS_H, 0],
+                "positive": [W22_POS, 0],
+                "negative": [W22_NEG, 0],
+                "latent_image": [W22_EMPTY, 0],
+                "add_noise": "enable",
+                "noise_seed": int(seed),
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "start_at_step": 0,
+                "end_at_step": mid,
+                "return_with_leftover_noise": "enable",
+            },
+        },
+        W22_SAMPLE_L: {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [W22_MS_L, 0],
+                "positive": [W22_POS, 0],
+                "negative": [W22_NEG, 0],
+                "latent_image": [W22_SAMPLE_H, 0],
+                "add_noise": "disable",
+                "noise_seed": 0,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "start_at_step": mid,
+                "end_at_step": end,
+                "return_with_leftover_noise": "disable",
+            },
+        },
+        W22_DECODE: {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": [W22_SAMPLE_L, 0],
+                "vae": [W22_VAE, 0],
+            },
+        },
+        W22_CREATE: {
+            "class_type": "CreateVideo",
+            "inputs": {
+                "images": [W22_DECODE, 0],
+                "fps": float(VIDEO_FPS),
+            },
+        },
+        W22_SAVE: {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": [W22_CREATE, 0],
+                "filename_prefix": "AIStudio_video",
+                "format": "auto",
+                "codec": "auto",
+            },
         },
     }
 
 
-def build_hunyuan_video_workflow(
+def build_wan_i2v_workflow(
     positive_prompt: str,
     negative_prompt: str,
+    image_filename: str,
     width: int = 848,
     height: int = 480,
     duration_sec: int = 5,
     seed: int | None = None,
     *,
     model_filename: str | None = None,
+    steps: int | None = None,
+) -> dict:
+    """
+    Wan 2.2 I2V：LoadImage + WanImageToVideo + 双 UNET/Lightx2v LoRA。
+    默认 4 步；G31 quality 可传 steps=8。
+    """
+    if seed is None:
+        seed = random.randint(0, 2**32)
+
+    image_name = str(image_filename or "").strip()
+    if not image_name:
+        raise ValueError("图生视频需要参考图文件名")
+
+    num_frames = video_frame_length(duration_sec)
+    positive = str(positive_prompt).strip()
+    negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
+    shift = float(WAN22_MODEL_SAMPLING_SHIFT)
+    steps = resolve_wan_steps(steps=steps)
+    cfg = float(WAN22_T2V_CFG)
+    mid, end = _wan_sampler_split(steps)
+
+    studio_print(
+        "comfyui-video",
+        f"Wan2.2 I2V workflow: {width}x{height} frames={num_frames} seed={seed} steps={steps}",
+    )
+
+    return {
+        W22I_CLIP: {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": WAN_T5_ENCODER,
+                "type": "wan",
+                "device": "default",
+            },
+        },
+        W22I_POS: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": positive,
+                "clip": [W22I_CLIP, 0],
+            },
+        },
+        W22I_NEG: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": negative,
+                "clip": [W22I_CLIP, 0],
+            },
+        },
+        W22I_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": WAN_VAE},
+        },
+        W22I_LOAD: {
+            "class_type": "LoadImage",
+            "inputs": {"image": image_name},
+        },
+        W22I_I2V: {
+            "class_type": "WanImageToVideo",
+            "inputs": {
+                "positive": [W22I_POS, 0],
+                "negative": [W22I_NEG, 0],
+                "vae": [W22I_VAE, 0],
+                "width": int(width),
+                "height": int(height),
+                "length": int(num_frames),
+                "batch_size": 1,
+                "start_image": [W22I_LOAD, 0],
+            },
+        },
+        W22I_UNET_H: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": WAN22_I2V_HIGH,
+                "weight_dtype": "default",
+            },
+        },
+        W22I_UNET_L: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": WAN22_I2V_LOW,
+                "weight_dtype": "default",
+            },
+        },
+        W22I_LORA_H: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [W22I_UNET_H, 0],
+                "lora_name": WAN22_I2V_LORA_HIGH,
+                "strength_model": 1.0,
+            },
+        },
+        W22I_LORA_L: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [W22I_UNET_L, 0],
+                "lora_name": WAN22_I2V_LORA_LOW,
+                "strength_model": 1.0,
+            },
+        },
+        W22I_MS_H: {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {
+                "model": [W22I_LORA_H, 0],
+                "shift": shift,
+            },
+        },
+        W22I_MS_L: {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {
+                "model": [W22I_LORA_L, 0],
+                "shift": shift,
+            },
+        },
+        W22I_SAMPLE_H: {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [W22I_MS_H, 0],
+                "positive": [W22I_I2V, 0],
+                "negative": [W22I_I2V, 1],
+                "latent_image": [W22I_I2V, 2],
+                "add_noise": "enable",
+                "noise_seed": int(seed),
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "start_at_step": 0,
+                "end_at_step": mid,
+                "return_with_leftover_noise": "enable",
+            },
+        },
+        W22I_SAMPLE_L: {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [W22I_MS_L, 0],
+                "positive": [W22I_I2V, 0],
+                "negative": [W22I_I2V, 1],
+                "latent_image": [W22I_SAMPLE_H, 0],
+                "add_noise": "disable",
+                "noise_seed": 0,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "start_at_step": mid,
+                "end_at_step": end,
+                "return_with_leftover_noise": "disable",
+            },
+        },
+        W22I_DECODE: {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": [W22I_SAMPLE_L, 0],
+                "vae": [W22I_VAE, 0],
+            },
+        },
+        W22I_CREATE: {
+            "class_type": "CreateVideo",
+            "inputs": {
+                "images": [W22I_DECODE, 0],
+                "fps": float(VIDEO_FPS),
+            },
+        },
+        W22I_SAVE: {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": [W22I_CREATE, 0],
+                "filename_prefix": "AIStudio_video",
+                "format": "auto",
+                "codec": "auto",
+            },
+        },
+    }
+
+
+def build_wan_flf2v_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    start_image_filename: str,
+    end_image_filename: str,
+    width: int = 848,
+    height: int = 480,
+    duration_sec: int = 5,
+    seed: int | None = None,
+    *,
+    model_filename: str | None = None,
+    steps: int | None = None,
+) -> dict:
+    """
+    Wan 2.2 FLF2V：双 LoadImage + WanFirstLastFrameToVideo + 双 UNET/Lightx2v i2v LoRA。
+    默认 4 步；G31 quality 可传 steps=8。
+    """
+    if seed is None:
+        seed = random.randint(0, 2**32)
+
+    start_name = str(start_image_filename or "").strip()
+    end_name = str(end_image_filename or "").strip()
+    if not start_name or not end_name:
+        raise ValueError("首尾帧视频需要首帧与尾帧图片")
+
+    num_frames = video_frame_length(duration_sec)
+    positive = str(positive_prompt).strip()
+    negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
+    shift = float(WAN22_MODEL_SAMPLING_SHIFT)
+    steps = resolve_wan_steps(steps=steps)
+    cfg = float(WAN22_T2V_CFG)
+    mid, end = _wan_sampler_split(steps)
+
+    studio_print(
+        "comfyui-video",
+        f"Wan2.2 FLF2V workflow: {width}x{height} frames={num_frames} seed={seed} steps={steps}",
+    )
+
+    return {
+        W22F_CLIP: {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": WAN_T5_ENCODER,
+                "type": "wan",
+                "device": "default",
+            },
+        },
+        W22F_POS: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": positive,
+                "clip": [W22F_CLIP, 0],
+            },
+        },
+        W22F_NEG: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": negative,
+                "clip": [W22F_CLIP, 0],
+            },
+        },
+        W22F_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": WAN_VAE},
+        },
+        W22F_LOAD_START: {
+            "class_type": "LoadImage",
+            "inputs": {"image": start_name},
+        },
+        W22F_LOAD_END: {
+            "class_type": "LoadImage",
+            "inputs": {"image": end_name},
+        },
+        W22F_FLF2V: {
+            "class_type": "WanFirstLastFrameToVideo",
+            "inputs": {
+                "positive": [W22F_POS, 0],
+                "negative": [W22F_NEG, 0],
+                "vae": [W22F_VAE, 0],
+                "width": int(width),
+                "height": int(height),
+                "length": int(num_frames),
+                "batch_size": 1,
+                "start_image": [W22F_LOAD_START, 0],
+                "end_image": [W22F_LOAD_END, 0],
+            },
+        },
+        W22F_UNET_H: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": WAN22_I2V_HIGH,
+                "weight_dtype": "default",
+            },
+        },
+        W22F_UNET_L: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": WAN22_I2V_LOW,
+                "weight_dtype": "default",
+            },
+        },
+        W22F_LORA_H: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [W22F_UNET_H, 0],
+                "lora_name": WAN22_I2V_LORA_HIGH,
+                "strength_model": 1.0,
+            },
+        },
+        W22F_LORA_L: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [W22F_UNET_L, 0],
+                "lora_name": WAN22_I2V_LORA_LOW,
+                "strength_model": 1.0,
+            },
+        },
+        W22F_MS_H: {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {
+                "model": [W22F_LORA_H, 0],
+                "shift": shift,
+            },
+        },
+        W22F_MS_L: {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {
+                "model": [W22F_LORA_L, 0],
+                "shift": shift,
+            },
+        },
+        W22F_SAMPLE_H: {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [W22F_MS_H, 0],
+                "positive": [W22F_FLF2V, 0],
+                "negative": [W22F_FLF2V, 1],
+                "latent_image": [W22F_FLF2V, 2],
+                "add_noise": "enable",
+                "noise_seed": int(seed),
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "start_at_step": 0,
+                "end_at_step": mid,
+                "return_with_leftover_noise": "enable",
+            },
+        },
+        W22F_SAMPLE_L: {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [W22F_MS_L, 0],
+                "positive": [W22F_FLF2V, 0],
+                "negative": [W22F_FLF2V, 1],
+                "latent_image": [W22F_SAMPLE_H, 0],
+                "add_noise": "disable",
+                "noise_seed": 0,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "start_at_step": mid,
+                "end_at_step": end,
+                "return_with_leftover_noise": "disable",
+            },
+        },
+        W22F_DECODE: {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": [W22F_SAMPLE_L, 0],
+                "vae": [W22F_VAE, 0],
+            },
+        },
+        W22F_CREATE: {
+            "class_type": "CreateVideo",
+            "inputs": {
+                "images": [W22F_DECODE, 0],
+                "fps": float(VIDEO_FPS),
+            },
+        },
+        W22F_SAVE: {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": [W22F_CREATE, 0],
+                "filename_prefix": "AIStudio_video",
+                "format": "auto",
+                "codec": "auto",
+            },
+        },
+    }
+
+
+def build_wan_fun_inpaint_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    start_image_filename: str,
+    end_image_filename: str,
+    width: int = 848,
+    height: int = 480,
+    duration_sec: int = 5,
+    seed: int | None = None,
+    *,
+    model_filename: str | None = None,
+    steps: int | None = None,
+) -> dict:
+    """
+    Wan 2.2 Fun Inpaint：双 LoadImage + WanFunInpaintToVideo + fun_inpaint 双 UNET + i2v Lightx2v LoRA。
+    对齐官方 video_wan2_2_14B_fun_inpaint 四步组；默认 steps=4。
+    """
+    if seed is None:
+        seed = random.randint(0, 2**32)
+
+    start_name = str(start_image_filename or "").strip()
+    end_name = str(end_image_filename or "").strip()
+    if not start_name or not end_name:
+        raise ValueError("Fun Inpaint 需要首帧与尾帧图片")
+
+    num_frames = video_frame_length(duration_sec)
+    positive = str(positive_prompt).strip()
+    negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
+    shift = float(WAN22_MODEL_SAMPLING_SHIFT)
+    steps = resolve_wan_steps(steps=steps)
+    cfg = float(WAN22_T2V_CFG)
+    mid, end = _wan_sampler_split(steps)
+
+    studio_print(
+        "comfyui-video",
+        f"Wan2.2 FunInpaint workflow: {width}x{height} frames={num_frames} "
+        f"seed={seed} steps={steps}",
+    )
+
+    return {
+        W22N_CLIP: {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": WAN_T5_ENCODER,
+                "type": "wan",
+                "device": "default",
+            },
+        },
+        W22N_POS: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": positive,
+                "clip": [W22N_CLIP, 0],
+            },
+        },
+        W22N_NEG: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": negative,
+                "clip": [W22N_CLIP, 0],
+            },
+        },
+        W22N_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": WAN_VAE},
+        },
+        W22N_LOAD_START: {
+            "class_type": "LoadImage",
+            "inputs": {"image": start_name},
+        },
+        W22N_LOAD_END: {
+            "class_type": "LoadImage",
+            "inputs": {"image": end_name},
+        },
+        W22N_FUN: {
+            "class_type": "WanFunInpaintToVideo",
+            "inputs": {
+                "positive": [W22N_POS, 0],
+                "negative": [W22N_NEG, 0],
+                "vae": [W22N_VAE, 0],
+                "width": int(width),
+                "height": int(height),
+                "length": int(num_frames),
+                "batch_size": 1,
+                "start_image": [W22N_LOAD_START, 0],
+                "end_image": [W22N_LOAD_END, 0],
+            },
+        },
+        W22N_UNET_H: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": WAN22_FUN_INPAINT_HIGH,
+                "weight_dtype": "default",
+            },
+        },
+        W22N_UNET_L: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": WAN22_FUN_INPAINT_LOW,
+                "weight_dtype": "default",
+            },
+        },
+        W22N_LORA_H: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [W22N_UNET_H, 0],
+                "lora_name": WAN22_I2V_LORA_HIGH,
+                "strength_model": 1.0,
+            },
+        },
+        W22N_LORA_L: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [W22N_UNET_L, 0],
+                "lora_name": WAN22_I2V_LORA_LOW,
+                "strength_model": 1.0,
+            },
+        },
+        W22N_MS_H: {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {
+                "model": [W22N_LORA_H, 0],
+                "shift": shift,
+            },
+        },
+        W22N_MS_L: {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {
+                "model": [W22N_LORA_L, 0],
+                "shift": shift,
+            },
+        },
+        W22N_SAMPLE_H: {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [W22N_MS_H, 0],
+                "positive": [W22N_FUN, 0],
+                "negative": [W22N_FUN, 1],
+                "latent_image": [W22N_FUN, 2],
+                "add_noise": "enable",
+                "noise_seed": int(seed),
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "start_at_step": 0,
+                "end_at_step": mid,
+                "return_with_leftover_noise": "enable",
+            },
+        },
+        W22N_SAMPLE_L: {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [W22N_MS_L, 0],
+                "positive": [W22N_FUN, 0],
+                "negative": [W22N_FUN, 1],
+                "latent_image": [W22N_SAMPLE_H, 0],
+                "add_noise": "disable",
+                "noise_seed": 0,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "start_at_step": mid,
+                "end_at_step": end,
+                "return_with_leftover_noise": "disable",
+            },
+        },
+        W22N_DECODE: {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": [W22N_SAMPLE_L, 0],
+                "vae": [W22N_VAE, 0],
+            },
+        },
+        W22N_CREATE: {
+            "class_type": "CreateVideo",
+            "inputs": {
+                "images": [W22N_DECODE, 0],
+                "fps": float(VIDEO_FPS),
+            },
+        },
+        W22N_SAVE: {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": [W22N_CREATE, 0],
+                "filename_prefix": "AIStudio_video",
+                "format": "auto",
+                "codec": "auto",
+            },
+        },
+    }
+
+
+HUNYUAN_DEFAULT_STEPS = 50
+HUNYUAN_DEFAULT_WIDTH = 1280
+HUNYUAN_DEFAULT_HEIGHT = 720
+
+
+def build_hunyuan_video_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    width: int = HUNYUAN_DEFAULT_WIDTH,
+    height: int = HUNYUAN_DEFAULT_HEIGHT,
+    duration_sec: int = 5,
+    seed: int | None = None,
+    *,
+    model_filename: str | None = None,
+    steps: int | None = None,
 ) -> dict:
     """
     HunyuanVideo T2V：UNETLoader + DualCLIPLoader + EmptyHunyuanLatentVideo
     + KSampler + VAEDecode + VHS_VideoCombine（ComfyUI 原生节点）。
+    默认 720p、steps=50。
     """
     if seed is None:
         seed = random.randint(0, 2**32)
@@ -1135,10 +1986,13 @@ def build_hunyuan_video_workflow(
     length = video_frame_length(duration_sec)
     positive = str(positive_prompt).strip()
     negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
+    sample_steps = int(steps) if steps is not None else HUNYUAN_DEFAULT_STEPS
+    if sample_steps < 1:
+        sample_steps = HUNYUAN_DEFAULT_STEPS
 
     studio_print(
         "comfyui-video",
-        f"Hunyuan workflow: {ckpt} {width}x{height} length={length}",
+        f"Hunyuan workflow: {ckpt} {width}x{height} length={length} steps={sample_steps}",
     )
 
     return {
@@ -1188,7 +2042,7 @@ def build_hunyuan_video_workflow(
             "class_type": "KSampler",
             "inputs": {
                 "seed": int(seed),
-                "steps": 25,
+                "steps": sample_steps,
                 "cfg": 6.0,
                 "sampler_name": "euler",
                 "scheduler": "simple",
@@ -1211,6 +2065,28 @@ def build_hunyuan_video_workflow(
             "inputs": _vhs_video_combine_inputs(HY_DECODE),
         },
     }
+
+
+# 会通过 ComfyUI progress 事件上报步数的采样节点
+_SAMPLER_PROGRESS_TYPES = frozenset({
+    "KSampler",
+    "KSamplerAdvanced",
+    "SamplerCustom",
+    "SamplerCustomAdvanced",
+})
+
+
+def count_workflow_sampler_stages(workflow: dict | None) -> int:
+    """统计工作流中会分段上报 progress 的采样器数量。"""
+    if not isinstance(workflow, dict):
+        return 1
+    n = 0
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") in _SAMPLER_PROGRESS_TYPES:
+            n += 1
+    return max(1, n)
 
 
 async def _log_and_post_video_workflow(
@@ -1239,6 +2115,20 @@ async def _log_and_post_video_workflow(
         print(f"[AIStudio:comfyui-video] {line}", flush=True)
     studio_print("comfyui-video", "── workflow JSON 结束 ──")
     prompt_id, used_client = await _post_workflow(workflow, client_id)
+    try:
+        from services import comfyui_progress
+
+        stages = count_workflow_sampler_stages(workflow)
+        # 兼容：旧 LTX 官方链也可能双段；至少按 backend 保底
+        if backend in ("wan", "ltx2") and stages < 2:
+            stages = 2
+        comfyui_progress.set_expected_stages(prompt_id, stages)
+        studio_print(
+            "comfyui-video",
+            f"[{backend}] progress stages={stages} prompt_id={prompt_id}",
+        )
+    except Exception:
+        pass
     studio_print(
         "comfyui-video",
         f"[{backend}] 已提交 prompt_id={prompt_id} client_id={used_client}",
@@ -1487,10 +2377,14 @@ async def submit_wan_video_prompt(
     height: int = 480,
     mode: str = "text2video",
     image_b64: str | None = None,
+    start_image_b64: str | None = None,
+    end_image_b64: str | None = None,
     client_id: str | None = None,
     raw_prompt: bool = False,
     *,
     model_filename: str | None = None,
+    sampling_profile: str | None = None,
+    steps: int | None = None,
 ) -> tuple[str, str, dict]:
     positive = prompt.strip()
     if raw_prompt:
@@ -1498,27 +2392,79 @@ async def submit_wan_video_prompt(
     else:
         negative = normalize_video_negative(negative_prompt)
     width, height = align_video_dimensions(width, height)
+    wan_steps = resolve_wan_steps(sampling_profile=sampling_profile, steps=steps)
 
-    if mode == "image2video":
-        raise ValueError("Wan 2.6 workflow 暂不支持图生视频")
+    image_filename = None
+    start_image_filename = None
+    end_image_filename = None
+    if mode in ("flf2v", "fun_inpaint"):
+        if not start_image_b64 or not end_image_b64:
+            raise ValueError("首尾帧视频需要首帧与尾帧图片")
+        start_image_filename = await upload_image_base64(start_image_b64)
+        end_image_filename = await upload_image_base64(end_image_b64)
+    elif mode == "image2video":
+        if not image_b64:
+            raise ValueError("图生视频需要上传图片")
+        image_filename = await upload_image_base64(image_b64)
 
     await ensure_video_mp4_capable()
 
     logger.info(
-        "submit_wan_video_prompt inputs: duration=%s width=%s height=%s prompt_len=%s",
+        "submit_wan_video_prompt inputs: mode=%s duration=%s width=%s height=%s "
+        "prompt_len=%s steps=%s profile=%s",
+        mode,
         duration,
         width,
         height,
         len(positive or ""),
+        wan_steps,
+        sampling_profile or "fast",
     )
-    workflow = build_wan_video_workflow(
-        positive,
-        negative,
-        width,
-        height,
-        duration,
-        model_filename=model_filename,
-    )
+    if mode == "fun_inpaint":
+        workflow = build_wan_fun_inpaint_workflow(
+            positive,
+            negative,
+            start_image_filename,
+            end_image_filename,
+            width,
+            height,
+            duration,
+            model_filename=model_filename,
+            steps=wan_steps,
+        )
+    elif mode == "flf2v":
+        workflow = build_wan_flf2v_workflow(
+            positive,
+            negative,
+            start_image_filename,
+            end_image_filename,
+            width,
+            height,
+            duration,
+            model_filename=model_filename,
+            steps=wan_steps,
+        )
+    elif mode == "image2video":
+        workflow = build_wan_i2v_workflow(
+            positive,
+            negative,
+            image_filename,
+            width,
+            height,
+            duration,
+            model_filename=model_filename,
+            steps=wan_steps,
+        )
+    else:
+        workflow = build_wan_video_workflow(
+            positive,
+            negative,
+            width,
+            height,
+            duration,
+            model_filename=model_filename,
+            steps=wan_steps,
+        )
     return await _log_and_post_video_workflow(
         workflow,
         client_id=client_id,
@@ -1534,14 +2480,15 @@ async def submit_hunyuan_video_prompt(
     prompt: str,
     negative_prompt: str = "",
     duration: int = 5,
-    width: int = 848,
-    height: int = 480,
+    width: int = HUNYUAN_DEFAULT_WIDTH,
+    height: int = HUNYUAN_DEFAULT_HEIGHT,
     mode: str = "text2video",
     image_b64: str | None = None,
     client_id: str | None = None,
     raw_prompt: bool = False,
     *,
     model_filename: str | None = None,
+    steps: int | None = None,
 ) -> tuple[str, str, dict]:
     positive = prompt.strip()
     if raw_prompt:
@@ -1556,11 +2503,12 @@ async def submit_hunyuan_video_prompt(
     await ensure_video_mp4_capable()
 
     logger.info(
-        "submit_hunyuan_video_prompt inputs: duration=%s width=%s height=%s prompt_len=%s",
+        "submit_hunyuan_video_prompt inputs: duration=%s width=%s height=%s prompt_len=%s steps=%s",
         duration,
         width,
         height,
         len(positive or ""),
+        steps if steps is not None else HUNYUAN_DEFAULT_STEPS,
     )
     workflow = build_hunyuan_video_workflow(
         positive,
@@ -1569,11 +2517,68 @@ async def submit_hunyuan_video_prompt(
         height,
         duration,
         model_filename=model_filename,
+        steps=steps,
     )
     return await _log_and_post_video_workflow(
         workflow,
         client_id=client_id,
         backend="hunyuan",
+        width=width,
+        height=height,
+        duration=duration,
+        mode=mode,
+    )
+
+
+async def submit_ltx2_video_prompt(
+    prompt: str,
+    negative_prompt: str = "",
+    duration: int = 5,
+    width: int = 848,
+    height: int = 480,
+    mode: str = "text2video",
+    image_b64: str | None = None,
+    client_id: str | None = None,
+    raw_prompt: bool = False,
+    *,
+    model_filename: str | None = None,
+    audio: bool = True,
+    **_ignored,
+) -> tuple[str, str, dict]:
+    """LTX-2 19B fp4 文生视频（ComfyUI SaveVideo MP4）。"""
+    if mode != "text2video":
+        raise ValueError("LTX-2 fp4 workflow 暂仅支持文生视频")
+
+    positive = prompt.strip()
+    if raw_prompt:
+        negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
+    else:
+        negative = normalize_video_negative(negative_prompt)
+    width, height = align_ltx_dimensions(width, height)
+
+    await ensure_video_mp4_capable()
+
+    logger.info(
+        "submit_ltx2_video_prompt inputs: duration=%s width=%s height=%s audio=%s prompt_len=%s",
+        duration,
+        width,
+        height,
+        bool(audio),
+        len(positive or ""),
+    )
+    workflow = build_ltx2_fp4_t2v_workflow(
+        positive,
+        negative,
+        width,
+        height,
+        duration,
+        model_filename=model_filename,
+        audio=bool(audio),
+    )
+    return await _log_and_post_video_workflow(
+        workflow,
+        client_id=client_id,
+        backend="ltx2",
         width=width,
         height=height,
         duration=duration,
@@ -1656,6 +2661,20 @@ def _view_url_for_media(entry: dict) -> str:
     return f"/api/view?{params}"
 
 
+def _extract_execution_error_text(payload) -> str:
+    """从 ComfyUI execution_error 载荷提取可读异常文本（避免把整段 dict/traceback 塞给前端）。"""
+    if payload is None:
+        return ""
+    if isinstance(payload, dict):
+        msg = payload.get("exception_message") or payload.get("message") or ""
+        exc_type = payload.get("exception_type") or ""
+        text = str(msg).strip()
+        if exc_type and text and str(exc_type) not in text:
+            return f"{exc_type}: {text}"
+        return text or str(exc_type).strip()
+    return str(payload).strip()
+
+
 def _history_error_message(entry: dict) -> str:
     status = entry.get("status") or {}
     if status.get("status_str") != "error":
@@ -1667,32 +2686,48 @@ def _history_error_message(entry: dict) -> str:
             and len(msg) >= 2
             and msg[0] == "execution_error"
         ):
-            return map_enhance_execution_error(str(msg[1]))
+            return map_comfy_execution_error(_extract_execution_error_text(msg[1]))
     return "ComfyUI 执行失败"
 
 
-def map_enhance_submit_error(message: str) -> str:
-    """将提交阶段异常映射为面向用户的画质增强错误文案。"""
+def map_comfy_execution_error(message: str) -> str:
+    """将 ComfyUI 执行/提交异常映射为面向用户的短文案。"""
     raw = (message or "").strip()
     lower = raw.lower()
     if not raw:
-        return "画质增强提交失败，请稍后重试"
+        return "生成失败，请稍后重试"
+    if (
+        "out of memory" in lower
+        or "outofmemory" in lower
+        or "cuda oom" in lower
+        or "torch.cuda.outofmemoryerror" in lower
+        or "allocation on device" in lower
+    ):
+        return "显存不足（GPU OOM）。请改用 720P，或去掉首帧后重试；也可先停止其他生成任务释放显存。"
     if "非法上传路径" in raw or "视频源无效" in raw:
         return "视频源无效或无权访问"
     if "vhs" in lower or "video helper suite" in lower:
         return "缺少 Video Helper Suite 插件，无法处理视频"
     if "not found" in lower or "does not exist" in lower or "找不到" in raw:
         if "seedvr" in lower or "realesrgan" in lower or "safetensors" in lower or ".pth" in lower:
-            return f"缺少画质增强模型或插件：{raw}"
-        return f"缺少所需模型或节点：{raw}"
+            return f"缺少画质增强模型或插件：{raw[:180]}"
+        return f"缺少所需模型或节点：{raw[:180]}"
     if "node_errors" in lower or "工作流节点错误" in raw:
-        return f"画质增强工作流配置错误：{raw}"
+        return f"工作流配置错误：{raw[:180]}"
+    # 截断超长英文堆栈，避免卡片里出现「乱码墙」
+    if len(raw) > 240:
+        return raw[:240].rstrip() + "…"
     return raw
+
+
+def map_enhance_submit_error(message: str) -> str:
+    """将提交阶段异常映射为面向用户的画质增强错误文案。"""
+    return map_comfy_execution_error(message)
 
 
 def map_enhance_execution_error(message: str) -> str:
     """将 ComfyUI 执行错误映射为友好文案。"""
-    return map_enhance_submit_error(message)
+    return map_comfy_execution_error(message)
 
 
 def _execution_status_failed(
@@ -1811,9 +2846,11 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
                 }
 
     if in_running:
+        # 模型加载阶段尚无 sampler progress 时给一点基线，避免长时间停在 0%
+        shown = progress if progress > 0 else 3
         return {
             "status": "running",
-            "progress": progress,
+            "progress": shown,
             "stage": stage or "running",
             "message": message,
             "result": None,
@@ -1841,7 +2878,7 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
 
     return {
         "status": "running",
-        "progress": progress,
+        "progress": 3 if in_running else progress,
         "stage": stage or "running",
         "message": message,
         "result": None,
@@ -2029,9 +3066,9 @@ async def get_tasks() -> list:
 
 SEEDVR2_DIT_NORMAL = "seedvr2_ema_7b_fp16.safetensors"
 SEEDVR2_DIT_SHARP = "seedvr2_ema_7b_sharp_fp16.safetensors"
-SEEDVR2_DIT_3B = "seedvr2_ema_3b_fp16.safetensors"
-SEEDVR2_DIT_3B_SHARP = "seedvr2_ema_3b_sharp_fp16.safetensors"
-SEEDVR2_VAE = "seedvr2_vae_fp16.safetensors"
+SEEDVR2_DIT_3B = "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+SEEDVR2_DIT_3B_SHARP = "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+SEEDVR2_VAE = "ema_vae_fp16.safetensors"
 REALESRGAN_MODEL = "RealESRGAN_x4plus.pth"
 
 VE_LOAD = "1"
@@ -2046,8 +3083,8 @@ RE_UPSCALE = "3"
 RE_SAVE = "4"
 
 
-def _seedvr2_dit_model(strength: str, model_size: str = "7b") -> str:
-    size = (model_size or "7b").strip().lower()
+def _seedvr2_dit_model(strength: str, model_size: str = "3b") -> str:
+    size = (model_size or "3b").strip().lower()
     sharp = (strength or "").strip().lower() == "sharp"
     if size == "3b":
         return SEEDVR2_DIT_3B_SHARP if sharp else SEEDVR2_DIT_3B
@@ -2088,7 +3125,7 @@ def build_seedvr2_enhance_workflow(
     input_noise_scale: float = 0.25,
     color_correction: str = "lab",
     strength: str = "normal",
-    model_size: str = "7b",
+    model_size: str = "3b",
     source_height: int | None = None,
 ) -> dict:
     """SeedVR2 视频画质增强 workflow（ComfyUI-SeedVR2_VideoUpscaler 自定义节点）。"""
@@ -2205,7 +3242,9 @@ async def upload_video_from_url(
     user=None,
 ) -> str:
     """将服务器本地路径或 http URL 的视频上传到 ComfyUI input，返回 filename。"""
-    raw = (video_url or "").strip()
+    from services.media_access import normalize_media_reference_url, resolve_video_source_for_enhance
+
+    raw = normalize_media_reference_url((video_url or "").strip())
     if not raw:
         raise ValueError("视频地址为空")
 
@@ -2219,8 +3258,6 @@ async def upload_video_from_url(
             data = res.content
             fname = raw.split("/")[-1].split("?", 1)[0] or "input.mp4"
     elif db is not None and user is not None:
-        from services.media_access import resolve_video_source_for_enhance
-
         local_path = resolve_video_source_for_enhance(db, user, raw)
         if local_path is None:
             raise ValueError("视频源无效或无权访问")

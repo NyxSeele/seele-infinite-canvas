@@ -217,12 +217,14 @@ def start_text_task(client, token, note_id, prompt, model_id):
 
 
 def apply_text_response(nodes, note_id, response_id, content, status):
-    preview = "[生成中]" if status == "generating" else (content[:150] if content else "")
+    full = (content or "") if status == "completed" else ""
+    preview = "[生成中]" if status == "generating" else (full[:500] if full else "")
     nodes.append(
         {
             "id": response_id,
             "type": "text_response",
             "position": {"x": 520, "y": 160},
+            "content": full,
             "content_preview": preview,
             "label": "文本回复",
             "status": status,
@@ -546,7 +548,8 @@ def main():
             text_nodes = [n for n in nodes if n["type"] == "text_response"]
             screenplay = MOCK_SCREENPLAY
             if text_nodes and "[生成中]" not in text_nodes[-1].get("content_preview", ""):
-                screenplay = text_nodes[-1]["content_preview"] or MOCK_SCREENPLAY
+                node = text_nodes[-1]
+                screenplay = node.get("content") or node.get("content_preview") or MOCK_SCREENPLAY
             o_elapsed, o_data, o_err = generate_outline(client, token, screenplay, user_msg)
             print(f"  outline api {o_elapsed:.1f}s err={o_err}")
             if o_err:

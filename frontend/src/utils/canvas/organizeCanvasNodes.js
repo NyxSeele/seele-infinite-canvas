@@ -7,6 +7,7 @@ const NODE_SIZES = {
   "script-beat-card": { width: 920, height: 480 },
   outline: { width: 560, height: 460 },
   "shot-script": { width: 860, height: 540 },
+  "character-card": { width: 300, height: 360 },
 }
 
 const GAP_X = 64

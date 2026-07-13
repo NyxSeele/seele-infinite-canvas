@@ -4,7 +4,20 @@ backend/.env
 frontend/.env.local
 frontend/.env.production.local
 
+# 模型权重（绝不入库）
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
 # Python
+__pycache__/
+*.pyc
+venv/
+.venv/
 backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
@@ -13,14 +26,26 @@ backend/.pytest_cache/
 backend/uploads/
 backend/scripts/adversarial_results/*
 !backend/scripts/adversarial_results/.gitkeep
+backend/tmp/
+tmp_reactor_*/
 
 # Node
+node_modules/
+dist/
 frontend/node_modules/
 frontend/dist/
+
+# Logs
+*.log
+logs/
 
 # IDE / OS
 .idea/
 .vscode/
+.cursor/
 *.swp
 .DS_Store
 Thumbs.db
+
+# 本地调试产物
+debug_videos/

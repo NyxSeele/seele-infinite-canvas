@@ -48,7 +48,7 @@
   border: 1px solid var(--alf-border);
   border-radius: 14px;
   box-shadow: var(--alf-shadow);
-  z-index: 200;
+  z-index: 200; /* Z_CANVAS_FLYOUT */
   overflow: hidden;
   pointer-events: all;
   font-size: 12px;

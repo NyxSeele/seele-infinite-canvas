@@ -25,6 +25,7 @@ import {
   MAX_SHOT_DURATION,
   rowHasBeatPrompts,
   rowHasGeneratableContent,
+  rowDirectImageReady,
   syncRowFromKeyframes,
   syncRowKeyframesToDuration,
   redistributeKeyframeTimes,
@@ -32,6 +33,10 @@ import {
 import ScriptShotCard from "./ScriptShotCard"
 import CanvasModelDropup from "./CanvasModelDropup"
 import VideoStylePicker from "./VideoStylePicker"
+import {
+  isVideoModelCompatible,
+  preferredModelForMode,
+} from "../../utils/canvas/videoModelCompat"
 import { closeActiveCanvasDropdown, closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import ScriptSegmentHeader from "./ScriptSegmentHeader"
 import NodeLoadingState from "./NodeLoadingState"
@@ -189,6 +194,7 @@ export default function ScriptTableNode({ id, data, selected }) {
   const [visualContinuity, setVisualContinuity] = useState(data.visualContinuity === true)
   const [modelId, setModelId] = useState(data.modelId || "")
   const [batchRunning, setBatchRunning] = useState(false)
+  const [batchVideoRunning, setBatchVideoRunning] = useState(false)
   const [lightboxUrl, setLightboxUrl] = useState(null)
   const [qualityPresetId, setQualityPresetId] = useState(
     () => migrateContentStyleToPreset(data.contentStyle, data.defaultQualityPresetId)
@@ -351,12 +357,19 @@ export default function ScriptTableNode({ id, data, selected }) {
   }, [imageModels, modelId, updateData])
 
   useEffect(() => {
-    if (videoModels.length > 0 && !videoModelId) {
-      const defaultVid = videoModels[0].id || videoModels[0].display_name || ""
+    if (videoModels.length === 0) return
+    const preferred = preferredModelForMode("首尾帧", videoModels)
+    if (!videoModelId) {
+      const defaultVid = preferred || videoModels[0].id || videoModels[0].display_name || ""
       if (defaultVid) {
         setVideoModelId(defaultVid)
         updateData({ videoModelId: defaultVid })
       }
+      return
+    }
+    if (!isVideoModelCompatible(videoModelId, "首尾帧") && preferred && preferred !== videoModelId) {
+      setVideoModelId(preferred)
+      updateData({ videoModelId: preferred })
     }
   }, [videoModels, videoModelId, updateData])
 
@@ -816,6 +829,29 @@ export default function ScriptTableNode({ id, data, selected }) {
     }
   }, [id, modelId, castLibrary, continuityMode, visualContinuity, updateData, canvasActions, readOnly])
 
+  const handleGenerateAllVideo = useCallback(async () => {
+    if (readOnly) return
+    if (!videoModelId) return
+    if (!canvasActions?.runScriptTableGenerateAllVideo) return
+    setBatchVideoRunning(true)
+    updateData({ videoModelId, modelId, castLibrary, continuityMode, visualContinuity })
+    try {
+      await canvasActions.runScriptTableGenerateAllVideo(id, { videoModelId })
+    } finally {
+      setBatchVideoRunning(false)
+    }
+  }, [
+    id,
+    videoModelId,
+    modelId,
+    castLibrary,
+    continuityMode,
+    visualContinuity,
+    updateData,
+    canvasActions,
+    readOnly,
+  ])
+
   const summary = useMemo(() => {
     const totalShots = rows.length
     const totalDuration = rows.reduce((s, r) => s + (Number(r.duration) || 0), 0)
@@ -898,10 +934,12 @@ export default function ScriptTableNode({ id, data, selected }) {
   )
 
   const hasDescRows = rows.some((r) => rowHasGeneratableContent(r))
+  const hasDirectImageReadyRows = rows.some((r) => rowDirectImageReady(r))
   const anyGenerating =
     rows.some((r) => r.status === "generating")
     || rows.some((r) => (r.keyframes || []).some((k) => k.status === "generating"))
     || batchRunning
+    || batchVideoRunning
 
   const projectSettingsSummary = useMemo(() => {
     const castCount = castLibrary.filter((c) => c.type !== "scene").length
@@ -1137,7 +1175,10 @@ export default function ScriptTableNode({ id, data, selected }) {
                 value={videoModelId}
                 direction="down"
                 disabled={readOnly}
+                isItemDisabled={(m) => !isVideoModelCompatible(m.id || m.display_name, "首尾帧")}
+                disabledHint="当前模式不可用"
                 onChange={(mid) => {
+                  if (!isVideoModelCompatible(mid, "首尾帧")) return
                   setVideoModelId(mid)
                   updateData({ videoModelId: mid })
                 }}
@@ -1173,6 +1214,17 @@ export default function ScriptTableNode({ id, data, selected }) {
               onPointerDown={sp}
             >
               {batchRunning ? t("canvas.script.batchGenerating") : t("canvas.script.genAll")}
+            </button>
+            <button
+              type="button"
+              className="st-gen-all-btn"
+              disabled={readOnly || !hasDirectImageReadyRows || !videoModelId || anyGenerating}
+              onClick={handleGenerateAllVideo}
+              onPointerDown={sp}
+            >
+              {batchVideoRunning
+                ? t("canvas.script.batchVideoGenerating")
+                : t("canvas.script.genAllVideo")}
             </button>
             <button
               type="button"

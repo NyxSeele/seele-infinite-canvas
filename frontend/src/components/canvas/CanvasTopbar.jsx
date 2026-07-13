@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { createPortal } from "react-dom"
 import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_TOAST } from "../../utils/zIndexLayers"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../../contexts/AuthContext"
 import { useCanvasStore } from "../../stores"
@@ -264,7 +265,7 @@ export default function CanvasTopbar({
         </div>
       </div>
       {mentionToast && createPortal(
-        <div className="ctb-toast ctb-toast--mention">{mentionToast}</div>,
+        <div className="ctb-toast ctb-toast--mention" style={{ zIndex: Z_TOAST }}>{mentionToast}</div>,
         getThemePortalRoot()
       )}
       <WorkspaceNotifyPanel

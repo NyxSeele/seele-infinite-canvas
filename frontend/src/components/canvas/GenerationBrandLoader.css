@@ -4,17 +4,12 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  background: transparent;
 }
 
 .gn2-generating-brand--compact {
-  width: 48px;
-  height: 48px;
-}
-
-.gn2-generating-brand--compact .gn2-generating-brand__ring {
-  width: 48px;
-  height: 48px;
-  margin: -24px 0 0 -24px;
+  width: 40px;
+  height: 40px;
 }
 
 .gn2-generating-brand--compact .gn2-generating-brand__logo {
@@ -22,46 +17,20 @@
   height: 32px;
 }
 
-.gn2-generating-brand__ring {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  border-radius: 50%;
-  border: 1px solid rgba(52, 211, 153, 0.28);
-  box-shadow:
-    0 0 16px rgba(34, 211, 238, 0.1),
-    0 0 32px rgba(52, 211, 153, 0.08);
-  animation: gn2-brand-ring-pulse 2.4s ease-in-out infinite;
-  pointer-events: none;
-}
-
 .gn2-generating-brand__logo {
   position: relative;
   z-index: 1;
   object-fit: contain;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   animation: gn2-brand-logo-spin 2.8s linear infinite;
-  filter: drop-shadow(0 4px 12px rgba(52, 211, 153, 0.28));
+  /* 轻微阴影，避免看起来像圆形底框 */
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.18));
 }
 
 @keyframes gn2-brand-logo-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-@keyframes gn2-brand-ring-pulse {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 0.65;
-  }
-  50% {
-    transform: scale(1.08);
-    opacity: 1;
-  }
-}
-
-.rf-page--light .gn2-generating-brand__ring {
-  border-color: rgba(52, 211, 153, 0.35);
-  box-shadow:
-    0 0 12px rgba(34, 211, 238, 0.12),
-    0 0 24px rgba(52, 211, 153, 0.1);
 }

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
+import { createPortal } from "react-dom"
 import api from "../../services/api"
 import UserModelPermissions from "../../components/admin/UserModelPermissions.jsx"
+import { getThemePortalRoot } from "../../utils/themePortalRoot"
+import { Z_WS_MODAL } from "../../utils/zIndexLayers"
 
 const PAGE_SIZE = 20
 
@@ -37,8 +40,8 @@ function QuotaEditModal({ user, onClose, onSaved }) {
     }
   }
 
-  return (
-    <div className="adm-modal-overlay" onClick={onClose}>
+  return createPortal(
+    <div className="adm-modal-overlay" style={{ zIndex: Z_WS_MODAL }} onClick={onClose}>
       <div className="adm-modal" onClick={(e) => e.stopPropagation()}>
         <div className="adm-modal-title">编辑配额 — {user.username}</div>
         <div className="adm-field">
@@ -65,7 +68,8 @@ function QuotaEditModal({ user, onClose, onSaved }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }
 
@@ -77,8 +81,8 @@ function ConfirmModal({ title, body, onConfirm, onClose, danger }) {
     try { await onConfirm() } finally { setLoading(false) }
   }
 
-  return (
-    <div className="adm-modal-overlay" onClick={onClose}>
+  return createPortal(
+    <div className="adm-modal-overlay" style={{ zIndex: Z_WS_MODAL }} onClick={onClose}>
       <div className="adm-modal" onClick={(e) => e.stopPropagation()}>
         <div className="adm-modal-title">{title}</div>
         <p className="adm-confirm-text" dangerouslySetInnerHTML={{ __html: body }} />
@@ -93,13 +97,14 @@ function ConfirmModal({ title, body, onConfirm, onClose, danger }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }
 
 function ModelPermModal({ userId, username, onClose }) {
-  return (
-    <div className="adm-modal-overlay" onClick={onClose}>
+  return createPortal(
+    <div className="adm-modal-overlay" style={{ zIndex: Z_WS_MODAL }} onClick={onClose}>
       <div className="adm-modal" style={{ width: 520 }} onClick={(e) => e.stopPropagation()}>
         <div className="adm-modal-title">模型权限 — {username}</div>
         <UserModelPermissions userId={userId} />
@@ -107,7 +112,8 @@ function ModelPermModal({ userId, username, onClose }) {
           <button className="adm-btn adm-btn--primary" onClick={onClose}>完成</button>
         </div>
       </div>
-    </div>
+    </div>,
+    getThemePortalRoot(),
   )
 }
 
