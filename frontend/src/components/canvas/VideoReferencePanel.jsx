@@ -107,20 +107,23 @@ export default function VideoReferencePanel({
   const referenceModeFromData = forceKeyframe
     ? "keyframe"
     : (data?.referenceMode || "keyframe")
-  const panelModeFromData = data?.panelMode || referenceModeFromData
+  const panelModeFromData = data?.panelMode ?? null
   const [localPanelMode, setLocalPanelMode] = useState(
     forceKeyframe && panelModeFromData === "freeref" ? "keyframe" : panelModeFromData
   )
-  const referenceMode = localPanelMode === "enhance" ? referenceModeFromData : localPanelMode
+  const referenceMode = localPanelMode === "enhance"
+    ? referenceModeFromData
+    : (localPanelMode || referenceModeFromData)
+  const effectivePanelMode =
+    localPanelMode || (referenceModeFromData === "enhance" ? "enhance" : referenceModeFromData)
 
   useEffect(() => {
     if (forceKeyframe) {
       setLocalPanelMode((prev) => (prev === "enhance" ? prev : "keyframe"))
       return
     }
-    const next = data?.panelMode || data?.referenceMode || "keyframe"
-    setLocalPanelMode(next)
-  }, [data?.panelMode, data?.referenceMode, forceKeyframe, nodeId])
+    setLocalPanelMode(data?.panelMode ?? null)
+  }, [data?.panelMode, forceKeyframe, nodeId])
 
   useEffect(() => {
     if (!forceKeyframe || !onUpdate || !nodeId) return
@@ -189,7 +192,7 @@ export default function VideoReferencePanel({
   ])
 
   const setMode = useCallback((mode) => {
-    if (forceKeyframe && mode === "freeref") return
+    if (forceKeyframe && (mode === "freeref" || mode === "t2v")) return
     handleModeClick(mode)
   }, [handleModeClick, forceKeyframe])
 
@@ -394,14 +397,23 @@ export default function VideoReferencePanel({
       <div className="mode-tabs nodrag nopan">
         <button
           type="button"
-          className={`mode-tab nodrag nopan${localPanelMode === "keyframe" ? ` active${tabExpandedClass}` : ""}`}
+          className={`mode-tab nodrag nopan${effectivePanelMode === "t2v" ? ` active${tabExpandedClass}` : ""}`}
+          onClick={() => setMode("t2v")}
+          disabled={forceKeyframe}
+          title={forceKeyframe ? "Wan Fun Inpaint 需使用首尾帧" : undefined}
+        >
+          {t("canvas.prompt.t2v")}
+        </button>
+        <button
+          type="button"
+          className={`mode-tab nodrag nopan${effectivePanelMode === "keyframe" ? ` active${tabExpandedClass}` : ""}`}
           onClick={() => setMode("keyframe")}
         >
           {t("canvas.prompt.keyframe")}
         </button>
         <button
           type="button"
-          className={`mode-tab nodrag nopan${localPanelMode === "freeref" ? ` active${tabExpandedClass}` : ""}`}
+          className={`mode-tab nodrag nopan${effectivePanelMode === "freeref" ? ` active${tabExpandedClass}` : ""}`}
           onClick={() => setMode("freeref")}
           disabled={forceKeyframe}
           title={forceKeyframe ? "Wan Fun Inpaint 需使用首尾帧" : undefined}
@@ -410,13 +422,13 @@ export default function VideoReferencePanel({
         </button>
         <button
           type="button"
-          className={`mode-tab nodrag nopan${localPanelMode === "enhance" ? ` active${tabExpandedClass}` : ""}`}
+          className={`mode-tab nodrag nopan${effectivePanelMode === "enhance" ? ` active${tabExpandedClass}` : ""}`}
           onClick={() => setMode("enhance")}
         >
           {t("canvas.video.enhance")}
         </button>
       </div>
-      {localPanelMode !== "enhance" && !isT2vMode && (
+      {effectivePanelMode !== "enhance" && !isT2vMode && (
         <>
           <div className="video-top-divider" aria-hidden />
           <div className="add-ref-wrapper">
@@ -447,7 +459,7 @@ export default function VideoReferencePanel({
           )}
         </>
       )}
-      {isT2vMode && projectId && localPanelMode !== "enhance" && (
+      {isT2vMode && projectId && effectivePanelMode !== "enhance" && (
         <>
           <div className="video-top-divider" aria-hidden />
           <VideoStylePicker

@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from comfyui import client as comfyui
-from core.comfyui_settings import comfyui_http_url
+from core.comfyui_settings import resolve_comfyui_node_url
 from core.config import settings
 from core.dependencies import get_current_user, get_media_user
 from core.logging_setup import studio_print
@@ -77,6 +77,7 @@ async def proxy_view(
     filename: str = Query(...),
     type: str = Query("output"),
     subfolder: str = Query(""),
+    node: str | None = Query(None),
     user: User = Depends(get_media_user),
     db: Session = Depends(get_db),
 ):
@@ -96,7 +97,7 @@ async def proxy_view(
     if safe_subfolder:
         params["subfolder"] = safe_subfolder
 
-    upstream_url = f"{comfyui_http_url()}/view"
+    upstream_url = f"{resolve_comfyui_node_url(node)}/view"
     upstream_headers = {}
     range_header = request.headers.get("range")
     if range_header:

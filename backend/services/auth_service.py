@@ -6,8 +6,6 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from core.config import settings
-
-from core.config import settings
 from core.security import (
     create_access_token,
     create_refresh_token,
@@ -150,13 +148,21 @@ def build_token_response(user: User) -> dict:
     return TokenResponse(
         access_token=create_access_token(user.id, user.username, user.role),
         refresh_token=create_refresh_token(user.id),
-        user=UserInfo(id=user.id, username=user.username, role=user.role),
+        user=UserInfo(
+            id=user.id,
+            username=user.username,
+            role=user.role,
+            r2_access=bool(getattr(user, "r2_access", False)),
+        ),
     ).model_dump()
 
 
-def register(db: Session, username: str, email: str, password: str) -> dict:
+def register(db: Session, username: str, email: str, password: str, invite_code: str) -> dict:
     username = username.strip()
     email = email.strip().lower()
+    expected = (settings.registration_invite_code or "").strip()
+    if expected and invite_code.strip() != expected:
+        raise HTTPException(status_code=403, detail="邀请码无效")
 
     try:
         validate_username(username)
@@ -178,6 +184,7 @@ def register(db: Session, username: str, email: str, password: str) -> dict:
         password_hash=hash_password(password),
         role="user",
         is_active=True,
+        r2_access=True,
     )
     db.add(user)
     db.flush()
@@ -237,6 +244,7 @@ def _profile_dict(user: User) -> dict:
         "avatar_url": user.avatar_url or "",
         "display_name": user.display_name or "",
         "bio": user.bio or "",
+        "r2_access": bool(getattr(user, "r2_access", False)),
         "quota": None,
     }
 

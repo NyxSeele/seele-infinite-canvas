@@ -117,7 +117,7 @@ function ModelPermModal({ userId, username, onClose }) {
   )
 }
 
-function UserCardActions({ user, onQuota, onRole, onStatus, onModelPerm }) {
+function UserCardActions({ user, onQuota, onRole, onStatus, onModelPerm, onR2Access, r2Toggling }) {
   return (
     <div className="adm-user-card-actions adm-user-card-actions--inline">
       <button type="button" className="adm-btn adm-btn--sm" onClick={() => onQuota(user)}>
@@ -136,6 +136,18 @@ function UserCardActions({ user, onQuota, onRole, onStatus, onModelPerm }) {
       <button type="button" className="adm-btn adm-btn--sm" onClick={() => onModelPerm(user)}>
         模型权限
       </button>
+      <button
+        type="button"
+        className="adm-btn adm-btn--sm"
+        disabled={r2Toggling === user.id}
+        onClick={() => onR2Access(user)}
+      >
+        {r2Toggling === user.id
+          ? "更新中…"
+          : user.r2_access
+            ? "关闭 R2"
+            : "开启 R2"}
+      </button>
     </div>
   )
 }
@@ -150,6 +162,7 @@ export default function UserManagement() {
   const [quotaModal, setQuotaModal] = useState(null)
   const [confirmModal, setConfirmModal] = useState(null)
   const [modelPermModal, setModelPermModal] = useState(null)
+  const [r2Toggling, setR2Toggling] = useState(null)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -210,6 +223,22 @@ export default function UserManagement() {
     await loadUsers()
   }
 
+  const handleToggleR2Access = async (user) => {
+    const next = !user.r2_access
+    setR2Toggling(user.id)
+    try {
+      await api.patch(`/api/admin/users/${user.id}/r2-access`, { r2_access: next })
+      setUsers((prev) =>
+        prev.map((u) => (u.id === user.id ? { ...u, r2_access: next } : u)),
+      )
+    } catch (e) {
+      console.error("更新 R2 权限失败", e)
+      alert(e.response?.data?.detail || "更新 R2 权限失败")
+    } finally {
+      setR2Toggling(null)
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
@@ -253,6 +282,9 @@ export default function UserManagement() {
                   <span className={`adm-badge ${u.is_active ? "adm-badge--active" : "adm-badge--disabled"}`}>
                     {u.is_active ? "正常" : "已禁用"}
                   </span>
+                  <span className={`adm-badge ${u.r2_access ? "adm-badge--active" : "adm-badge--disabled"}`}>
+                    R2 {u.r2_access ? "已开" : "关闭"}
+                  </span>
                   <span className="adm-user-card-quota">
                     图 {u.quota ? formatQuota(u.quota.image_limit, u.quota.image_used, u.quota.image_remaining) : "—"}
                   </span>
@@ -268,6 +300,8 @@ export default function UserManagement() {
                 onRole={handleToggleRole}
                 onStatus={handleToggleStatus}
                 onModelPerm={(user) => setModelPermModal({ id: user.id, username: user.username })}
+                onR2Access={handleToggleR2Access}
+                r2Toggling={r2Toggling}
               />
             </article>
           ))}

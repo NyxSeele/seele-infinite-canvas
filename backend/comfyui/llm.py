@@ -1,12 +1,6 @@
 import json
-import os
 
-import httpx
-from openai import AsyncOpenAI
-
-from core.config import settings
-
-DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+from services.qwen import CONFIGURED_LLM_ERROR, invoke_configured_text_llm
 
 IMAGE_SYSTEM_PROMPT = """你是一个专业的提示词翻译助手。
 规则：
@@ -18,10 +12,25 @@ IMAGE_SYSTEM_PROMPT = """你是一个专业的提示词翻译助手。
 只返回JSON，不要其他内容：
 {"positive": "英文正向提示词", "negative": ""}"""
 
+FLUX_SYSTEM_PROMPT = """你是专业AI图像生成提示词专家，专注于 Flux 模型。
+把用户描述转成高质量英文摄影提示词。
+必须包含：构图描述、光线类型、拍摄风格
+如果包含人物：加入 natural pose, proper anatomy, realistic proportions
+只返回JSON：{"positive": "英文正向提示词", "negative": ""}"""
+
+HUNYUAN_VIDEO_SYSTEM_PROMPT = """你是专业AI视频生成提示词专家，专注于 HunyuanVideo 模型。
+把用户描述转成适合电影级视频生成的英文提示词。
+必须包含：镜头类型、运动描述、光线、画面质量
+如果包含人物：加入 anatomically correct body, natural gestures, proper finger count
+只返回JSON：{"positive": "英文正向提示词", "negative": "英文负向提示词"}"""
+
 VIDEO_SYSTEM_PROMPT = """你是专业AI视频生成提示词专家。
 把用户的中文描述转成适合视频生成的英文提示词。
 添加动态词：smooth motion, cinematic, fluid movement
 添加画质词：high quality, detailed
+如果画面包含人物，必须在 prompt 中加入：
+anatomically correct body, natural hand gestures,
+proper finger count, realistic human anatomy
 只返回JSON，不要其他内容：
 {"positive": "英文正向提示词", "negative": "英文负向提示词"}"""
 
@@ -46,36 +55,20 @@ TRANSLATE_PLAIN_SYSTEM = (
 
 
 async def translate_to_english(user_input: str, *, mode: str = "image") -> dict:
-    """纯文本英译（不依赖 JSON），供 L3 翻译回退。"""
+    """纯文本英译（不依赖 JSON），仅走 Admin 已注册文本模型。"""
     text = (user_input or "").strip()
     if not text:
         return {"positive": user_input, "error": "empty input"}
 
-    api_key = settings.dashscope_api_key or os.environ.get("DASHSCOPE_API_KEY")
-    if not api_key:
-        return {"positive": text, "error": "未配置 DASHSCOPE_API_KEY"}
-
     system_prompt = VIDEO_TRANSLATE_PLAIN_SYSTEM if mode == "video" else TRANSLATE_PLAIN_SYSTEM
 
     try:
-        async with httpx.AsyncClient(trust_env=False, timeout=30.0) as http:
-            async with AsyncOpenAI(
-                api_key=api_key,
-                base_url=DASHSCOPE_BASE_URL,
-                timeout=30.0,
-                http_client=http,
-            ) as client:
-                response = await client.chat.completions.create(
-                    model="qwen-plus",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": text},
-                    ],
-                    temperature=0.3,
-                    max_tokens=500,
-                )
-
-        translated = (response.choices[0].message.content or "").strip()
+        translated, _, _model_id = await invoke_configured_text_llm(
+            system_prompt,
+            text,
+            max_tokens=500,
+            temperature=0.3,
+        )
         translated = translated.strip("\"'")
         if not translated:
             raise ValueError("empty translation")
@@ -87,7 +80,22 @@ async def translate_to_english(user_input: str, *, mode: str = "image") -> dict:
         }
 
 
-async def optimize_prompt(user_input: str, mode: str = "image") -> dict:
+def _resolve_optimize_system_prompt(mode: str, model_hint: str | None = None) -> str:
+    hint = (model_hint or "").strip().lower()
+    if mode == "image" and hint.startswith("flux"):
+        return FLUX_SYSTEM_PROMPT
+    if mode == "video" and hint == "hunyuan":
+        return HUNYUAN_VIDEO_SYSTEM_PROMPT
+    return IMAGE_SYSTEM_PROMPT if mode == "image" else VIDEO_SYSTEM_PROMPT
+
+
+async def optimize_prompt(
+    user_input: str,
+    mode: str = "image",
+    *,
+    model_hint: str | None = None,
+) -> dict:
+    """提示词优化，仅走 Admin 已注册文本模型（llm_router 分流）。"""
     text = (user_input or "").strip()
     if not text:
         return {
@@ -95,35 +103,15 @@ async def optimize_prompt(user_input: str, mode: str = "image") -> dict:
             "negative": "worst quality, low quality, blurry",
         }
 
-    api_key = settings.dashscope_api_key or os.environ.get("DASHSCOPE_API_KEY")
-    if not api_key:
-        return {
-            "positive": text,
-            "negative": "worst quality, low quality, blurry",
-            "error": "未配置 DASHSCOPE_API_KEY",
-        }
-
-    system_prompt = IMAGE_SYSTEM_PROMPT if mode == "image" else VIDEO_SYSTEM_PROMPT
+    system_prompt = _resolve_optimize_system_prompt(mode, model_hint)
 
     try:
-        async with httpx.AsyncClient(trust_env=False, timeout=30.0) as http:
-            async with AsyncOpenAI(
-                api_key=api_key,
-                base_url=DASHSCOPE_BASE_URL,
-                timeout=30.0,
-                http_client=http,
-            ) as client:
-                response = await client.chat.completions.create(
-                    model="qwen3.5-122b-a10b",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": text},
-                    ],
-                    temperature=0.7,
-                    max_tokens=500,
-                )
-
-        result_text = (response.choices[0].message.content or "").strip()
+        result_text, _, _model_id = await invoke_configured_text_llm(
+            system_prompt,
+            text,
+            max_tokens=500,
+            temperature=0.7,
+        )
         result_text = result_text.replace("```json", "").replace("```", "").strip()
 
         result = json.loads(result_text)
@@ -143,8 +131,13 @@ async def optimize_prompt(user_input: str, mode: str = "image") -> dict:
             "error": "解析失败，已使用原始描述",
         }
     except Exception as e:
+        err = str(e)
+        if CONFIGURED_LLM_ERROR in err:
+            error_msg = CONFIGURED_LLM_ERROR
+        else:
+            error_msg = f"提示词优化暂时不可用: {err[:100]}"
         return {
             "positive": user_input,
             "negative": "worst quality, low quality, blurry",
-            "error": f"提示词优化暂时不可用: {str(e)[:100]}",
+            "error": error_msg,
         }

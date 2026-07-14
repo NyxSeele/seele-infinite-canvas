@@ -6,21 +6,24 @@ import httpx
 from sqlalchemy.orm import Session
 
 from db.session import SessionLocal
-from core.comfyui_settings import comfyui_checkpoints_url
+from core.comfyui_settings import comfyui_nodes_list
 from model_checker import _flatten_comfyui_model_list
 from model_registry import LOCAL_MODEL_PRESETS
 from models import RegisteredModel
 
 
 async def _fetch_checkpoint_files() -> list[str] | None:
+    merged: list[str] = []
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(comfyui_checkpoints_url())
-            if r.status_code != 200:
-                return None
-            return _flatten_comfyui_model_list(r.json())
+            for base_url in comfyui_nodes_list():
+                r = await client.get(f"{base_url.rstrip('/')}/models/checkpoints")
+                if r.status_code != 200:
+                    continue
+                merged.extend(_flatten_comfyui_model_list(r.json()))
     except Exception:
         return None
+    return list(dict.fromkeys(merged)) if merged else None
 
 
 def _match_checkpoint_file(preset_file: str, available_files: list[str]) -> str | None:

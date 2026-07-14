@@ -214,6 +214,35 @@ def apply_text_response(nodes, note_id, response_id, content, status, edges):
     edges.append({"source": note_id, "target": response_id})
 
 
+def poll_async_json_task(client, token, task_id: str, *, timeout_s: float = 300) -> dict:
+    """轮询 screenplay 等异步 JSON 任务，返回 completed 时的 result 对象。"""
+    deadline = time.time() + timeout_s
+    last: dict = {}
+    while time.time() < deadline:
+        tr = client.get(
+            f"{BASE}/api/tasks/{task_id}",
+            headers=headers(token),
+            timeout=30,
+        )
+        tr.raise_for_status()
+        last = tr.json()
+        status = (last.get("status") or "").lower()
+        if status == "completed":
+            result = last.get("result")
+            if isinstance(result, str) and result.strip().startswith(("{", "[")):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    pass
+            if isinstance(result, dict):
+                return result
+            return {"result": result}
+        if status == "failed":
+            raise RuntimeError(last.get("error") or f"task {task_id} failed")
+        time.sleep(1.0)
+    raise TimeoutError(f"async task {task_id} timed out after {timeout_s}s")
+
+
 def generate_outline(client, token, screenplay_text, source_idea):
     t0 = time.time()
     r = client.post(
@@ -229,7 +258,14 @@ def generate_outline(client, token, screenplay_text, source_idea):
     elapsed = time.time() - t0
     if r.status_code != 200:
         return elapsed, None, r.text[:500]
-    return elapsed, r.json(), None
+    body = r.json()
+    task_id = body.get("task_id")
+    if task_id and "scenes" not in body:
+        try:
+            body = poll_async_json_task(client, token, task_id, timeout_s=180)
+        except Exception as exc:
+            return time.time() - t0, None, str(exc)[:500]
+    return time.time() - t0, body, None
 
 
 def apply_outline_node(nodes, edges, response_id, o_data) -> str:
@@ -275,7 +311,14 @@ def generate_shots_api(client, token, outline_node) -> tuple[float, dict | None,
     elapsed = time.time() - t0
     if r.status_code != 200:
         return elapsed, None, r.text[:500]
-    return elapsed, r.json(), None
+    body = r.json()
+    task_id = body.get("task_id")
+    if task_id and "segments" not in body:
+        try:
+            body = poll_async_json_task(client, token, task_id, timeout_s=300)
+        except Exception as exc:
+            return time.time() - t0, None, str(exc)[:500]
+    return time.time() - t0, body, None
 
 
 def parse_trace_lines(log_text: str) -> list[str]:

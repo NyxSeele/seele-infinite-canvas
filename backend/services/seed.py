@@ -49,7 +49,7 @@ def seed_database(db: Session) -> None:
 
     admin = _ensure_user(
         db,
-        username="admin",
+        username="seele",
         email="admin@aistudio.local",
         password=admin_pw,
         role="admin",

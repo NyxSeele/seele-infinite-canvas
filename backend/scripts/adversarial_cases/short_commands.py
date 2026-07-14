@@ -26,7 +26,7 @@ CASES: list[dict] = [
         "turns": [
             {"role": "user", "content": "继续"},
         ],
-        "eval_hint": "期望：推进镜1 视频或镜2 节拍/出图，而非重复 generate_storyboard 镜1",
+        "eval_hint": "期望：推进镜1 generate_video（单线程先完成当前镜视频），禁止跨到镜2 generate_storyboard",
     },
     {
         "id": "cat1_another_one_after_cast",

@@ -1,16 +1,37 @@
 # AI Studio 开发进度交接文档
 
-用于开启新对话时快速恢复上下文。最后更新：**2026-07-10**（清理债项四件套 ✅ · G45 · pytest **114** · 数据盘 **~31G** 可用）
+用于开启新对话时快速恢复上下文。最后更新：**2026-07-13**（视频审阅 ✅ · R2 团队文件 ✅ · 公网 Tunnel · pytest **121** · 迁移 **026**）
 
 ---
 
-## 当前总览（2026-07-10 · 最新）
+## 当前总览（2026-07-13 · 最新）
 
 ### 进度一句话
 
-**G31–G40 + G45 闭环**；清理债项四件套（SD1.5 / media_access / API_KEY_ENCRYPT_SECRET / Portal·z-index）已收口。pytest **114 passed**。机器：AutoDL **269** · 4090 24GB · 数据盘约 **31G** 可用。模型下拉能力说明行已收口（MaaS 文本 `MODEL_SUMMARY_OVERRIDES` + 视频模式/模型灰显纠偏）。视频三档：**文生 / 首尾帧 / 参考**（`referenceMode=t2v|keyframe|freeref`）。Agent 质量校准见 [`AGENT_TRACE_BASELINE.md`](AGENT_TRACE_BASELINE.md)「校准 2026-07-10」（编排 `_agent_quality_calibration_probe.py`；token golden **1600–2100**；对抗 4–5/6，不放宽断言）。
+**视频审阅公开站 + R2 对象存储**已上线：公网 **`https://velora.seele0420.cloud`**（Cloudflare Tunnel → Nginx `:6006`）。JWT 发布页 `/review-publish`；匿名审阅 `/review` · `/review/:id`（强制审阅者昵称、评分/点赞/评论）。媒体走 **R2 直传 PUT**（presign；封面 `upload-thumbnail`；可从生成历史 import）。既有 **G31–G40 + G45** 与清理债项仍有效。pytest **121 passed**；迁移 head **026**。机器：AutoDL **269** · 4090 24GB · 数据盘 **350G**（可用约 **169G**）。
 
-### 本周关键交付（G31–G40 + Phase4–7）
+**生产管理员账号（2026-07-14）**：登录名 **`seele`**（`role=admin`，由原 `admin` 更名；团队/配额/权限不变）· 密码 **`dfy042005`** · 邮箱仍为 `admin@aistudio.local`。探针种子账号 `testuser` / `testuser2` 不变。
+
+**硬约束 · Admin 文本模型（勿动）**：未经负责人**明确同意**，禁止修改 Admin 后台「模型管理」里的**文本模型**配置——包括 `registered_models` 中 `category=text` / `type=api` 的启用/禁用、**默认 Agent 文本模型**（`is_default_text`）、LLM 分流模式、单价、`api_key` 等。**勿随意重跑** `scripts/_enable_text_models.py`（会按 `model_registry` + env **覆盖 DB**，常把默认改回 `qwen-plus` 并冲掉后台已配项）。与文本模型无关的任务，**不要改** `model_registry.py` 文本 preset、`llm_router.py`、`admin_models.py` 的默认/seed 逻辑；确需动须先说明影响并保留现有 Admin 配置。
+
+**硬约束 · Supervisor / Tunnel（勿整文件覆盖）**：`deploy/supervisor-autodl.conf` 与 `/etc/supervisor/conf.d/aistudio.conf` 必须**始终保留全部 5 段**：`comfyui0` · `comfyui1` · `aistudio-backend` · **`nginx`** · **`cloudflared`**。与 GPU/后端无关的改动（如双卡调度、`COMFYUI_NODES`）**只允许在现有文件上改对应行**，**禁止**用删减后的片段整文件 `cp` 覆盖——2026-07-14 曾因此删掉 `nginx`/`cloudflared`，公网 **`https://velora.seele0420.cloud`** 出现 **Cloudflare Error 1033**（Tunnel 无连接；本地 `:6006` 仍 200）。改完后须 `diff` 确认五段都在，再 `supervisorctl update`，并 `curl` 公网 `/api/health` 为 **200**。详见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) §3.1 · [Runbook §10](backend/docs/AUTODL_DEPLOY_RUNBOOK.md)。
+
+### 本周关键交付（2026-07-13 · 视频审阅 / R2 / 品牌 UX）
+
+| ID | 主题 | 状态 | 要点 |
+|----|------|------|------|
+| **Review** | 视频审阅 | ✅ | 迁移 **026** `review_videos` / `review_comments`；`routers/review.py`；发布/列表/软下架；下架时若 key 在 `review/` 则删 R2 |
+| **R2** | 团队文件 + 审阅媒资 | ✅ | 迁移 **025** `users.r2_access` + `r2_files`；`services/r2.py`；bucket `seele`；中文文件名 percent-encode |
+| **Upload** | 浏览器直传 | ✅ | presign PUT；CORS 在 Cloudflare 控制台配置（API 改 CORS 曾 AccessDenied）；公开 URL 用 `encodePublicMediaUrl` |
+| **Public UI** | `/review` 站 | ✅ | 统一 16:9 网格；封面 `object-fit: contain`；排序（最新/评分/互动）+ 搜索；粘性「内部审阅勿外传」条；移动端单列 |
+| **Publish UX** | 发布弹窗 | ✅ | 本地上传 / URL / **从生成历史选择**（`GenHistoryVideoPicker` + `POST /api/review/import-video`） |
+| **Banner** | AppUpdateBanner | ✅ | 挂在 `BrowserRouter` 内；`/review*` 深色主题；移动端布局 |
+| **Brand** | Velora | ✅ | Tab 仅 `Velora`；favicon `/velora-logo.png`；工作区深色 chip（团队文件/视频审阅）修 `--tl-*` |
+| **Nav icon** | 返回箭头 | ✅ | `LineIcon` `chevronLeft` 替换各页文字 `←`（顶栏/审阅详情/Agent/Admin/邀请设置） |
+| **Ops** | Nginx / Tunnel | ✅ | `client_max_body_size 2048m`；`/api` 超时加长；`cloudflared` Supervisor 常驻；生产前端 **`VITE_API_BASE_URL=` 空 + `npm run build`** |
+| **pytest** | 回归 | ✅ | **121 passed**（2026-07-13） |
+
+### 既有闭环仍有效（G31–G40 + Phase4–7 · 摘要见下表）
 
 | ID | 主题 | 状态 | 要点 |
 |----|------|------|------|
@@ -20,9 +41,9 @@
 | **Phase5** | LTX2 fp4 | ✅ | T1–T4 completed · `LTX-2_00003_`～`00006_` |
 | **Phase6** | Wan T2V | ✅ | T1–T4 completed · `00054_`～`00057_.mp4`（shell 392838） |
 | **Phase7** | flux-pulid | ✅ | T1/T4 预期失败；T2/T3 `use_reactor=True` **completed**（`00066`/`00067`） |
-| **pytest** | 回归 | ✅ | **114 passed** |
+| **pytest** | 回归 | ✅ | **121 passed**（2026-07-13；此前 G45 基线为 114） |
 
-### 本周关键交付（G31–G39）
+### 本周关键交付（G31–G39 · 历史保留）
 
 | ID | 主题 | 状态 | 要点 |
 |----|------|------|------|
@@ -46,6 +67,7 @@
 
 | 阶段 | 主题 | 状态 | 要点 |
 |------|------|------|------|
+| **Review + R2** | 视频审阅 / 品牌 UX | ✅ | 见文首 2026-07-13 表；详情见下方「详情：2026-07-13」 |
 | **G40 + Phase4–7** | ReActor 换脸 + Prompt GPU | ✅ | `use_reactor` + `buffalo_l`；Phase4–6 全绿；Phase7 T2/T3 换脸 completed；见下方详情 |
 | **G39** | AudioGen 音效 | ✅ | `audiogen-medium` + `/api/audio/generate` + `sound_note` 后混音 |
 | **G33** | 运镜/景别 UI | ✅ | CameraMotionPicker + compile 显式字段；[`GPU_DEBT.md`](GPU_DEBT.md) |
@@ -140,6 +162,7 @@
 | **构图 / 自由参考图** | 单次出图；图片生成卡片 / Prompt Bar「添加参考图」 | `image-gen.data.referenceImages`（最多 5 张） | 图片 img2img |
 | **角色/场景参考** | 分镜 @提及 / 设定库 | 出图时由 `entityRefs` 解析，写入 `image-gen` 节点 | 分镜批量出图自动带入 |
 | **全片 LUT** | 分镜表「色调风格」 | `script-table` 节点 `lutPreset` 等 | 视频生成完成后 ffmpeg 后处理 |
+| **视频审阅** | `/review-publish`（JWT）· `/review` 公开站 | DB `review_*` + R2 `review/` | 评分/点赞/评论；媒资公网 URL |
 | ~~项目级风格参考~~ | ~~顶栏~~ | ~~`canvas_projects.style_reference`~~ | ❌ 已回滚（021） |
 | ~~内容风格 contentStyle~~ | ~~分镜表/图像卡~~ | ~~`contentStyle`~~ | ❌ 已并入 `qualityPresetId` |
 | ~~节拍格构图参考~~ | ~~节拍拆分格~~ | `keyframes[].referenceImage`（deprecated，只读） | ❌ 已下线 |
@@ -150,7 +173,9 @@
 |----|------|
 | 前端构建 | `cd frontend && npm run build` ✅（2026-07-03 Phase 44；无 error；chunk >500kB 与 dynamic import 提示见 Phase 43） |
 | 前端刷新 | 改 UI 后 **Ctrl+Shift+R** 硬刷新；加载页见 `VeloraLoadingPage`（Logo 旋转 + 字标 + 文案，无中间圆环） |
-| 后端测试 | `cd backend && PYTHONPATH=. .venv/bin/python -m pytest tests/ -q` → **114 passed**（含 G45 / media_access / secret_store / ReActor） |
+| 后端测试 | `cd backend && PYTHONPATH=. .venv/bin/python -m pytest tests/ -q` → **121 passed**（2026-07-13） |
+| 公网入口 | `https://velora.seele0420.cloud` → Tunnel → Nginx `:6006`；健康 `7788` / ComfyUI `8000` |
+| 前端生产构建 | `cd frontend && VITE_API_BASE_URL= npm run build`（空 base，走同域 `/api`）；改 UI 后须重建 `dist` |
 | Agent Trace 基线 | `AGENT_MOCK_GENERATION=false .venv/bin/python scripts/_agent_trace_baseline_probe.py` → exit 0；[`AGENT_TRACE_BASELINE.md`](AGENT_TRACE_BASELINE.md) |
 | 路线 C 探针 | `.venv/bin/python scripts/_route_c_agent_gpu_probe.py` → GPU + `consistency_phash`；[`ROUTE_C_RESULT.md`](ROUTE_C_RESULT.md) |
 | G30 phash 对照 | `scripts/_g30_phash_compare_probe.py` → `/root/autodl-tmp/logs/g30_phash_compare.json` |
@@ -159,15 +184,15 @@
 | 结构探针 | `scripts/_comfyui_workflow_structure_probe.py --model flux-pulid` / `ltx2-fp4` → PASS |
 | GPU 技术债 | [`GPU_DEBT.md`](GPU_DEBT.md) — G30–G45 / G43–G44 已闭环；开放：G46 Key、G47 主观质量 |
 | G45 视频换脸探针 | `scripts/_g45_reactor_video_probe.py` → PASS；日志 `/root/autodl-tmp/logs/g45_reactor_video_probe.json` |
-| text 模型运维 | `cd backend && source .env && .venv/bin/python scripts/_enable_text_models.py`（一次性；默认启用 qwen-plus） |
+| text 模型运维 | `cd backend && source .env && .venv/bin/python scripts/_enable_text_models.py`（**仅首次初始化或负责人明确要求时**；会覆盖 Admin 后台文本模型配置，见文首硬约束） |
 | 全量探针日志 | `/root/autodl-tmp/logs/all_probes_20260708_1439.log`（22 探针批跑）；重跑见 `probes_rerun_1445.log` |
 | Prompt 调试文档 | Phase1–7 GPU 已实测：[`PHASE4`](PROMPT_DEBUG_PHASE4.md)·[`5`](PROMPT_DEBUG_PHASE5.md)·[`6`](PROMPT_DEBUG_PHASE6.md)·[`7`](PROMPT_DEBUG_PHASE7.md) |
-| 探针账号备忘 | [`backend/docs/PROBE_ACCOUNTS.md`](backend/docs/PROBE_ACCOUNTS.md)（admin / testuser / testuser2；GPU 探针建议 **admin**） |
+| 探针账号备忘 | [`backend/docs/PROBE_ACCOUNTS.md`](backend/docs/PROBE_ACCOUNTS.md)（**管理员 `seele`** / testuser / testuser2；GPU 探针建议 **`seele`（admin）**） |
 | 画风统一文档 | [`backend/docs/STYLE_PRESET_UNIFICATION.md`](backend/docs/STYLE_PRESET_UNIFICATION.md) |
 | 视频增强探针 | `scripts/_video_enhance_probe.py`（mock 全链路；GPU 前 workflow `enabled=False`） |
 | LUT 探针 | `scripts/_lut_probe.py`（内置 `.cube` + GET/PUT lut + mock `video-lut`） |
 | 探针覆盖文档 | [`backend/docs/V1_CANVAS_PROBE_COVERAGE.md`](backend/docs/V1_CANVAS_PROBE_COVERAGE.md)（功能清单 + 缺口 + 运行手册） |
-| 数据库迁移 | `alembic upgrade head`（含 **001–023**；**023** = `tasks.sound_note` / `video_backend`） |
+| 数据库迁移 | `alembic upgrade head`（**001–026**；**025** R2 团队文件 · **026** 视频审阅） |
 | 风格分析依赖 | `DASHSCOPE_API_KEY` + ffmpeg（`imageio-ffmpeg`） |
 | 后端重启 | 改 `style_reference.py` / `canvas_style_ref.py` / `shot_prompt_package.py` / `tasks.py` 后重启 uvicorn |
 
@@ -205,14 +230,35 @@
 - 纯前端项自动化（可选）：`libraryUsage` / `generationRetryPolicy` 若需 Vitest，单独立项
 - ~~**Portal / z-index 收口**~~：✅ 未 portal 化 overlay 迁 `getThemePortalRoot`；`zIndexLayers.js` 常量已引用
 
-### 下轮优先（2026-07-10）
+### 下轮优先（2026-07-13）
 
 | 优先级 | 项 | 说明 |
 |--------|-----|------|
 | 1 | 主观质量表（G47） | 人工观看 MP4 |
+| 2 | 审阅站加固（可选） | 真 DRM / 鉴权门禁 / 审阅单测；当前仅软防下载 |
 | — | **Seedance Key（G46）** | **最后再说 / 不排期**；框架就绪，被动等待 Key |
 
-~~G45 视频逐帧~~ / ~~G44 assets~~ / ~~清理债项四件套~~：✅ 已闭环
+~~视频审阅 / R2~~ / ~~G45 视频逐帧~~ / ~~G44 assets~~ / ~~清理债项四件套~~：✅ 已闭环
+
+---
+
+## 详情：2026-07-13 · 视频审阅 + R2 + 公网（✅ 已闭环）
+
+| 交付 | 路径 / 命令 | 验收 |
+|------|-------------|------|
+| DB | 迁移 **025**（`r2_access` / `r2_files`）· **026**（`review_videos` / `review_comments`） | `alembic current` → **026** |
+| R2 | `backend/services/r2.py`；env `R2_ACCOUNT_ID` / keys / `R2_BUCKET_NAME=seele` / `R2_PUBLIC_URL` | 浏览器 PUT + 公网读 |
+| 审阅 API | `backend/routers/review.py`：presign / upload-thumbnail / import-video / videos CRUD / public list+detail+comment | JWT 发布；匿名读评 |
+| 前端发布 | `pages/ReviewPublish.jsx` + `services/reviewApi.js` + `GenHistoryVideoPicker` | `/review-publish` |
+| 前端公开站 | `ReviewSite.jsx` / `ReviewDetail.jsx` / `ReviewSite.css` + `reviewPublicApi.js` | `/review` · `/review/:id` |
+| 封面 | 匿名不可见私有 `/api/uploads` → 封面改 R2；`poster` + `preload=metadata` | 公开页可见缩略图 |
+| 防下载 | `controlsList=nodownload` + 禁右键（非真 DRM） | 软限制 |
+| 品牌 / 返回 | Tab=`Velora`；`LineIcon` `chevronLeft`；Workspace 深色 chip | UI 一致 |
+| 运维 | Nginx `client_max_body_size 2048m`；Supervisor **`cloudflared`**；公网 200 | `velora.seele0420.cloud` |
+
+**CORS 注意**：R2 bucket CORS 须在 Cloudflare 控制台为 `https://velora.seele0420.cloud` 放行 PUT；API 侧改 CORS 曾报 AccessDenied。
+
+**生产前端**：必须 `VITE_API_BASE_URL=`（空）再 `npm run build`，否则 API 会指错主机。
 
 ---
 
@@ -297,10 +343,12 @@
 
 ### C. text 模型（registered_models）
 
+> **硬约束**：Admin 后台已配置的文本模型（默认项、启用状态、分流、单价等）**禁止**在无关改动中被覆盖或重置；见文首「硬约束 · Admin 文本模型」。
+
 | 项 | 说明 |
 |----|------|
 | 根因 | `init_db` **不 seed** API 模型；`_enable_gpu_models.py` 仅写 image/video |
-| 脚本 | `backend/scripts/_enable_text_models.py` |
+| 脚本 | `backend/scripts/_enable_text_models.py`（**勿随意重跑**——会按 registry + env 写回 DB，常重置默认 `qwen-plus`） |
 | DB 状态 | `qwen-plus` enabled + `is_default_text`；`qwen-max`/`qwen-turbo` disabled（额度） |
 | A2 链路 | `POST /api/tasks/text` → `call_openai_compatible` 读 DB `api_key` + `api_base` |
 | A3/A4/Agent | `resolve_text_model()` 优先 DB；兜底 `.env` `DASHSCOPE_API_KEY` + `qwen-plus` |
@@ -417,10 +465,12 @@ AutoDL 有**两个** Supervisor：平台进程 `unix:///tmp/supervisor.sock`；*
 
 ```bash
 /usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf status
-/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf restart comfyui aistudio-backend
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf restart comfyui0 comfyui1 aistudio-backend
 ```
 
-若 `refused connection`：先 `/usr/bin/supervisord -c /etc/supervisor/supervisord.conf`。
+若 `refused connection`：先 `/usr/bin/supervisord -d -c /etc/supervisor/supervisord.conf`。
+
+**硬约束**：改 `deploy/supervisor-autodl.conf` 时**禁止整文件覆盖**丢失 `nginx` / `cloudflared` 段（公网 Tunnel 依赖二者；缺 `cloudflared` → Cloudflare **1033**）。只允许改需要的行；`cp` 到 `/etc/supervisor/conf.d/` 前后必须 `diff` 五段齐全。见文首「硬约束 · Supervisor / Tunnel」。
 
 ---
 
@@ -1234,6 +1284,8 @@ frontend/src/components/canvas/CanvasShared.css, GenerationCardNode.css
 
 **Admin LLM 分流（仅后台，用户端不选模型）**：
 
+> **硬约束**：Admin 后台已配置的文本模型与分流选项**禁止**在无关改动中被覆盖；勿重跑 `_enable_text_models.py`。见文首「硬约束 · Admin 文本模型」。
+
 | 模式 | 行为 |
 |------|------|
 | 固定默认 | 使用标记为「默认 Agent」的 text/api 模型；未设则第一个已启用 |
@@ -1441,7 +1493,7 @@ frontend/src/utils/localeCanvas.js                  # plotContinuityDesc 等 i18
 | 用例 ID | 修复前 | 修复后 |
 |---------|--------|--------|
 | `cat1_continue_in_ask_user` | 误 `start_text_generation` | `done`（等待配图确认） |
-| `cat1_continue_after_storyboard` | 误 `start_text_generation` | `split_shot_beats`（镜2，符合阶段二推进） |
+| `cat1_continue_after_storyboard` | 误 `start_text_generation` / 跨镜 `generate_storyboard` | `generate_video`（镜1，单线程先完成当前镜视频；2026-07-14） |
 | `cat3_regenerate_this_shot_video` | 误执行 `split_shot_beats` | `ask_user` 澄清链路/镜头 |
 | `cat3_cross_chain_character_reuse` | 空 `actions[]` | `ask_user` 澄清跨链路角色 |
 | `cat3_which_script_table` | 直接 `manage_cast` | `ask_user` 澄清分镜表 |
@@ -2340,37 +2392,39 @@ finalizeAgentLayout → 仅 fitView（双帧 rAF），不再 applyAgentCanvasLay
 50. **模型工具栏背景**：`st-toolbar-pills` 容器透明；仅 `.nb-model-btn-bare` 有 `--tl-toolbar-btn-bg`（勿再给整条 pills 加灰底）
 51. **亮色分镜表按钮**：`textWorkflowTheme.css` 中 `.rf-page--light .st-shot-action-btn` 等须保留 `#eef0f3` 底，勿设 `transparent`
 52. **Admin LLM 路由**：`PUT /api/admin/models/llm-routing` 等**静态路径**必须注册在 `PUT /{model_id}` 之前，否则 422
-53. **API 错误展示**：FastAPI 422 的 `detail` 常为数组；Admin 页须用 `formatApiError()`，勿直接 `message.error(detail)`
-54. **`_call_llm` 返回值**：`tuple[str, str|None]`；调用方须 `raw, _ = await _call_llm(...)` 再 `clean_json_response(raw)`
-55. **导入智能划分**：默认 `identityGroups`（一行一大镜）；LLM 仅按钮触发；失败回退 `suggest_groups` 规则
-56. **ImportDocumentModal 选集工具栏**：`.idm-pick-toolbar` 在 `.idm-body` **外**，勿再 sticky 于滚动区内
-57. **粘贴剧本 classify**：**仅文本卡**（`TEXT_CLASSIFY_MIN=200` 点生成；`PASTE_HINT_MIN=400` 横幅）；图/视频**禁止**恢复 `requestIntentGate`
-58. **意图阈值**：四处常量均在 `promptIntentConfig.js`；后端 `0.82` 仅规则兜底，勿收到前端
-59. **Prompt Bar 高度**：compact 勿恢复 `nb-banner--prompt-layout` grid（`1fr` 会撑高文本/图卡中间区）；高度仅由 `--prompt-input-min-h-*` token 控制
-60. **Prompt Bar 亮色覆盖**：`.rf-page--light .nb-model-btn-bare` 等须限定在 `.nb-banner` 内，否则会清空分镜表模型下拉灰底
-61. **生成历史**：个人 scope = localStorage 无 `teamId`；团队 scope = API `task records`（须有 `result`）；勿用 `Date.now()` 回填缺失 `ts`
-62. **团队上下文**：`getCanvasTeamId()` = `projectTeamId ?? activeTeamId`；`teamIdPayload()` 须用此函数（非仅 `getActiveTeamId()`）
-63. **切换动画**：`ScopeSwitchPanel` + `useScopeSwitchTransition`；出场冻结子树防闪屏；`prefers-reduced-motion` 已降级
-64. **主题切换动画**：`useThemeTransition` + `themeTransition.css`；`flushSync` 内 `toggleTheme`；`prefers-reduced-motion` 或无 `startViewTransition` 时瞬时切换；勿接入 `ScopeSwitchPanel`
-65. **项目设定折叠**：`projectSettingsOpen` 仅 unmount 人物/场景库；**工具栏不得**包进折叠 fragment
-66. **镜头拖排序**：`st-shot-drag-handle` 须用 `<div draggable>`，**禁止** `<button>` + `mousedown preventDefault`
-67. **生成节点 X**：`SCRIPT_TABLE_WIDTH` 须与 `.st-wrapper`（1100px）一致；用 `computeScriptTableGenX()`，勿硬编码 1360 或 `beatCard.x + 400`
-68. **转场 segment**：`segment.*` 不进生成 prompt；UI 仅分隔线，勿恢复完整表单除非产品改需求
-69. **导演参数**：默认 `expanded=false`；产品要求保留展开/收起 + 摘要行，勿改为常显或常隐
-70. **画布右键**：`handlePaneContextMenu` 须跳过 `.react-flow__node`；分镜表 `st-root` 宜 `stopPropagation`
-71. **批量语气**：`batch_adjust_tone` / `ScriptBatchToneModal` 已删除，勿恢复；单镜「审阅提示词」仍保留
-72. **三点菜单关菜单后双击**：关 `gn2-dots-menu` / `cell-menu-portal` 时须 `markSuppressPaneMenu()`，否则双击画布仍弹选取器
-73. **画质增强 Tab 灰底**：`.mode-tab` **禁止**对 `active` 或 `collapsed` 加背景；灰底仅 `.mode-tab:hover`；取消 enhance 须 `panelMode` 回 `referenceMode`
-74. **视频三点画质增强**：用右侧 `cell-dots-submenu` flyout，勿在菜单内纵向插入 `VideoEnhancePanel`（会产生大块空白）
-75. **选中加号常驻**：`plusPinned = selected`；mouseLeave 时若 pinned 勿 `setVisible(false)`
-76. **画布操作方式**：仅在头像菜单 flyout；`NAV_HOVER_OPEN_MS = 140`；勿恢复左栏独立 nav 图标
-77. **画质增强说明**：精细控制用 **ⓘ + 下方说明条**（对齐 `ScriptTableNode`）；勿恢复 hover `?` 上标
-78. **画质增强 Prompt Bar**：compact 面板**无取消钮**；三点 flyout 内仍可有取消
-79. **分享菜单定位**：`left = shareBtnRect.left` 向右展开；四项 `flex-start` 左对齐；勿改回整块居中对齐按钮（会显左空右挤）
-80. **视频增强推荐**：`reasoning` 由后端带完整句；前端勿再拼 `enhanceReasoningPrefix` 前缀
-81. **画风 preset**：单一字段 `qualityPresetId` / `quality_preset_id`；**禁止**恢复 `contentStyle` 或图像卡画风 UI
-82. **VideoStylePicker 触发器**：默认透明底 + `--text-secondary`；加粗仅 hover / `--active` / `--open`；**无** chevron；文案 `画风：{name}` + `IconQualityStyle`
-83. **画风与参考视频**：preset suffix 与 `styleReference` 关键词**可叠加**；视频卡入口二合一，分镜表仍仅 preset 下拉
+53. **Admin 文本模型（硬约束）**：**禁止**在未征得负责人同意时改 Admin 后台文本模型配置（`registered_models` text/api、默认 Agent、`is_default_text`、分流、单价、Key）；**勿重跑** `_enable_text_models.py`；无关任务勿动 `model_registry` 文本 preset / `llm_router` / `admin_models` 默认逻辑
+54. **Supervisor / Tunnel（硬约束）**：改 `deploy/supervisor-autodl.conf` **禁止整文件覆盖**丢失 `nginx` / `cloudflared` 段；五段齐全再 `cp` 到 `/etc/supervisor/conf.d/`；公网验收 `velora.seele0420.cloud/api/health` → 200（缺 cloudflared → CF **1033**）
+55. **API 错误展示**：FastAPI 422 的 `detail` 常为数组；Admin 页须用 `formatApiError()`，勿直接 `message.error(detail)`
+56. **`_call_llm` 返回值**：`tuple[str, str|None]`；调用方须 `raw, _ = await _call_llm(...)` 再 `clean_json_response(raw)`
+57. **导入智能划分**：默认 `identityGroups`（一行一大镜）；LLM 仅按钮触发；失败回退 `suggest_groups` 规则
+58. **ImportDocumentModal 选集工具栏**：`.idm-pick-toolbar` 在 `.idm-body` **外**，勿再 sticky 于滚动区内
+59. **粘贴剧本 classify**：**仅文本卡**（`TEXT_CLASSIFY_MIN=200` 点生成；`PASTE_HINT_MIN=400` 横幅）；图/视频**禁止**恢复 `requestIntentGate`
+60. **意图阈值**：四处常量均在 `promptIntentConfig.js`；后端 `0.82` 仅规则兜底，勿收到前端
+61. **Prompt Bar 高度**：compact 勿恢复 `nb-banner--prompt-layout` grid（`1fr` 会撑高文本/图卡中间区）；高度仅由 `--prompt-input-min-h-*` token 控制
+62. **Prompt Bar 亮色覆盖**：`.rf-page--light .nb-model-btn-bare` 等须限定在 `.nb-banner` 内，否则会清空分镜表模型下拉灰底
+63. **生成历史**：个人 scope = localStorage 无 `teamId`；团队 scope = API `task records`（须有 `result`）；勿用 `Date.now()` 回填缺失 `ts`
+64. **团队上下文**：`getCanvasTeamId()` = `projectTeamId ?? activeTeamId`；`teamIdPayload()` 须用此函数（非仅 `getActiveTeamId()`）
+65. **切换动画**：`ScopeSwitchPanel` + `useScopeSwitchTransition`；出场冻结子树防闪屏；`prefers-reduced-motion` 已降级
+66. **主题切换动画**：`useThemeTransition` + `themeTransition.css`；`flushSync` 内 `toggleTheme`；`prefers-reduced-motion` 或无 `startViewTransition` 时瞬时切换；勿接入 `ScopeSwitchPanel`
+67. **项目设定折叠**：`projectSettingsOpen` 仅 unmount 人物/场景库；**工具栏不得**包进折叠 fragment
+68. **镜头拖排序**：`st-shot-drag-handle` 须用 `<div draggable>`，**禁止** `<button>` + `mousedown preventDefault`
+69. **生成节点 X**：`SCRIPT_TABLE_WIDTH` 须与 `.st-wrapper`（1100px）一致；用 `computeScriptTableGenX()`，勿硬编码 1360 或 `beatCard.x + 400`
+70. **转场 segment**：`segment.*` 不进生成 prompt；UI 仅分隔线，勿恢复完整表单除非产品改需求
+70. **导演参数**：默认 `expanded=false`；产品要求保留展开/收起 + 摘要行，勿改为常显或常隐
+71. **画布右键**：`handlePaneContextMenu` 须跳过 `.react-flow__node`；分镜表 `st-root` 宜 `stopPropagation`
+72. **批量语气**：`batch_adjust_tone` / `ScriptBatchToneModal` 已删除，勿恢复；单镜「审阅提示词」仍保留
+73. **三点菜单关菜单后双击**：关 `gn2-dots-menu` / `cell-menu-portal` 时须 `markSuppressPaneMenu()`，否则双击画布仍弹选取器
+74. **画质增强 Tab 灰底**：`.mode-tab` **禁止**对 `active` 或 `collapsed` 加背景；灰底仅 `.mode-tab:hover`；取消 enhance 须 `panelMode` 回 `referenceMode`
+75. **视频三点画质增强**：用右侧 `cell-dots-submenu` flyout，勿在菜单内纵向插入 `VideoEnhancePanel`（会产生大块空白）
+76. **选中加号常驻**：`plusPinned = selected`；mouseLeave 时若 pinned 勿 `setVisible(false)`
+77. **画布操作方式**：仅在头像菜单 flyout；`NAV_HOVER_OPEN_MS = 140`；勿恢复左栏独立 nav 图标
+78. **画质增强说明**：精细控制用 **ⓘ + 下方说明条**（对齐 `ScriptTableNode`）；勿恢复 hover `?` 上标
+79. **画质增强 Prompt Bar**：compact 面板**无取消钮**；三点 flyout 内仍可有取消
+80. **分享菜单定位**：`left = shareBtnRect.left` 向右展开；四项 `flex-start` 左对齐；勿改回整块居中对齐按钮（会显左空右挤）
+81. **视频增强推荐**：`reasoning` 由后端带完整句；前端勿再拼 `enhanceReasoningPrefix` 前缀
+82. **画风 preset**：单一字段 `qualityPresetId` / `quality_preset_id`；**禁止**恢复 `contentStyle` 或图像卡画风 UI
+83. **VideoStylePicker 触发器**：默认透明底 + `--text-secondary`；加粗仅 hover / `--active` / `--open`；**无** chevron；文案 `画风：{name}` + `IconQualityStyle`
+84. **画风与参考视频**：preset suffix 与 `styleReference` 关键词**可叠加**；视频卡入口二合一，分镜表仍仅 preset 下拉
 
 ---
 
@@ -2470,39 +2524,34 @@ P1-2-lite（意图/UI/采纳/角色配图）已自测通过。下列为 **扩展
 ## 七、新对话建议起手
 
 ```
-继续 AI Studio 开发。请先读 HANDOFF.md 文首「当前总览」+ [`G30_RESUME.md`](G30_RESUME.md) + [`GPU_DEBT.md`](GPU_DEBT.md) + [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md)（若在 AutoDL）+ [`DEPLOY.md`](DEPLOY.md)。
+继续 AI Studio 开发。请先读 HANDOFF.md 文首「当前总览」+ [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md)（若在 AutoDL）+ [`GPU_DEBT.md`](GPU_DEBT.md) + [`DEPLOY.md`](DEPLOY.md)。
 
-【当前状态 · 2026-07-10】
+【硬约束】勿改 Admin 后台文本模型配置；勿重跑 `_enable_text_models.py`（见 HANDOFF 文首）。
+【硬约束】改 `deploy/supervisor-autodl.conf` 勿整文件覆盖；必须保留 comfyui0/comfyui1/backend/nginx/cloudflared 五段（缺 cloudflared → 公网 1033）。
+
+【当前状态 · 2026-07-14】
+- **5090 校准 + Route-C**：A4 `total_shots=3` PASS；对抗 **4/6**（cat1 单线程 `generate_video` 已稳）；Route-C **3/3 图+3/3 视频 completed**（探针 L0/L4 关键词仍 WARN/exit1）
+- **视频审阅 + R2** ✅：公网 `https://velora.seele0420.cloud`；`/review-publish` · `/review` · `/review/:id`；迁移 **026**
 - **G31–G40 + G45 闭环**；**清理债项四件套**（SD / media_access / api_key / Portal）✅
 - **G30 仍有效**：phash · flux-pulid · ltx2-fp4
-- **路线 A/B/C** · Prompt 调试一～三 · Agent Trace A1–A5 · Phase 2/44/43 仍有效
-- 本机已启用：flux-dev / **flux-pulid** / hidream / wan-2.6 / wan-i2v / wan-fun-inpaint / **ltx2-fp4** / **hunyuan-video** / video-enhance-seedvr2
-- pytest **114 passed** · 数据盘 **~270G/300G**（剩余约 **31G**）
-- ~~**G39 AudioGen**~~：✅ 权重 + API + `sound_note` 后混音（跳过 ltx2）；探针 PASS
-- ~~**新 G40 ReActor**~~：✅ 接线 + buffalo_l + 换脸 GPU 复测（Phase7 T2/T3）
-- ~~**G45 视频逐帧换脸**~~：✅ `use_reactor` + 独立 ReActor 帧工作流；探针 PASS
-- ~~**Prompt Phase4–7**~~：✅ 全阶段探针完成
+- 本机已启用：flux-dev / **flux-pulid** / hidream / wan-2.6 / wan-i2v / wan-fun-inpaint / **ltx2-fp4** / **hunyuan-video** / video-enhance-seedvr2；文本 **qwen-plus** 等已 `_enable_text_models`
 - **Seedance（G46）**：**最后再说 / 不排期**
-
-【产品薄弱项 · 见 GPU_DEBT.md】
-1. ~~人物一致性~~：✅ G30（PuLID）
-2. ~~视频运动可控~~：✅ G31
-3. ~~A1 token 成本~~：✅ G32
-4. ~~运镜/景别 UI~~：✅ G33（CameraMotionPicker）
 
 【下轮可选 · 产品/质量】
 1. 主观质量表（G47）
-2. Seedance API（G46）— **最后再说**
+2. 审阅站加固（鉴权/单测/真防下载）— 可选
+3. Seedance API（G46）— **最后再说**
 
 【AutoDL 运维 · 关机后需重启】
-  /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+  bash /root/autodl-tmp/start.sh
   /usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf status
-  # facexlib 权重须在 ComfyUI/models/facexlib/*.pth 根目录（非子目录）
+  # 期望：comfyui0 · comfyui1 · aistudio-backend · nginx · cloudflared 均为 RUNNING
+  # 改前端后：cd frontend && VITE_API_BASE_URL= npm run build
 
 【本地 · mock 回归】
   AGENT_MOCK_GENERATION=true PYTHONPATH=. .venv/bin/python -m pytest tests/ -q
 
-Redis 必开；迁移：alembic upgrade head（**023**，含 sound_note / video_backend）
+Redis 必开；迁移：alembic upgrade head（**026**）
 ```
 
 ---
@@ -2511,6 +2560,7 @@ Redis 必开；迁移：alembic upgrade head（**023**，含 sound_note / video_
 
 | Phase | 日期 | 摘要 |
 |-------|------|------|
+| **Review + R2** | **07-13** | 视频审阅公开站 + R2 直传；迁移 **025/026**；Tunnel `velora.seele0420.cloud`；pytest **121**（✅） |
 | **G40 + Phase4–7** | **07-10** | ReActor `use_reactor` + `buffalo_l`；Phase4–6 GPU 全绿；Phase7 T2/T3 换脸 completed；pytest **105**（✅） |
 | **G39** | 07-09 | AudioGen 权重 + `/api/audio/generate` + `sound_note` 后混音；迁移 **023**（✅） |
 | **G30–G38** | 07-09 | phash / flux-pulid / 运镜 / fun_inpaint / Hunyuan 上线 / Seedance 框架（✅） |

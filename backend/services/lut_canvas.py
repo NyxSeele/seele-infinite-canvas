@@ -81,7 +81,9 @@ def patch_script_table_lut(
     return get_script_table_lut_config(canvas_data, script_table_node_id)
 
 
-def iter_video_nodes_with_source(canvas_data: dict) -> list[dict[str, Any]]:
+def iter_video_nodes_with_source(
+    canvas_data: dict, *, skip_graded: bool = True
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for node in canvas_data.get("nodes") or []:
         if not isinstance(node, dict) or node.get("type") != "video-gen":
@@ -90,6 +92,13 @@ def iter_video_nodes_with_source(canvas_data: dict) -> list[dict[str, Any]]:
         video_url = (data.get("videoUrl") or "").strip()
         if not video_url:
             continue
+        if skip_graded:
+            lut_url = (data.get("lutVideoUrl") or "").strip()
+            lut_status = (data.get("lutStatus") or "").strip()
+            if lut_status == "applying":
+                continue
+            if lut_url and lut_status != "failed":
+                continue
         out.append({"node_id": node.get("id"), "video_url": video_url})
     return out
 

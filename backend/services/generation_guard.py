@@ -9,12 +9,15 @@ from sqlalchemy.orm import Session
 
 from core.config import settings
 from models import Task, User
+from services.task_state import SEEDANCE_PENDING_IDS, reload_task_if_active, should_refund_video_quota
+from services.video_postprocess import schedule_video_postprocess
 from services.generation_slots import (
     acquire_slots,
     release_slot_for_task,
     release_slots,
     set_slot_counts,
 )
+from services.quota_service import refund_quota
 from services.rate_limit import check_user_rate_limit
 
 # 与 tasks.py 中 _ACTIVE_TASK_STATUSES 保持一致
@@ -22,6 +25,7 @@ ACTIVE_TASK_STATUSES = ("pending", "queued", "running", "processing")
 _ACTIVE_STATUSES = ACTIVE_TASK_STATUSES
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "timeout"})
 _STALE_ACTIVE_SECONDS = 900  # 15 分钟未终态视为僵尸任务
+_MEDIA_QUOTA_REFUND_TYPES = frozenset({"image", "video", "video_enhance", "video_lut"})
 
 
 def _utcnow() -> datetime:
@@ -79,6 +83,10 @@ def release_stale_active_tasks(
     )
     for task in rows:
         release_slot_for_task(task)
+        if task.task_type in _MEDIA_QUOTA_REFUND_TYPES and task.user_id:
+            quota_kind = "image" if task.task_type == "image" else "video"
+            if should_refund_video_quota(task):
+                refund_quota(db, task.user_id, quota_kind, 1)
         task.status = "failed"
         task.error = "任务超时或已失效，请重新生成"
         task.result = None
@@ -104,10 +112,27 @@ async def reconcile_active_tasks_from_comfyui(db: Session, user_id: int) -> int:
     )
     updated = 0
     for task in rows:
+        cid = (task.comfyui_prompt_id or "").strip()
+        if (
+            cid in SEEDANCE_PENDING_IDS
+            or cid.startswith("seedance:")
+            or task.task_type == "video_lut"
+        ):
+            continue
+        from services import mock_generation
+
+        if cid == mock_generation.MOCK_PROMPT_ID:
+            continue
         old_status = task.status
         try:
-            exec_info = await comfyui.get_prompt_execution_status(task.comfyui_prompt_id)
+            exec_info = await comfyui.get_prompt_execution_status(
+                task.comfyui_prompt_id,
+                node_url=task.comfyui_node_url,
+            )
         except Exception:
+            continue
+        task = reload_task_if_active(db, task)
+        if task is None:
             continue
         api_status = exec_info.get("status") or task.status
         if api_status == "completed":
@@ -118,6 +143,11 @@ async def reconcile_active_tasks_from_comfyui(db: Session, user_id: int) -> int:
                 task.status = "completed"
                 task.result = result
                 task.error = None
+                if task.task_type == "video":
+                    schedule_video_postprocess(task)
+                from services.gpu_pool import release_gpu_node
+
+                release_gpu_node(task.comfyui_node_url)
                 updated += 1
             elif (_utcnow() - task.created_at).total_seconds() > 600:
                 if old_status in _ACTIVE_STATUSES:
@@ -130,6 +160,9 @@ async def reconcile_active_tasks_from_comfyui(db: Session, user_id: int) -> int:
                 release_slots(task.user_id, team_id=task.team_id)
             task.status = "failed"
             task.error = (exec_info.get("error") or "生成失败")[:2000]
+            from services.gpu_pool import release_gpu_node
+
+            release_gpu_node(task.comfyui_node_url)
             updated += 1
         elif api_status in ("pending", "running", "queued"):
             if task.status != api_status:

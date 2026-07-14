@@ -13,6 +13,9 @@ export async function getExportJob(exportId) {
   return res.data
 }
 
-export function getExportDownloadUrl(exportId) {
-  return `/api/exports/${exportId}/download`
+export function getExportDownloadUrl(exportId, accessToken = null) {
+  const base = `/api/exports/${exportId}/download`
+  if (!accessToken) return base
+  const q = new URLSearchParams({ access_token: accessToken })
+  return `${base}?${q.toString()}`
 }

@@ -31,6 +31,9 @@ async def _apply_sound_note_mix(task_id: str) -> None:
         task = db.get(Task, task_id)
         if not task or task.status != "completed" or not task.result:
             return
+        if "_sfx.mp4" in str(task.result):
+            logger.info("G39 skip already mixed task_id=%s", task_id)
+            return
         note = (task.sound_note or "").strip()
         if not note:
             return

@@ -1,14 +1,17 @@
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from core.dependencies import get_current_user
+from core.dependencies import get_current_user, security, user_from_access_token
 from db.session import get_db
-from models import User
+from models import ExportJob, User
 from services.canvas_access import get_accessible_project
 from services.export_service import (
     create_export_job_record,
@@ -25,6 +28,19 @@ _UPLOAD_ROOT = Path("uploads")
 class CreateExportRequest(BaseModel):
     project_id: str = Field(..., min_length=1)
     script_table_node_id: str = Field(..., min_length=1)
+
+
+def get_export_download_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+    access_token: str | None = Query(None, description="浏览器直链下载用 access token"),
+    db: Session = Depends(get_db),
+) -> User:
+    """Bearer 或 ?access_token= 均可（直链下载无法带 Header）。"""
+    if credentials and credentials.scheme.lower() == "bearer":
+        return get_current_user(credentials, db)
+    if access_token:
+        return user_from_access_token(access_token, db)
+    raise HTTPException(status_code=401, detail="未登录或令牌缺失")
 
 
 @router.post("")
@@ -57,10 +73,15 @@ def get_export(
 @router.get("/{export_id}/download")
 def download_export(
     export_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_export_download_user),
     db: Session = Depends(get_db),
 ):
-    job = get_export_job_for_user(db, export_id, user.id)
+    if user.role == "admin":
+        job = db.get(ExportJob, export_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="导出任务不存在")
+    else:
+        job = get_export_job_for_user(db, export_id, user.id)
     if job.status != "completed" or not job.file_path:
         raise HTTPException(status_code=400, detail="导出尚未完成")
     file_path = (_UPLOAD_ROOT / job.file_path).resolve()

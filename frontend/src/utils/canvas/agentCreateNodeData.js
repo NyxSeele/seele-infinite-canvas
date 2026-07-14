@@ -2,9 +2,14 @@ import { normalizeOutlineScene } from "./outlineSceneMeta"
 import { normalizeScriptRow } from "./scriptTableKeyframes"
 import { withDefaultQualityPreset } from "./scriptQualityPresets"
 import { makeEmptyScriptRow } from "../../components/canvas/ScriptTableNode"
+import { normalizeClarityLabel } from "./aspectRatioLayout"
 
 export const AGENT_OUTLINE_WIDTH = 540
 export const AGENT_SCRIPT_TABLE_WIDTH = 1120
+
+function normalizeAgentClarity(value) {
+  return normalizeClarityLabel(value, "720P")
+}
 
 function normalizeAgentOutlineScenes(scenes, fallbackContent = "") {
   if (Array.isArray(scenes) && scenes.length > 0) {
@@ -64,8 +69,9 @@ export function buildAgentCreateNodeData(action, z) {
       label: data.label || "Image",
       prompt,
       modelId,
-      status: "idle",
-      imgQuality: data.quality || "2K",
+      status: "input",
+      imgQuality: normalizeAgentClarity(data.quality || data.imgQuality || "720P"),
+      imgResolution: normalizeAgentClarity(data.quality || data.imgResolution || data.imgQuality || "720P"),
       imgRatio: data.ratio || "1:1",
       count: 1,
       expectedCount: 1,
@@ -93,8 +99,9 @@ export function buildAgentCreateNodeData(action, z) {
       status: "input",
       vidDuration: typeof duration === "number" ? `${duration}s` : duration,
       vidRatio: data.ratio || data.vidRatio || "16:9",
-      vidQuality: data.quality || data.vidQuality || "720P",
-      referenceMode: data.referenceMode || "freeref",
+      vidQuality: normalizeAgentClarity(data.quality || data.vidQuality || "720P"),
+      referenceMode: data.referenceMode || "t2v",
+      vidAudio: "关闭",
       cameraMove: data.cameraMove || "auto",
       shotScale: data.shotScale || "auto",
       samplingProfile: data.samplingProfile || "fast",

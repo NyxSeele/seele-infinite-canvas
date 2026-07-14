@@ -19,8 +19,8 @@ export function getCanvasPipelineBusy(nodes) {
     }
     if (n.type === "script-table") {
       for (const row of n.data?.rows || []) {
-        if (row.status === "generating") {
-          return { busy: true, reason: "分镜图正在生成中，请稍候再点「继续」" }
+        if (row.status === "generating" || row.directStatus === "generating") {
+          return { busy: true, reason: "分镜图/视频正在生成中，请稍候再点「继续」" }
         }
         if ((row.keyframes || []).some((k) => k.status === "generating")) {
           return { busy: true, reason: "分镜图正在生成中，请稍候再点「继续」" }

@@ -100,24 +100,6 @@ const VideoModelIcon = () => (
   </svg>
 )
 
-function ProjectSettingsChevron({ open }) {
-  return (
-    <svg
-      className="st-project-settings-chevron"
-      width="10"
-      height="10"
-      viewBox="0 0 10 10"
-      aria-hidden
-    >
-      {open ? (
-        <path d="M2 6.5 L5 3.5 L8 6.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      ) : (
-        <path d="M2 3.5 L5 6.5 L8 3.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      )}
-    </svg>
-  )
-}
-
 function deferNodePatch(updateData, patch) {
   queueMicrotask(() => updateData(patch))
 }
@@ -1048,12 +1030,11 @@ export default function ScriptTableNode({ id, data, selected }) {
 
         <button
           type="button"
-          className="st-project-settings-summary nodrag"
+          className={`st-project-settings-summary nodrag${projectSettingsOpen ? " is-open" : ""}`}
           onClick={toggleProjectSettings}
           onPointerDown={sp}
         >
           <span className="st-project-settings-summary-text cn-muted">{projectSettingsSummary}</span>
-          <ProjectSettingsChevron open={projectSettingsOpen} />
         </button>
 
         {projectSettingsOpen && (
@@ -1081,12 +1062,11 @@ export default function ScriptTableNode({ id, data, selected }) {
 
         <button
           type="button"
-          className="st-project-settings-summary nodrag"
+          className={`st-project-settings-summary nodrag${lutSettingsOpen ? " is-open" : ""}`}
           onClick={toggleLutSettings}
           onPointerDown={sp}
         >
           <span className="st-project-settings-summary-text cn-muted">{lutSummaryLabel}</span>
-          <ProjectSettingsChevron open={lutSettingsOpen} />
         </button>
 
         {lutSettingsOpen && (

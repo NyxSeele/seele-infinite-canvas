@@ -2,11 +2,11 @@ import "./CameraMotionPicker.css"
 
 export const CAMERA_MOVE_OPTIONS = [
   { id: "auto", label: "自动", hint: "" },
-  { id: "push_in", label: "推镜", hint: "→" },
-  { id: "pull_out", label: "拉镜", hint: "←" },
-  { id: "pan", label: "摇镜", hint: "↔" },
-  { id: "track", label: "跟镜", hint: "↗" },
-  { id: "static", label: "固定", hint: "·" },
+  { id: "push_in", label: "推镜", hint: "" },
+  { id: "pull_out", label: "拉镜", hint: "" },
+  { id: "pan", label: "摇镜", hint: "" },
+  { id: "track", label: "跟镜", hint: "" },
+  { id: "static", label: "固定", hint: "" },
 ]
 
 export const SHOT_SCALE_OPTIONS = [
@@ -40,7 +40,6 @@ function ChipRow({ label, options, value, onSelect, disabled }) {
               }}
               onPointerDown={sp}
             >
-              {opt.hint ? <span className="cmp-chip-hint" aria-hidden>{opt.hint}</span> : null}
               <span>{opt.label}</span>
             </button>
           )

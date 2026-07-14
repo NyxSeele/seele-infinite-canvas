@@ -26,6 +26,7 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    r2_access: Mapped[bool] = mapped_column(Boolean, default=False)
 
     quota: Mapped["UserQuota | None"] = relationship(
         "UserQuota",

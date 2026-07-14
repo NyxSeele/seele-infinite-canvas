@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react"
-import { IconChevronDown } from "./AgentPanelIcons"
 
 function unescapeStatus(raw) {
   return (raw || "")
@@ -71,11 +70,6 @@ export default function AgentThoughtBlock({ text, live = false, defaultOpen }) {
         aria-expanded={open}
         disabled={live}
       >
-        {!live && (
-          <span className="ap-thoughts__arrow" aria-hidden>
-            <IconChevronDown />
-          </span>
-        )}
         <span className="ap-thoughts__label">{live ? "思考中…" : "思考过程"}</span>
         {live ? (
           <span className="ap-thoughts__dots" aria-hidden>

@@ -3,9 +3,10 @@ import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../../contexts/AuthContext"
 import { useCanvasStore } from "../../stores"
-import { readUserAvatarRaw } from "../../utils/canvas/userAvatar"
-import { saveProfileToServer } from "../../utils/canvas/profileSync"
-import { ensureMediaUrl } from "../../utils/mediaTicket"
+import { readUserAvatarRaw, avatarBackgroundStyle } from "../../utils/canvas/userAvatar"
+import { saveProfileToServer, resolveProfileAvatarUrl } from "../../utils/canvas/profileSync"
+import { refreshMediaTicket } from "../../utils/mediaTicket"
+import api from "../../services/api"
 import TeamBenefitsPanel from "../workspace/TeamBenefitsPanel"
 import TeamSettingsPanel from "../workspace/TeamSettingsPanel"
 import BillingRecordsPanel from "../workspace/BillingRecordsPanel"
@@ -114,10 +115,8 @@ export default function CanvasProfileModal() {
     const raw = user?.avatar_url || readUserAvatarRaw()
     if (!raw) {
       setAvatarUrl("")
-    } else if (raw.startsWith("data:") || raw.startsWith("blob:")) {
-      setAvatarUrl(raw)
     } else {
-      setAvatarUrl(ensureMediaUrl(raw))
+      setAvatarUrl(resolveProfileAvatarUrl(raw))
     }
     setAvatarRemoved(false)
   }, [open, user])
@@ -132,7 +131,18 @@ export default function CanvasProfileModal() {
         avatarUrl: avatarRemoved ? "" : avatarUrl,
         removeAvatar: avatarRemoved,
       })
-      await refreshUser()
+      try {
+        await refreshMediaTicket(api)
+      } catch {
+        /* refreshUser 会再试一次 */
+      }
+      const refreshed = await refreshUser()
+      const savedRaw = refreshed?.avatar_url || ""
+      if (avatarRemoved || !savedRaw) {
+        setAvatarUrl("")
+      } else {
+        setAvatarUrl(resolveProfileAvatarUrl(savedRaw))
+      }
       setSaveToast(t("profile.saved"))
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
       toastTimerRef.current = setTimeout(() => setSaveToast(""), 2200)
@@ -288,7 +298,7 @@ export default function CanvasProfileModal() {
               <section className="cps-avatar-section">
                 <div
                   className="cps-profile-avatar cps-profile-avatar--editable"
-                  style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}
+                  style={avatarBackgroundStyle(avatarUrl)}
                 >
                   {!avatarUrl && avatarLetter}
                 </div>

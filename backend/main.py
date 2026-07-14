@@ -12,11 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from comfyui import client as comfyui
-from core.comfyui_settings import comfyui_http_url
+from core.comfyui_settings import comfyui_http_url, comfyui_nodes_list
 from core.config import settings
 from db.init_db import init_database
 from routers import (
     admin,
+    admin_files,
     admin_models,
     agent,
     assets,
@@ -38,6 +39,8 @@ from routers import (
     import_document,
     style_reference,
     lut,
+    r2_files,
+    review,
 )
 from services.redis_client import get_redis
 from services.local_model_sync import sync_local_models
@@ -53,7 +56,7 @@ async def lifespan(application: FastAPI):
     studio_print("boot", "后端启动")
     studio_print("boot", f"图像模型: {current['image_model']}")
     studio_print("boot", f"视频模型: {current['video_model']}")
-    studio_print("boot", f"ComfyUI: {comfyui_http_url()}")
+    studio_print("boot", f"ComfyUI nodes: {', '.join(comfyui_nodes_list())}")
     if get_redis() is not None:
         cleared = clear_rate_limit_keys()
         studio_print("boot", f"Redis: 已连接（已清除 {cleared} 个限流键）")
@@ -111,6 +114,7 @@ app.include_router(canvas_ws.router)
 app.include_router(user.router)
 app.include_router(admin_models.router)
 app.include_router(admin.router)
+app.include_router(admin_files.router)
 app.include_router(tasks.router)
 app.include_router(prompt.router)
 app.include_router(screenplay.router)
@@ -125,6 +129,8 @@ app.include_router(import_document.router)
 app.include_router(style_reference.router)
 app.include_router(lut.router)
 app.include_router(audio.router)
+app.include_router(r2_files.router)
+app.include_router(review.router)
 
 if not settings.is_production:
     from routers import debug_trace
@@ -147,6 +153,7 @@ async def health():
         "redis": redis_ok,
         "agent_mock_generation": settings.agent_mock_generation,
         "comfyui_url": comfyui_http_url(),
+        "comfyui_nodes": comfyui_nodes_list(),
     }
 
 

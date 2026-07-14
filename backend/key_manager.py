@@ -1,38 +1,27 @@
 """
 key_manager.py
-API Key 读取：优先 model_settings.api_key，兜底环境变量。
+API Key 读取：仅从 model_settings 读取，不兜底环境变量直连。
 """
-
-import os
 
 from sqlalchemy.orm import Session
 
 from db.session import SessionLocal
-from models import ModelSetting
-
 
 from services.api_key_service import get_model_setting_api_key
 
 
 def get_dashscope_api_key(db: Session | None = None) -> str | None:
-    """百炼 / DashScope 统一 API Key（优先 model_settings，兜底 DASHSCOPE_API_KEY）。"""
-    return get_api_key("qwen-plus", "DASHSCOPE_API_KEY", db)
+    """已废弃直连路径：仅读 model_settings 中 qwen-plus 行（若存在）。"""
+    return get_api_key("qwen-plus", db)
 
 
-def get_api_key(model_id: str, env_var: str, db: Session | None = None) -> str | None:
-    """
-    获取模型 API Key。
-    优先读 model_settings.api_key，兜底读环境变量，都没有返回 None。
-    """
+def get_api_key(model_id: str, db: Session | None = None) -> str | None:
+    """获取 model_settings 中指定模型的 API Key；无则返回 None。"""
     own_session = db is None
     if own_session:
         db = SessionLocal()
     try:
-        stored = get_model_setting_api_key(db, model_id)
-        if stored:
-            return stored
-        env_val = os.environ.get(env_var, "").strip()
-        return env_val or None
+        return get_model_setting_api_key(db, model_id)
     finally:
         if own_session:
             db.close()

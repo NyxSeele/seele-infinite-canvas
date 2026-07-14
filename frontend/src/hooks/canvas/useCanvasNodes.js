@@ -246,13 +246,26 @@ export function useCanvasNodes({
     (type, screenPos, extra = {}, placement = {}) => {
       if (isCommitBlocked()) return null
       const flowPos = screenToFlowPosition({ x: screenPos.x, y: screenPos.y })
-      const id = makeId(type)
+      let id = makeId(type)
       const z = bumpZIndex()
+      const videoDefaults =
+        type === "video-gen"
+          ? {
+              referenceMode: "keyframe",
+              panelMode: "keyframe",
+              vidMode: "首尾帧",
+              keyframes: DEFAULT_KEYFRAMES,
+            }
+          : {}
       const nodeData =
         type === "outline"
           ? buildOutlineData({ ...extra, zIndex: z })
-          : buildData({ ...extra, zIndex: z })
+          : buildData({ ...videoDefaults, ...extra, zIndex: z })
       setNodes((ns) => {
+        const existingIds = new Set(ns.map((n) => n.id))
+        while (existingIds.has(id)) {
+          id = makeId(type)
+        }
         const anchorNode = placement.anchorNodeId
           ? ns.find((n) => n.id === placement.anchorNodeId)
           : null

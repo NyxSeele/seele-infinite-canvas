@@ -46,28 +46,27 @@ import { findScriptTableNode, resolveImageQualityPresetId } from "../../utils/ca
 import { ModelDropupItem } from "./CanvasModelDropup"
 import {
   T2V_ONLY,
+  I2V_ONLY,
   isVideoModelCompatible,
   preferredModelForMode,
   reconcileVideoModelAndMode,
   referenceModeForVidMode,
   vidModeFromReferenceMode,
 } from "../../utils/canvas/videoModelCompat"
+import { sizeForAspectRatio, cardDisplayRatio } from "../../utils/canvas/aspectRatioLayout"
 import "./NodeBanner.css"
 import "./PromptRefChips.css"
 import "./VideoReferencePanel.css"
 import "./VideoStylePicker.css"
 
 // ── Image config ──────────────────────────────────────────
-const DEFAULT_IMAGE_RESOLUTIONS = ["1024x1024", "512x512", "768x768"]
+const DEFAULT_IMAGE_QUALITIES = ["480P", "720P", "1080P"]
 const IMAGE_RATIOS = [
   { key: "1:1",   w: 1, h: 1 },
-  { key: "4:3",   w: 4, h: 3 },
-  { key: "3:4",   w: 3, h: 4 },
   { key: "16:9",  w: 16, h: 9 },
   { key: "9:16",  w: 9, h: 16 },
-  { key: "3:2",   w: 3, h: 2 },
-  { key: "2:3",   w: 2, h: 3 },
-  { key: "21:9",  w: 21, h: 9 },
+  { key: "4:3",   w: 4, h: 3 },
+  { key: "3:4",   w: 3, h: 4 },
 ]
 const VIDEO_MODES   = ["文生", "首尾帧", "参考"]
 const VIDEO_RATIOS  = [
@@ -75,8 +74,26 @@ const VIDEO_RATIOS  = [
   { key: "9:16", w: 9, h: 16 },
   { key: "1:1",  w: 1,  h: 1  },
 ]
-const VIDEO_QUALITIES = ["720P", "1080P"]
+const VIDEO_QUALITIES = ["480P", "720P", "1080P"]
 const VIDEO_AUDIOS    = ["开启", "关闭"]
+
+/** 归一化图像/视频清晰度到 480P|720P|1080P */
+function normalizeClarity(value, fallback = "720P") {
+  const raw = String(value || "").trim().toUpperCase().replace("×", "x")
+  if (!raw) return fallback
+  if (raw === "480" || raw === "720" || raw === "1080") return `${raw}P`
+  if (raw === "480P" || raw === "720P" || raw === "1080P") return raw
+  if (raw === "2K") return "720P"
+  if (raw === "3K") return "1080P"
+  // 旧版像素标签（如 1344x768）→ 默认 720
+  if (/^\d+x\d+$/i.test(raw)) return fallback
+  return fallback
+}
+
+/** 清晰度展示：保留 480P / 720P / 1080P */
+function formatClarityLabel(q) {
+  return normalizeClarity(q)
+}
 
 const PARAM_PANEL_CLOSE_EVENT = "canvas-close-param-panels"
 
@@ -232,46 +249,61 @@ function ImagePanelContent({
     )
   }
 
-  const resolutions = capabilities?.resolutions?.length
+  const resolutions = (capabilities?.resolutions?.length
     ? capabilities.resolutions
-    : DEFAULT_IMAGE_RESOLUTIONS
+    : DEFAULT_IMAGE_QUALITIES
+  ).map((q) => normalizeClarity(q))
   const aspectKeys = capabilities?.aspect_ratios?.length
     ? capabilities.aspect_ratios
     : IMAGE_RATIOS.map((r) => r.key)
 
   const ratioOptions = aspectKeys.map(resolveRatioMeta)
+  const activeClarity = normalizeClarity(imgResolution)
 
   return (
     <div ref={panelRef} className="nb-panel nb-panel--image-params" onPointerDown={sp}>
-      <div className="nb-panel-label">{t("canvas.prompt.clarity")}</div>
-      <div className="nb-param-seg">
-        {resolutions.map((res) => (
-          <button
-            key={res}
-            type="button"
-            className={`nb-param-chip nodrag${imgResolution === res ? " nb-param-chip--active" : ""}`}
-            onPointerDown={sp}
-            onClick={(e) => { sp(e); setImgResolution(res) }}
-          >
-            {res}
-          </button>
-        ))}
-      </div>
-      <div className="nb-panel-label nb-panel-label--spaced">{t("canvas.prompt.ratio")}</div>
-      <div className="nb-ratio-grid nb-ratio-grid--image">
-        {ratioOptions.map((r) => (
-          <button
-            key={r.key}
-            type="button"
-            className={`nb-ratio-item nb-ratio-item--image nodrag${imgRatio === r.key ? " nb-ratio-item--active" : ""}`}
-            onPointerDown={sp}
-            onClick={(e) => { sp(e); setImgRatio(r.key) }}
-          >
-            <RatioIcon w={r.w} h={r.h} size={22} />
-            <span>{r.key}</span>
-          </button>
-        ))}
-      </div>
+      {resolutions.length > 0 && (
+        <>
+          <div className="nb-panel-label">{t("canvas.prompt.clarity")}</div>
+          <div className="nb-param-seg">
+            {resolutions.map((res) => (
+              <button
+                key={res}
+                type="button"
+                className={`nb-param-chip nodrag${activeClarity === res ? " nb-param-chip--active" : ""}`}
+                onPointerDown={sp}
+                onClick={(e) => {
+                  sp(e)
+                  setImgResolution(res)
+                }}
+              >
+                {formatClarityLabel(res)}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {ratioOptions.length > 0 && (
+        <>
+          <div className={`nb-panel-label${resolutions.length > 0 ? " nb-panel-label--spaced" : ""}`}>
+            {t("canvas.prompt.ratio")}
+          </div>
+          <div className="nb-ratio-grid nb-ratio-grid--image">
+            {ratioOptions.map((r) => (
+              <button
+                key={r.key}
+                type="button"
+                className={`nb-ratio-item nb-ratio-item--image nodrag${imgRatio === r.key ? " nb-ratio-item--active" : ""}`}
+                onPointerDown={sp}
+                onClick={(e) => { sp(e); setImgRatio(r.key) }}
+              >
+                <RatioIcon w={r.w} h={r.h} size={22} />
+                <span>{r.key}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -279,6 +311,7 @@ function ImagePanelContent({
 function VideoPanelContent({
   capabilities,
   loading,
+  modelId,
   vidMode,
   setVidMode,
   vidRatio,
@@ -320,16 +353,26 @@ function VideoPanelContent({
   const aspectKeys = capabilities?.aspect_ratios ?? []
   const ratioOptions = aspectKeys.map(resolveRatioMeta)
   const durationOptions = (capabilities?.durations ?? []).map((d) => `${d}s`)
+  const qualityOptions = (capabilities?.resolutions?.length
+    ? capabilities.resolutions
+    : VIDEO_QUALITIES
+  ).map((q) => normalizeClarity(q))
+  const modeOptions = VIDEO_MODES.filter((mode) => isVideoModelCompatible(modelId, mode))
+  const showAudio = Boolean(capabilities?.supports_audio)
 
   return (
     <div ref={panelRef} className="nb-panel" onPointerDown={sp}>
-      <div className="nb-panel-label">{t("canvas.prompt.genMode")}</div>
-      <SegmentGroup
-        options={VIDEO_MODES}
-        value={vidMode}
-        onChange={setVidMode}
-        renderLabel={renderVidModeLabel}
-      />
+      {modeOptions.length > 0 && (
+        <>
+          <div className="nb-panel-label">{t("canvas.prompt.genMode")}</div>
+          <SegmentGroup
+            options={modeOptions}
+            value={modeOptions.includes(vidMode) ? vidMode : modeOptions[0]}
+            onChange={setVidMode}
+            renderLabel={renderVidModeLabel}
+          />
+        </>
+      )}
       {ratioOptions.length > 0 && (
         <>
           <div className="nb-panel-label" style={{ marginTop: 8 }}>{t("canvas.prompt.ratio")}</div>
@@ -349,21 +392,34 @@ function VideoPanelContent({
           </div>
         </>
       )}
-      <div className="nb-panel-label" style={{ marginTop: 8 }}>{t("canvas.prompt.clarity")}</div>
-      <SegmentGroup options={VIDEO_QUALITIES} value={vidQuality} onChange={setVidQuality} />
+      {qualityOptions.length > 0 && (
+        <>
+          <div className="nb-panel-label" style={{ marginTop: 8 }}>{t("canvas.prompt.clarity")}</div>
+          <SegmentGroup
+            options={qualityOptions}
+            value={normalizeClarity(vidQuality, qualityOptions[0])}
+            onChange={setVidQuality}
+            renderLabel={formatClarityLabel}
+          />
+        </>
+      )}
       {durationOptions.length > 0 && (
         <>
           <div className="nb-panel-label" style={{ marginTop: 8 }}>{t("canvas.prompt.duration")}</div>
           <SegmentGroup options={durationOptions} value={vidDuration} onChange={setVidDuration} />
         </>
       )}
-      <div className="nb-panel-label" style={{ marginTop: 8 }}>{t("canvas.prompt.audio")}<InfoIcon /></div>
-      <SegmentGroup
-        options={VIDEO_AUDIOS}
-        value={vidAudio}
-        onChange={setVidAudio}
-        renderLabel={renderAudioLabel}
-      />
+      {showAudio && (
+        <>
+          <div className="nb-panel-label" style={{ marginTop: 8 }}>{t("canvas.prompt.audio")}<InfoIcon /></div>
+          <SegmentGroup
+            options={VIDEO_AUDIOS}
+            value={vidAudio}
+            onChange={setVidAudio}
+            renderLabel={renderAudioLabel}
+          />
+        </>
+      )}
     </div>
   )
 }
@@ -413,9 +469,9 @@ export default function CanvasPromptBar({
   // image
   const [imgModel,      setImgModel]      = useState("")
   const [imgModelOpen,  setImgModelOpen]  = useState(false)
-  const [imgQuality,    setImgQuality]    = useState("2K")
+  const [imgQuality,    setImgQuality]    = useState("720P")
   const [imgRatio,      setImgRatio]      = useState("1:1")
-  const [imgResolution, setImgResolution] = useState("1024x1024")
+  const [imgResolution, setImgResolution] = useState("720P")
   const [imgSteps,      setImgSteps]      = useState(20)
   const [imgCfg,        setImgCfg]        = useState(7)
   const [imgPanelOpen,  setImgPanelOpen]  = useState(false)
@@ -424,7 +480,7 @@ export default function CanvasPromptBar({
   const [vidModelOpen,  setVidModelOpen]  = useState(false)
   const [vidMode,       setVidMode]       = useState("首尾帧")
   const [vidRatio,      setVidRatio]      = useState("16:9")
-  const [vidQuality,    setVidQuality]    = useState("1080P")
+  const [vidQuality,    setVidQuality]    = useState("720P")
   const [vidDuration,   setVidDuration]   = useState("5s")
   const [vidAudio,      setVidAudio]      = useState("开启")
   const [vidPanelOpen,  setVidPanelOpen]  = useState(false)
@@ -459,6 +515,20 @@ export default function CanvasPromptBar({
       refSelect.exit()
     }
   }, [refSelect])
+
+  const videoModeSignature = useStore((state) => {
+    if (!selectedNodeId) return ""
+    const n = state.nodeInternals.get(selectedNodeId)
+    if (!n || n.type !== "video-gen") return ""
+    const d = n.data || {}
+    return [
+      d.referenceMode ?? "",
+      d.panelMode ?? "",
+      d.vidMode ?? "",
+      d.modelId ?? "",
+      d.referenceSlotsOpen ? "1" : "0",
+    ].join("|")
+  })
 
   useEffect(() => subscribeVideoEnhanceBridge(() => setEnhanceBridgeTick((n) => n + 1)), [])
 
@@ -529,8 +599,18 @@ export default function CanvasPromptBar({
     if (!imgCapabilities || !isImage) return
     const ar = imgCapabilities.aspect_ratios
     if (ar?.length && !ar.includes(imgRatio)) setImgRatio(ar[0])
-    const res = imgCapabilities.resolutions
-    if (res?.length && !res.includes(imgResolution)) setImgResolution(res[0])
+    const qualities = (imgCapabilities.resolutions?.length
+      ? imgCapabilities.resolutions
+      : DEFAULT_IMAGE_QUALITIES
+    ).map((q) => normalizeClarity(q))
+    const nextClarity = normalizeClarity(imgResolution, qualities[0] || "720P")
+    if (qualities.length && !qualities.includes(nextClarity)) {
+      setImgResolution(qualities[0])
+      setImgQuality(qualities[0])
+    } else if (nextClarity !== imgResolution) {
+      setImgResolution(nextClarity)
+      setImgQuality(nextClarity)
+    }
   }, [imgCapabilities, isImage, imgRatio, imgResolution])
 
   const closePromptOverlays = useCallback(() => {
@@ -574,7 +654,17 @@ export default function CanvasPromptBar({
     if (ar?.length && !ar.includes(vidRatio)) setVidRatio(ar[0])
     const durations = (vidCapabilities.durations ?? []).map((d) => `${d}s`)
     if (durations.length && !durations.includes(vidDuration)) setVidDuration(durations[0])
-  }, [vidCapabilities, isVideo, vidRatio, vidDuration])
+    const qualities = (vidCapabilities.resolutions ?? []).map((q) => normalizeClarity(q))
+    const nextQ = normalizeClarity(vidQuality, qualities[0] || "720P")
+    if (qualities.length && !qualities.includes(nextQ)) {
+      setVidQuality(qualities[0])
+    } else if (nextQ !== vidQuality) {
+      setVidQuality(nextQ)
+    }
+    if (!vidCapabilities.supports_audio && vidAudio === "开启") {
+      setVidAudio("关闭")
+    }
+  }, [vidCapabilities, isVideo, vidRatio, vidDuration, vidQuality, vidAudio])
 
   // 与节点 data.prompt 同步（含旧字段 content）
   useEffect(() => {
@@ -595,10 +685,14 @@ export default function CanvasPromptBar({
     }
     if (n.data?.modelId) {
       if (isImage) setImgModel(n.data.modelId)
-      else if (isVideo) setVidModel(n.data.modelId)
       else if (isText) setTextModel(n.data.modelId)
     }
-    if (typeof n.data?.count === "number" && n.data.count >= 1) {
+    if (isVideo) {
+      setCount(1)
+      if (n.data?.onUpdate && n.data.count !== 1) {
+        n.data.onUpdate(selectedNodeId, { count: 1, expectedCount: 1 })
+      }
+    } else if (typeof n.data?.count === "number" && n.data.count >= 1) {
       setCount(n.data.count)
     }
     if (isText) {
@@ -616,33 +710,54 @@ export default function CanvasPromptBar({
         vidMode: rawMode,
         models: videoModels,
       })
+      const resolvedModel =
+        reconciled.modelId
+        || preferredModelForMode(reconciled.vidMode, videoModels)
+        || videoModels[0]?.id
+        || ""
       setVidMode(reconciled.vidMode)
-      if (reconciled.modelId) setVidModel(reconciled.modelId)
+      setVidModel(resolvedModel)
+      const nextReferenceMode = referenceModeForVidMode(reconciled.vidMode)
+      const keepEnhance = n.data?.panelMode === "enhance"
+      const nextPanelMode = keepEnhance ? "enhance" : nextReferenceMode
       if (
         n.data?.onUpdate
         && (
           reconciled.vidMode !== rawMode
-          || (reconciled.modelId && reconciled.modelId !== modelFromNode)
+          || resolvedModel !== modelFromNode
+          || n.data?.referenceMode !== nextReferenceMode
+          || (!keepEnhance && n.data?.panelMode !== nextReferenceMode)
         )
       ) {
         n.data.onUpdate(selectedNodeId, {
           vidMode: reconciled.vidMode,
-          referenceMode: referenceModeForVidMode(reconciled.vidMode),
-          ...(reconciled.modelId ? { modelId: reconciled.modelId } : {}),
+          referenceMode: nextReferenceMode,
+          panelMode: nextPanelMode,
+          ...(resolvedModel ? { modelId: resolvedModel } : {}),
         })
       }
       setReferenceSlotsExpanded(!!n.data?.referenceSlotsOpen)
       if (n.data?.vidRatio) setVidRatio(n.data.vidRatio)
-      if (n.data?.vidQuality) setVidQuality(n.data.vidQuality)
+      if (n.data?.vidQuality) setVidQuality(normalizeClarity(n.data.vidQuality))
       if (n.data?.vidDuration) setVidDuration(n.data.vidDuration)
       if (n.data?.vidAudio) setVidAudio(n.data.vidAudio)
     }
     if (isImage) {
-      if (n.data?.imgQuality) setImgQuality(n.data.imgQuality)
+      if (n.data?.imgQuality) setImgQuality(normalizeClarity(n.data.imgQuality))
       if (n.data?.imgRatio) setImgRatio(n.data.imgRatio)
-      if (n.data?.imgResolution) setImgResolution(n.data.imgResolution)
+      else setImgRatio("1:1")
+      if (n.data?.imgResolution) {
+        const clarity = normalizeClarity(n.data.imgResolution || n.data.imgQuality)
+        setImgResolution(clarity)
+        setImgQuality(clarity)
+      } else if (n.data?.imgQuality) {
+        setImgResolution(normalizeClarity(n.data.imgQuality))
+      } else {
+        setImgResolution("720P")
+        setImgQuality("720P")
+      }
     }
-  }, [selectedNodeId, selectedNodeType, getNode, isImage, isVideo, isText, videoModels])
+  }, [selectedNodeId, selectedNodeType, getNode, isImage, isVideo, isText, videoModels, videoModeSignature])
 
   useEffect(() => {
     if (!selectedNodeId || !promptBarSync?.nodeId) return
@@ -681,17 +796,18 @@ export default function CanvasPromptBar({
 
   // Sync model selection when API data arrives or node type changes
   useEffect(() => {
-    if (isText  && !textModel  && textModels.length  > 0) setTextModel(textModels[0].id)
-    if (isImage && !imgModel   && imageModels.length > 0) setImgModel(imageModels[0].id)
-    if (isVideo && !vidModel   && videoModels.length > 0) {
-      setVidModel(preferredModelForMode(vidMode, videoModels) || videoModels[0].id)
-    }
-  }, [isText, isImage, isVideo, textModels, imageModels, videoModels, vidMode, vidModel])
+    if (isText && !textModel && textModels.length > 0) setTextModel(textModels[0].id)
+    if (isImage && !imgModel && imageModels.length > 0) setImgModel(imageModels[0].id)
+  }, [isText, isImage, textModels, imageModels, textModel, imgModel])
 
   const node = mounted ? getNode(selectedNodeId) : null
 
   const scriptTableNode = useMemo(() => {
     if (!isImage || !node) return null
+    const ref = node.data?.scriptTableRef
+    if (ref?.nodeId) {
+      return getNodes().find((n) => n.id === ref.nodeId) || null
+    }
     return findScriptTableNode(getNodes())
   }, [isImage, node, getNodes])
 
@@ -713,6 +829,63 @@ export default function CanvasPromptBar({
     node.data.onUpdate(selectedNodeId, patch)
   }, [selectedNodeId, node])
 
+  // 切换选中节点后，先从节点 hydrate 本地 state，再允许写回，避免用旧比例污染新节点
+  const imageParamsReadyRef = useRef(false)
+  const videoParamsReadyRef = useRef(false)
+  const [imageSyncTick, setImageSyncTick] = useState(0)
+  const [videoSyncTick, setVideoSyncTick] = useState(0)
+  useEffect(() => {
+    imageParamsReadyRef.current = false
+    videoParamsReadyRef.current = false
+    const t = window.setTimeout(() => {
+      imageParamsReadyRef.current = true
+      videoParamsReadyRef.current = true
+      setImageSyncTick((n) => n + 1)
+      setVideoSyncTick((n) => n + 1)
+    }, 0)
+    return () => window.clearTimeout(t)
+  }, [selectedNodeId])
+
+  // 选比例/清晰度时写回节点（供生成使用）；卡片预览尺寸在生成完成后才同步
+  useEffect(() => {
+    if (!isImage || !selectedNodeId || !node?.data?.onUpdate) return
+    if (!imageParamsReadyRef.current) return
+    const clarity = normalizeClarity(imgResolution || imgQuality)
+    if (
+      node.data.imgRatio === imgRatio
+      && normalizeClarity(node.data.imgResolution || node.data.imgQuality) === clarity
+    ) {
+      return
+    }
+    node.data.onUpdate(selectedNodeId, {
+      imgRatio,
+      imgResolution: clarity,
+      imgQuality: clarity,
+    })
+  }, [isImage, selectedNodeId, imgRatio, imgResolution, imgQuality, node, imageSyncTick])
+
+  // 视频参数同样实时写回，卡片比例/提交读 node.data
+  useEffect(() => {
+    if (!isVideo || !selectedNodeId || !node?.data?.onUpdate) return
+    if (!videoParamsReadyRef.current) return
+    const clarity = normalizeClarity(vidQuality)
+    const patch = {
+      vidRatio,
+      vidQuality: clarity,
+      vidDuration,
+      vidAudio,
+    }
+    if (
+      node.data.vidRatio === patch.vidRatio
+      && normalizeClarity(node.data.vidQuality) === patch.vidQuality
+      && node.data.vidDuration === patch.vidDuration
+      && node.data.vidAudio === patch.vidAudio
+    ) {
+      return
+    }
+    node.data.onUpdate(selectedNodeId, patch)
+  }, [isVideo, selectedNodeId, vidRatio, vidQuality, vidDuration, vidAudio, node, videoSyncTick])
+
   const handleVidModeChange = useCallback((mode) => {
     const reconciled = reconcileVideoModelAndMode({
       modelId: vidModel,
@@ -726,6 +899,7 @@ export default function CanvasPromptBar({
     syncVideoNodePatch({
       vidMode: reconciled.vidMode,
       referenceMode: referenceModeForVidMode(reconciled.vidMode),
+      panelMode: referenceModeForVidMode(reconciled.vidMode),
       ...(reconciled.modelId ? { modelId: reconciled.modelId } : {}),
     })
   }, [syncVideoNodePatch, vidModel, videoModels])
@@ -933,7 +1107,6 @@ export default function CanvasPromptBar({
       console.warn("handleSend: model 未选择或模型列表未加载")
       return
     }
-    const ratio = IMAGE_RATIOS.find(r => r.key === imgRatio) || IMAGE_RATIOS[0]
     let safeVidDuration = vidDuration
     if (isVideo && vidCapabilities?.durations?.length) {
       const opts = vidCapabilities.durations.map((d) => `${d}s`)
@@ -1021,21 +1194,24 @@ export default function CanvasPromptBar({
       ? "keyframe"
       : referenceModeForVidMode(vidMode)
     const refUrls = imageRefs.map((r) => r.imageUrl).filter(Boolean)
+    const clarity = normalizeClarity(imgResolution || imgQuality, "720P")
     const generateParams = {
       prompt: promptForSubmit,
       mentions: mentionPayload,
       modelId: model,
       count,
-      imgQuality, imgRatio, imgResolution, imgSteps, imgCfg,
+      imgQuality: clarity,
+      imgRatio,
+      imgResolution: clarity,
+      imgSteps,
+      imgCfg,
       vidMode,
       vidRatio,
-      vidQuality,
+      vidQuality: normalizeClarity(vidQuality, "720P"),
       vidDuration: safeVidDuration,
       vidAudio,
       generationMode,
       referenceMode,
-      width: isImage ? ratio.w * 256 : 1280,
-      height: isImage ? ratio.h * 256 : 720,
       referenceImage: refUrl || null,
       referenceImages: isImage ? imageRefs : undefined,
       reference_images: isImage && refUrls.length ? refUrls : undefined,
@@ -1268,10 +1444,18 @@ export default function CanvasPromptBar({
   if (!supportsPromptBar) return null
 
   const [vpX, vpY, zoom] = transform
-  const nodeW       = node.width ?? node.data?.cardWidth ?? (
-    (isText || isImage || isVideo || isTextResponse) ? 400 : 280
+  const imageFallback = sizeForAspectRatio(cardDisplayRatio(node?.data, "image"), 280)
+  const videoFallback = sizeForAspectRatio(cardDisplayRatio(node?.data, "video"), 225)
+  const nodeW = node.width ?? node.data?.cardWidth ?? (
+    isImage ? imageFallback.width
+      : isVideo ? videoFallback.width
+        : (isText || isTextResponse) ? 400 : 280
   )
-  const nodeH       = node.height ?? 340
+  const nodeH = node.height ?? node.data?.cardHeight ?? (
+    isImage ? imageFallback.height + 60
+      : isVideo ? videoFallback.height + 60
+        : 340
+  )
   const screenX     = node.position.x * zoom + vpX
   const screenY     = node.position.y * zoom + vpY
   const nodeCenterX = screenX + (nodeW * zoom) / 2
@@ -1323,6 +1507,8 @@ export default function CanvasPromptBar({
     vidCapabilities && (
       (vidCapabilities.aspect_ratios?.length > 0)
       || (vidCapabilities.durations?.length > 0)
+      || (vidCapabilities.resolutions?.length > 0)
+      || Boolean(vidCapabilities.supports_audio)
     )
   )
 
@@ -1334,7 +1520,11 @@ export default function CanvasPromptBar({
         imgRatio={imgRatio}
         setImgRatio={setImgRatio}
         imgResolution={imgResolution}
-        setImgResolution={setImgResolution}
+        setImgResolution={(v) => {
+          const clarity = normalizeClarity(v)
+          setImgResolution(clarity)
+          setImgQuality(clarity)
+        }}
       />
     )
     : null
@@ -1344,12 +1534,13 @@ export default function CanvasPromptBar({
       <VideoPanelContent
         capabilities={vidCapabilities}
         loading={vidCapLoading}
+        modelId={vidModel}
         vidMode={vidMode}
         setVidMode={handleVidModeChange}
         vidRatio={vidRatio}
         setVidRatio={setVidRatio}
         vidQuality={vidQuality}
-        setVidQuality={setVidQuality}
+        setVidQuality={(v) => setVidQuality(normalizeClarity(v))}
         vidDuration={vidDuration}
         setVidDuration={setVidDuration}
         vidAudio={vidAudio}
@@ -1471,7 +1662,7 @@ export default function CanvasPromptBar({
 
     if (isImage) {
       const ratioMeta = resolveRatioMeta(imgRatio)
-      const paramSummary = `${imgResolution} · ${imgRatio}`
+      const paramSummary = `${formatClarityLabel(normalizeClarity(imgResolution))} · ${imgRatio}`
       return wrapBottombar(
         <div className="nb-bottombar">
           {/* Model */}
@@ -1564,6 +1755,28 @@ export default function CanvasPromptBar({
                         })
                         return
                       }
+                      if (I2V_ONLY.has(id) && vidMode === "文生") {
+                        setVidModel(id)
+                        setVidMode("参考")
+                        syncVideoNodePatch({
+                          modelId: id,
+                          referenceMode: "freeref",
+                          panelMode: "freeref",
+                          vidMode: "参考",
+                        })
+                        return
+                      }
+                      if (id === "ltx2-fp4" && vidMode === "首尾帧") {
+                        setVidModel(id)
+                        setVidMode("参考")
+                        syncVideoNodePatch({
+                          modelId: id,
+                          referenceMode: "freeref",
+                          panelMode: "freeref",
+                          vidMode: "参考",
+                        })
+                        return
+                      }
                       setVidModel(id)
                       syncVideoNodePatch({ modelId: id })
                     }}
@@ -1598,9 +1811,11 @@ export default function CanvasPromptBar({
                         ? t("canvas.prompt.freeref")
                         : t("canvas.prompt.keyframe"),
                     vidCapabilities?.aspect_ratios?.length ? vidRatio : null,
-                    vidQuality,
+                    (vidCapabilities?.resolutions?.length
+                      ? formatClarityLabel(normalizeClarity(vidQuality))
+                      : null),
                     vidCapabilities?.durations?.length ? vidDuration : null,
-                    vidModel === "ltx2-fp4"
+                    vidCapabilities?.supports_audio
                       ? (vidAudio === "开启" ? "有声" : "静音")
                       : null,
                   ].filter(Boolean).join(" · ")}
@@ -1612,8 +1827,6 @@ export default function CanvasPromptBar({
         )}
         <div style={{flex:1}} />
         <MicBtn />
-        <div className="nb-bottom-sep" />
-        <CountDropup />
         <CreditSend credits="75~225" />
       </div>
     )

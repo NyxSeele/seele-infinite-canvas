@@ -149,13 +149,12 @@ def resolve_image_reference(
     prev_image_url: str | None,
     reference_face_url: str | None,
 ) -> tuple[str | None, float | None]:
-    """flux-pulid 用固定正脸；flux-dev 沿用上一镜链式 reference。"""
+    """flux-pulid 用固定正脸；flux-dev 不支持参考图/img2img，仅靠 prompt 连续性。"""
     if IMAGE_MODEL == "flux-pulid":
         if reference_face_url:
             return reference_face_url, None
         return None, None
-    if built.get("use_visual_reference") and prev_image_url:
-        return abs_media_url(prev_image_url), built.get("img2img_denoise") or 0.7
+    # flux-dev / 其它无 img2img 能力的模型：禁止传 reference，避免 400
     return None, None
 
 

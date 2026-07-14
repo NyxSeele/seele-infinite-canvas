@@ -48,34 +48,42 @@ export default function TextWorkflowEdgePlugs({ nodeId, nodeType, disabled = fal
       />
 
       <div
-        className={`gn2-plus-left-zone nodrag${leftVisible || plusPinned ? " gn2-plus-zone--visible" : ""}`}
+        className={`gn2-plus-left-zone${leftVisible || plusPinned ? " gn2-plus-zone--visible" : ""}`}
         onMouseEnter={() => setLeftVisible(true)}
         onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }}
-        onClick={(e) => {
-          e.stopPropagation()
-          canvasActions?.openPickerAt(e.clientX - 20, e.clientY, {
-            toLeft: true,
-            targetNodeId: nodeId,
-          })
-        }}
       >
-        <div className="gn2-plus-btn-visual">+</div>
+        <div
+          className="gn2-plus-btn-visual nodrag nopan"
+          onClick={(e) => {
+            e.stopPropagation()
+            canvasActions?.openPickerAt(e.clientX - 20, e.clientY, {
+              toLeft: true,
+              targetNodeId: nodeId,
+            })
+          }}
+        >
+          +
+        </div>
       </div>
 
       <div
-        className={`gn2-plus-right-zone nodrag${rightVisible || plusPinned ? " gn2-plus-zone--visible" : ""}`}
+        className={`gn2-plus-right-zone${rightVisible || plusPinned ? " gn2-plus-zone--visible" : ""}`}
         onMouseEnter={() => setRightVisible(true)}
         onMouseLeave={() => { if (!plusPinned) setRightVisible(false) }}
-        onClick={(e) => {
-          e.stopPropagation()
-          canvasActions?.openPickerAt(e.clientX + 20, e.clientY, {
-            fromEdge: true,
-            sourceNodeId: nodeId,
-            sourceNodeType: nodeType,
-          })
-        }}
       >
-        <div className="gn2-plus-btn-visual">+</div>
+        <div
+          className="gn2-plus-btn-visual nodrag nopan"
+          onClick={(e) => {
+            e.stopPropagation()
+            canvasActions?.openPickerAt(e.clientX + 20, e.clientY, {
+              fromEdge: true,
+              sourceNodeId: nodeId,
+              sourceNodeType: nodeType,
+            })
+          }}
+        >
+          +
+        </div>
       </div>
     </>
   )

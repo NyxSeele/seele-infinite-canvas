@@ -45,6 +45,7 @@ from comfyui.client import (
     LTX2_CKPT,
     build_hunyuan_video_workflow,
     build_ltx2_fp4_t2v_workflow,
+    build_ltx2_fp4_i2v_workflow,
     build_wan_flf2v_workflow,
     build_wan_fun_inpaint_workflow,
     build_wan_i2v_workflow,
@@ -81,6 +82,7 @@ ALL_MODEL_KEYS = (
     "wan-fun-inpaint",
     "hunyuan",
     "ltx2-fp4",
+    "ltx2-fp4-i2v",
 )
 BASELINE_KEYS = frozenset({"flux-dev"})
 
@@ -110,6 +112,7 @@ PROBE_TARGETS: dict[str, ProbeTarget] = {
     ),
     "hunyuan": ProbeTarget("hunyuan", "hunyuan-video", baseline=False, category="video"),
     "ltx2-fp4": ProbeTarget("ltx2-fp4", "ltx2-fp4", baseline=False, category="video"),
+    "ltx2-fp4-i2v": ProbeTarget("ltx2-fp4-i2v", "ltx2-fp4", baseline=False, category="video"),
 }
 
 
@@ -228,6 +231,18 @@ def build_workflow_for_target(target: ProbeTarget) -> dict:
         return build_ltx2_fp4_t2v_workflow(
             PROBE_PROMPT,
             PROBE_NEGATIVE,
+            width=width_vid,
+            height=height_vid,
+            duration_sec=PROBE_DURATION_SEC,
+            seed=PROBE_SEED,
+            model_filename=LTX2_CKPT,
+        )
+
+    if target.key == "ltx2-fp4-i2v":
+        return build_ltx2_fp4_i2v_workflow(
+            PROBE_PROMPT,
+            PROBE_NEGATIVE,
+            PROBE_I2V_IMAGE,
             width=width_vid,
             height=height_vid,
             duration_sec=PROBE_DURATION_SEC,

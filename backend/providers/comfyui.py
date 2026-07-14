@@ -127,7 +127,10 @@ def _first_enabled_text_model_id() -> str | None:
         db.close()
 
 
-def _comfyui_base() -> str:
+def _comfyui_base(node_url: str | None = None) -> str:
+    url = (node_url or "").strip().rstrip("/")
+    if url:
+        return url
     return comfyui_http_url()
 
 
@@ -243,10 +246,13 @@ def _decode_reference_base64(image_ref: str) -> tuple[bytes, str, str]:
     return data, mime, f"ref_upload{ext}"
 
 
-async def _upload_image_bytes(data: bytes, filename: str, mime: str) -> str:
+async def _upload_image_bytes(
+    data: bytes, filename: str, mime: str, *, base_url: str | None = None
+) -> str:
+    comfy_base = _comfyui_base(base_url)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
-            f"{_comfyui_base()}/upload/image",
+            f"{comfy_base}/upload/image",
             files={"image": (filename, data, mime)},
         )
     print(
@@ -268,9 +274,11 @@ async def _upload_image_bytes(data: bytes, filename: str, mime: str) -> str:
     return str(name)
 
 
-async def _upload_image_from_base64(image_ref: str) -> str:
+async def _upload_image_from_base64(
+    image_ref: str, *, base_url: str | None = None
+) -> str:
     data, mime, filename = _decode_reference_base64(image_ref)
-    return await _upload_image_bytes(data, filename, mime)
+    return await _upload_image_bytes(data, filename, mime, base_url=base_url)
 
 
 async def _upload_reference_image(
@@ -278,6 +286,7 @@ async def _upload_reference_image(
     *,
     db: Session | None = None,
     user: User | None = None,
+    base_url: str | None = None,
 ) -> str:
     """上传参考图到 ComfyUI，支持 data URL / base64、本地路径、http URL。"""
     image_ref = _normalize_reference_url(image_ref)
@@ -286,8 +295,10 @@ async def _upload_reference_image(
     if image_ref.startswith("blob:"):
         raise ComfyUIError("参考图为 blob URL，请先上传到服务器后再生成")
     if _is_data_url(image_ref):
-        return await _upload_image_from_base64(image_ref)
-    return await _upload_image_from_url(image_ref, db=db, user=user)
+        return await _upload_image_from_base64(image_ref, base_url=base_url)
+    return await _upload_image_from_url(
+        image_ref, db=db, user=user, base_url=base_url
+    )
 
 
 def _resolve_local_upload_path(image_url: str, *, db: Session, user: User) -> Path:
@@ -305,13 +316,14 @@ async def _upload_image_from_url(
     *,
     db: Session | None = None,
     user: User | None = None,
+    base_url: str | None = None,
 ) -> str:
     """将参考图 URL/本地路径上传到 ComfyUI，返回 ComfyUI 侧 filename。"""
     image_url = _normalize_reference_url(image_url)
     if image_url.startswith("blob:"):
         raise ComfyUIError("参考图为 blob URL，请先上传到服务器后再生成")
     if _is_data_url(image_url):
-        return await _upload_image_from_base64(image_url)
+        return await _upload_image_from_base64(image_url, base_url=base_url)
 
     if image_url.startswith("/uploads/") or image_url.startswith("/api/uploads/") or (
         not image_url.startswith("http")
@@ -327,7 +339,7 @@ async def _upload_image_from_url(
         suffix = local_path.suffix or ".jpg"
         mime = "image/jpeg" if suffix.lower() in (".jpg", ".jpeg") else "image/png"
         filename = local_path.name
-        return await _upload_image_bytes(data, filename, mime)
+        return await _upload_image_bytes(data, filename, mime, base_url=base_url)
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         img_res = await client.get(image_url)
@@ -337,7 +349,7 @@ async def _upload_image_from_url(
         data = img_res.content
         mime = img_res.headers.get("content-type", "image/jpeg")
         filename = image_url.split("/")[-1].split("?", 1)[0] or "ref.jpg"
-    return await _upload_image_bytes(data, filename, mime)
+    return await _upload_image_bytes(data, filename, mime, base_url=base_url)
 
 
 def _build_shared_nodes(
@@ -1223,8 +1235,14 @@ async def submit_image_prompt(
     use_reactor: bool = False,
     db: Session | None = None,
     user: User | None = None,
-) -> tuple[str, dict]:
-    """提交 ComfyUI 工作流，返回 (prompt_id, trace_meta)。"""
+    task_id: str | None = None,
+) -> tuple[str, dict, str]:
+    """提交 ComfyUI 工作流，返回 (prompt_id, trace_meta, node_url)。"""
+    from services.gpu_pool import get_gpu_pool
+
+    pool = get_gpu_pool()
+    gpu_node = pool.get_available_node(required_vram=16, prefer_short=True)
+    node_url = gpu_node.comfyui_url.rstrip("/")
     original_prompt = prompt_text
     if skip_translate:
         translated_prompt = prompt_text
@@ -1250,7 +1268,7 @@ async def submit_image_prompt(
     if primary_ref:
         try:
             reference_filename = await _upload_reference_image(
-                primary_ref, db=db, user=user
+                primary_ref, db=db, user=user, base_url=node_url
             )
             studio_print(
                 "comfyui-image",
@@ -1313,11 +1331,11 @@ async def submit_image_prompt(
         f"workflow 已构造 model={model_filename} {width}x{height} nodes={len(workflow)}",
     )
 
-    studio_print("comfyui-image", f"POST {_comfyui_base()}/prompt …")
+    studio_print("comfyui-image", f"POST {node_url}/prompt …")
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             response = await client.post(
-                f"{_comfyui_base()}/prompt",
+                f"{node_url}/prompt",
                 json={"prompt": workflow},
             )
     except httpx.ConnectError as exc:
@@ -1350,7 +1368,9 @@ async def submit_image_prompt(
     if not prompt_id:
         studio_print("comfyui-image", f"无 prompt_id: {data}")
         raise ComfyUIError("ComfyUI 未返回 prompt_id")
-    studio_print("comfyui-image", f"ComfyUI 返回 prompt_id={prompt_id}")
+    studio_print("comfyui-image", f"ComfyUI 返回 prompt_id={prompt_id} node={node_url}")
+    occupy_task_id = task_id or str(prompt_id)
+    pool.mark_busy_by_url(node_url, occupy_task_id, 30)
     try:
         from services import comfyui_progress
         from comfyui.client import count_workflow_sampler_stages
@@ -1359,10 +1379,12 @@ async def submit_image_prompt(
         comfyui_progress.set_expected_stages(str(prompt_id), stages)
     except Exception:
         pass
-    return str(prompt_id), trace_meta
+    return str(prompt_id), trace_meta, node_url
 
 
-async def get_image_result(prompt_id: str) -> str | None | dict:
+async def get_image_result(
+    prompt_id: str, node_url: str | None = None
+) -> str | None | dict:
     """
     查询 ComfyUI 历史记录。
     - 未完成: None
@@ -1371,7 +1393,9 @@ async def get_image_result(prompt_id: str) -> str | None | dict:
     """
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            response = await client.get(f"{_comfyui_base()}/history/{prompt_id}")
+            response = await client.get(
+                f"{_comfyui_base(node_url)}/history/{prompt_id}"
+            )
     except httpx.ConnectError:
         return {"error": "ComfyUI 连接失败"}
     except httpx.TimeoutException:
@@ -1422,8 +1446,8 @@ async def get_image_result(prompt_id: str) -> str | None | dict:
         return None
 
 
-def get_image_url(filename: str) -> str:
-    """ComfyUI 标准图片访问 URL（内网）。"""
-    from urllib.parse import quote
+def get_image_url(filename: str, *, node_url: str | None = None) -> str:
+    """ComfyUI 标准图片访问 URL（经 backend /api/view 代理）。"""
+    from comfyui.client import _view_url_for_media
 
-    return f"{_comfyui_base()}/view?filename={quote(filename, safe='')}"
+    return _view_url_for_media({"filename": filename, "type": "output"}, node_url=node_url)

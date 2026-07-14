@@ -10,7 +10,7 @@ import { sortNodesByWorkflow } from "./organizeCanvasNodes"
 import { organizeCanvasNodes } from "./organizeCanvasNodes"
 import { normalizeTextResponseNode } from "./nodeNormalize"
 import { parseTargetDurationSec } from "./videoDurationIntent"
-import { waitForNodeCondition } from "./canvasPipelineState"
+import { getCanvasPipelineBusy, waitForNodeCondition } from "./canvasPipelineState"
 import { findScriptTableForOutline } from "./scriptTableSegments"
 import { splitShotBeats } from "./scriptPromptApi"
 import {
@@ -244,14 +244,37 @@ export function inferPipelineStage(nodes, edges = []) {
   return "start_text_generation"
 }
 
+function rowImageGenerating(row) {
+  if (!row) return false
+  if (row.directStatus === "generating" || row.status === "generating") return true
+  const kfs = Array.isArray(row.keyframes) ? row.keyframes : []
+  return kfs.some((kf) => kf?.status === "generating")
+}
+
+function rowVideoGenerating(row, allNodes = []) {
+  if (!row) return false
+  const vidId = row.directVideoGenNodeId || row.videoGenNodeId
+  if (!vidId) return false
+  if (rowDirectVideoReady(row, allNodes) || rowVideoReady(row, allNodes)) return false
+  return allNodes.some(
+    (vn) =>
+      vn.id === vidId
+      && vn.type === "video-gen"
+      && (vn.data?.status === "generating" || vn.data?.status === "pending")
+  )
+}
+
+/** 按镜号单线程：出图→视频；生成中 wait；当前镜视频完成前不进下一镜 */
 export function inferProductionStage(scriptNode, allNodes = []) {
   const rows = scriptNode?.data?.rows || []
   if (rows.length === 0) return "wait_script_table"
   for (const row of rows) {
+    if (rowImageGenerating(row)) return "wait_storyboard"
+    if (rowVideoGenerating(row, allNodes)) return "wait_video"
     if (!rowDirectImageReady(row)) return "generate_storyboard"
-  }
-  for (const row of rows) {
-    if (!rowDirectVideoReady(row, allNodes)) return "generate_video"
+    if (!rowDirectVideoReady(row, allNodes) && !rowVideoReady(row, allNodes)) {
+      return "generate_video"
+    }
   }
   return "pipeline_complete"
 }
@@ -264,33 +287,54 @@ function findPrimaryScriptTable(nodes, edges = []) {
   return tables[tables.length - 1]
 }
 
-function resolveScriptTableRow(scriptNode, rowId, nodes = []) {
+function resolveScriptTableRow(scriptNode, rowIdOrData, nodes = []) {
   const rows = scriptNode?.data?.rows || []
+  const data = rowIdOrData && typeof rowIdOrData === "object" ? rowIdOrData : null
+  const rowId = data
+    ? (data.row_id || data.rowId || null)
+    : rowIdOrData
   if (rowId) return rows.find((r) => r.id === rowId) || null
+  const shotNum = data?.shot_number ?? data?.shotNumber
+  if (shotNum != null && shotNum !== "") {
+    const hit = rows.find((r) => String(r.shotNumber) === String(shotNum))
+    if (hit) return hit
+  }
   return (
-    rows.find((r) => !rowDirectImageReady(r))
-    || rows.find((r) => !rowDirectVideoReady(r, nodes))
+    findNextRowForStoryboard(scriptNode, nodes)
+    || findNextRowForVideo(scriptNode, nodes)
     || rows[0]
     || null
   )
 }
 
 function findNextRowForBeats(scriptNode, allNodes = []) {
-  return (scriptNode?.data?.rows || []).find((row) => {
-    if (!row.beatCardNodeId) return true
+  for (const row of scriptNode?.data?.rows || []) {
+    if (rowImageGenerating(row) || rowVideoGenerating(row, allNodes)) return null
+    if (!row.beatCardNodeId) return row
     const card = allNodes.find((n) => n.id === row.beatCardNodeId)
-    return card && !beatCardHasBeatPrompts(card.data)
-  }) || null
+    if (card && !beatCardHasBeatPrompts(card.data)) return row
+    if (!rowDirectImageReady(row)) return null
+    if (!rowDirectVideoReady(row, allNodes) && !rowVideoReady(row, allNodes)) return null
+  }
+  return null
 }
 
-function findNextRowForStoryboard(scriptNode) {
-  return (scriptNode?.data?.rows || []).find((r) => !rowDirectImageReady(r)) || null
+function findNextRowForStoryboard(scriptNode, allNodes = []) {
+  for (const r of scriptNode?.data?.rows || []) {
+    if (rowImageGenerating(r) || rowVideoGenerating(r, allNodes)) return null
+    if (!rowDirectImageReady(r)) return r
+    if (!rowDirectVideoReady(r, allNodes) && !rowVideoReady(r, allNodes)) return null
+  }
+  return null
 }
 
 function findNextRowForVideo(scriptNode, nodes = []) {
-  return (scriptNode?.data?.rows || []).find(
-    (r) => rowDirectImageReady(r) && !rowDirectVideoReady(r, nodes)
-  ) || null
+  for (const r of scriptNode?.data?.rows || []) {
+    if (rowImageGenerating(r) || rowVideoGenerating(r, nodes)) return null
+    if (!rowDirectImageReady(r)) return null
+    if (!rowDirectVideoReady(r, nodes) && !rowVideoReady(r, nodes)) return r
+  }
+  return null
 }
 
 function edgesBetween(nodes, a, b) {
@@ -304,6 +348,11 @@ function edgesBetween(nodes, a, b) {
 export async function executeAgentPipelineStep(action, ctx) {
   const step = action.step
   const data = action.data || {}
+  const nodes = typeof ctx?.getNodes === "function" ? ctx.getNodes() : []
+  const busy = getCanvasPipelineBusy(nodes)
+  if (busy.busy) {
+    return { ok: false, error: busy.reason || "当前步骤仍在生成中，请稍候" }
+  }
 
   switch (step) {
     case "create_text_note":
@@ -793,7 +842,7 @@ export function createAgentPipelineContext({
     }
 
     const row = data.row_id
-      ? resolveScriptTableRow(scriptNode, data.row_id, getNodes())
+      ? resolveScriptTableRow(scriptNode, data, getNodes())
       : findNextRowForBeats(scriptNode, getNodes())
     if (!row) return { ok: false, error: "没有需要拆分节拍的镜头" }
 
@@ -848,8 +897,8 @@ export function createAgentPipelineContext({
     const tableId = scriptNode.id
 
     const row = data.row_id
-      ? resolveScriptTableRow(scriptNode, data.row_id, getNodes())
-      : findNextRowForStoryboard(scriptNode)
+      ? resolveScriptTableRow(scriptNode, data, getNodes())
+      : findNextRowForStoryboard(scriptNode, getNodes())
     if (!row) return { ok: false, error: "没有待出图的镜头" }
     if (rowDirectImageReady(row)) {
       return { ok: true, nodeIds: [tableId] }
@@ -859,25 +908,37 @@ export function createAgentPipelineContext({
     if (!modelId) return { ok: false, error: "未配置图像模型，请在分镜表选择模型" }
 
     const started = await runScriptTableRowGenerate?.(tableId, row.id, { modelId })
-    if (!started) {
+    if (!started?.ok) {
       return { ok: false, error: `镜 ${row.shotNumber ?? 1} 出图启动失败` }
     }
 
+    const triggerAt = Number(started?.triggerAt) || Date.now()
     const waitResult = await waitForNodeCondition(
       getNodes,
       tableId,
       (node) => {
         const r = (node.data?.rows || []).find((x) => x.id === row.id)
         if (!r) return { done: false }
-        if (r.directStatus === "generating") return { done: false }
-        if (r.directStatus === "failed") {
+        const imgId = r.directImageGenNodeId
+        const imgNode = imgId
+          ? getNodes().find((n) => n.id === imgId && n.type === "image-gen")
+          : null
+        const imgStatus = imgNode?.data?.status
+        if (r.directStatus === "generating" || imgStatus === "pending" || imgStatus === "generating") {
+          return { done: false }
+        }
+        if (r.directStatus === "failed" || imgStatus === "failed" || imgStatus === "error") {
           return {
             done: true,
             ok: false,
-            error: r.error || `镜 ${row.shotNumber ?? 1} 出图失败`,
+            error: r.error || imgNode?.data?.error || `镜 ${row.shotNumber ?? 1} 出图失败`,
           }
         }
         if (rowDirectImageReady(r)) {
+          const completedAt = Number(imgNode?.data?.completedAt) || 0
+          if (triggerAt > 0 && (!completedAt || completedAt <= triggerAt)) {
+            return { done: false }
+          }
           return { done: true, ok: true, nodeIds: [tableId] }
         }
         return { done: false }
@@ -900,7 +961,7 @@ export function createAgentPipelineContext({
     const tableId = scriptNode.id
 
     const row = data.row_id
-      ? resolveScriptTableRow(scriptNode, data.row_id, getNodes())
+      ? resolveScriptTableRow(scriptNode, data, getNodes())
       : findNextRowForVideo(scriptNode, getNodes())
     if (!row) return { ok: false, error: "没有待生成视频的镜头" }
     if (!rowDirectImageReady(row)) {
@@ -918,30 +979,43 @@ export function createAgentPipelineContext({
       lane: "direct",
       direct: true,
     })
-    if (!started) {
+    if (!started?.ok && !started?.videoGenId) {
       return { ok: false, error: `镜 ${row.shotNumber ?? 1} 视频启动失败` }
     }
 
-    const nodesAfter = getNodes()
-    const rowAfter = nodesAfter
-      .find((n) => n.id === tableId)
-      ?.data?.rows?.find((r) => r.id === row.id)
-    const videoGenId = rowAfter?.directVideoGenNodeId
+    let videoGenId = started?.videoGenId || null
+    if (!videoGenId) {
+      // setNodes 异步：短轮询等待 directVideoGenNodeId
+      const deadline = Date.now() + 3000
+      while (!videoGenId && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50))
+        const rowAfter = getNodes()
+          .find((n) => n.id === tableId)
+          ?.data?.rows?.find((r) => r.id === row.id)
+        videoGenId = rowAfter?.directVideoGenNodeId || null
+      }
+    }
     if (!videoGenId) {
       return { ok: false, error: "视频节点未创建" }
     }
 
+    const triggerAt = Number(started?.triggerAt) || Date.now()
     const waitResult = await waitForNodeCondition(
       getNodes,
       videoGenId,
       (node) => {
         if (!node || node.type !== "video-gen") return { done: false }
         const status = node.data?.status
+        const pending = node.data?.pendingTrigger
+        // 复用旧节点时：pendingTrigger 清空后、尚未进入 generating 前，勿把旧 completed 当成功
+        if (pending != null) return { done: false }
         if (status === "generating" || status === "pending") return { done: false }
         if (status === "completed") {
+          const completedAt = Number(node.data?.completedAt) || 0
+          if (!completedAt || completedAt <= triggerAt) return { done: false }
           return { done: true, ok: true, nodeIds: [tableId, videoGenId] }
         }
-        if (status === "failed") {
+        if (status === "failed" || status === "error") {
           return {
             done: true,
             ok: false,

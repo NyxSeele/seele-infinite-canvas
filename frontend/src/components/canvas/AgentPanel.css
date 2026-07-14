@@ -1584,6 +1584,9 @@ body:has(.rf-page--light) .ap-cast-pick-popover__asset:hover:not(:disabled) {
 }
 
 .ap-history-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   border: none;
   background: transparent;
   color: var(--ap-muted);
@@ -1593,6 +1596,7 @@ body:has(.rf-page--light) .ap-cast-pick-popover__asset:hover:not(:disabled) {
   border-radius: 6px;
   font-family: inherit;
   flex-shrink: 0;
+  line-height: 1;
 }
 
 .ap-header .ap-history-back {

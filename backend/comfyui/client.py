@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 
 from core.logging_setup import studio_print
-from core.comfyui_settings import comfyui_http_url, comfyui_ws_url
+from core.comfyui_settings import comfyui_http_url, comfyui_nodes_list, comfyui_node_port, comfyui_ws_url
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,35 @@ HTTP_TIMEOUT = 5.0
 COMFYUI_UNREACHABLE_MSG = (
     "ComfyUI 服务未启动或无法连接，请先启动 ComfyUI"
 )
+
+
+def _resolve_comfyui_base(node_url: str | None = None) -> str:
+    """优先使用任务绑定的 ComfyUI 实例 URL。"""
+    url = (node_url or "").strip().rstrip("/")
+    if url:
+        return url
+    return comfyui_http_url().rstrip("/")
+
+
+def _acquire_gpu_node_url(
+    *,
+    task_id: str | None = None,
+    estimated_duration_sec: int = 120,
+    required_vram: int = 0,
+    prefer_short: bool = True,
+) -> str:
+    """从 GPUPool 选取节点（上传与 prompt 须使用同一 URL）。"""
+    from services.gpu_pool import get_gpu_pool
+
+    pool = get_gpu_pool()
+    node = pool.get_available_node(
+        required_vram=required_vram,
+        prefer_short=prefer_short,
+        estimated_duration_sec=estimated_duration_sec,
+    )
+    return node.comfyui_url.rstrip("/")
+
+
 HISTORY_LIMIT = 50
 DEFAULT_IMAGE_MODEL = "v1-5-pruned-emaonly.safetensors"
 DEFAULT_VIDEO_MODEL = "ltx-video-2b-v0.9.5.safetensors"
@@ -61,6 +90,14 @@ HUNYUAN_CKPT = "hunyuan_video_t2v_720p_bf16.safetensors"
 HUNYUAN_VAE = "hunyuan_video_vae_bf16.safetensors"
 HUNYUAN_CLIP_L = "clip_l.safetensors"
 HUNYUAN_CLIP_LLAVA = "llava_llama3_fp8_scaled.safetensors"
+HUNYUAN15_CKPT = "hunyuanvideo1.5_720p_t2v_fp16.safetensors"
+HUNYUAN15_VAE = "hunyuanvideo15_vae_fp16.safetensors"
+HUNYUAN15_CLIP_QWEN = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+HUNYUAN15_CLIP_BYT5 = "byt5_small_glyphxl_fp16.safetensors"
+HUNYUAN15_DISTILLED_STEPS = 12
+HUNYUAN15_CFG_DISTILLED = 1.0
+HUNYUAN15_CFG_DEFAULT = 6.0
+HY_CACHE = "74"
 WAN_T5_ENCODER = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 LTX_T5_ENCODER = "t5xxl_fp16.safetensors"
 LTX2_CKPT = "ltx-2-19b-dev-fp4.safetensors"
@@ -70,6 +107,9 @@ LTX2_DISTILLED_LORA = "ltx-2-19b-distilled-lora-384.safetensors"
 LTX2_CAMERA_LORA = "ltx-2-19b-lora-camera-control-dolly-left.safetensors"
 LTX2_WORKFLOW_TEMPLATE = (
     Path(__file__).resolve().parent / "workflows" / "ltx2_fp4_t2v_api.json"
+)
+LTX2_I2V_WORKFLOW_TEMPLATE = (
+    Path(__file__).resolve().parent / "workflows" / "ltx2_fp4_i2v_api.json"
 )
 LTX_T5_DOWNLOAD_HINT = (
     "LTX 视频需要 T5 文本编码器。请将 t5xxl_fp16.safetensors 放入 "
@@ -162,7 +202,9 @@ STYLE_SUFFIXES = {
 }
 
 DEFAULT_VIDEO_NEGATIVE = (
-    "worst quality, inconsistent motion, blurry, jittery, distorted"
+    "worst quality, inconsistent motion, blurry, jittery, distorted, "
+    "bad anatomy, extra hands, extra fingers, extra limbs, "
+    "deformed hands, malformed arms"
 )
 
 COMFY_MODELS_BASE = Path(r"D:\ComfyUI\ComfyUI\models")
@@ -302,7 +344,7 @@ HY_SAMPLER = "71"
 HY_DECODE = "72"
 HY_SAVE = "73"
 
-_object_info_cache: dict | None = None
+_object_info_cache_by_node: dict[str, dict] = {}
 
 
 def get_active_models() -> dict[str, str]:
@@ -465,15 +507,16 @@ def select_model(model_type: str, model_filename: str, config_path: Path | None 
     }
 
 
-async def _fetch_object_info() -> dict:
-    global _object_info_cache
-    if _object_info_cache is not None:
-        return _object_info_cache
+async def _fetch_object_info(node_url: str | None = None) -> dict:
+    base = _resolve_comfyui_base(node_url)
+    cached = _object_info_cache_by_node.get(base)
+    if cached is not None:
+        return cached
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        res = await client.get(f"{COMFYUI_URL}/object_info")
+        res = await client.get(f"{base}/object_info")
         res.raise_for_status()
-        _object_info_cache = res.json()
-    return _object_info_cache
+        _object_info_cache_by_node[base] = res.json()
+    return _object_info_cache_by_node[base]
 
 
 def _has_node(class_type: str, info: dict | None = None) -> bool:
@@ -505,10 +548,16 @@ def _can_output_mp4(info: dict) -> bool:
     return _has_node("CreateVideo", info) and _has_node("SaveVideo", info)
 
 
-async def ensure_video_mp4_capable() -> None:
-    info = await _fetch_object_info()
-    if _can_output_mp4(info):
-        return
+async def ensure_video_mp4_capable(node_url: str | None = None) -> None:
+    nodes = (
+        [_resolve_comfyui_base(node_url)]
+        if node_url
+        else comfyui_nodes_list()
+    )
+    for url in nodes:
+        info = await _fetch_object_info(url)
+        if _can_output_mp4(info):
+            return
     extra = ""
     if not VHS_PLUGIN_PATH.is_dir():
         extra = f"\n未检测到插件目录：{VHS_PLUGIN_PATH}"
@@ -733,6 +782,7 @@ def _base_task(
     history_data: dict | None = None,
     images: list | None = None,
     videos: list | None = None,
+    comfyui_node_url: str | None = None,
 ) -> dict:
     meta = _extract_workflow_meta(workflow)
     started_at, completed_at, duration = (None, None, None)
@@ -769,6 +819,7 @@ def _base_task(
         "duration": duration,
         "started_at": started_at,
         "completed_at": completed_at,
+        "comfyui_node_url": comfyui_node_url,
     }
 
 
@@ -968,20 +1019,31 @@ def _load_ltx2_fp4_template() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _load_ltx2_fp4_i2v_template() -> dict:
+    path = LTX2_I2V_WORKFLOW_TEMPLATE
+    if not path.is_file():
+        raise FileNotFoundError(f"LTX2 I2V workflow 模板不存在: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _strip_ltx2_audio_branch(workflow: dict) -> None:
     """Remove AV concat/separate/audio VAE nodes and rewire video-only sampling."""
     # Drop audio-only + AV glue nodes (IDs from ltx2_fp4_t2v_api.json).
     for node_id in ("106", "109", "116", "117", "123", "124", "127"):
         workflow.pop(node_id, None)
 
+    # I2V templates condition empty latents via 203/204; fall back to 108/118 for T2V.
+    stage1_latent = ["203", 0] if "203" in workflow else ["108", 0]
+    stage2_latent = ["204", 0] if "204" in workflow else ["118", 0]
+
     if "98" in workflow:
-        workflow["98"]["inputs"]["latent"] = ["108", 0]
+        workflow["98"]["inputs"]["latent"] = stage1_latent
     if "113" in workflow:
-        workflow["113"]["inputs"]["latent_image"] = ["108", 0]
+        workflow["113"]["inputs"]["latent_image"] = stage1_latent
     if "102" in workflow:
         workflow["102"]["inputs"]["latent"] = ["113", 0]
     if "119" in workflow:
-        workflow["119"]["inputs"]["latent_image"] = ["118", 0]
+        workflow["119"]["inputs"]["latent_image"] = stage2_latent
     if "125" in workflow:
         workflow["125"]["inputs"]["samples"] = ["119", 1]
     if "126" in workflow:
@@ -1046,6 +1108,67 @@ def build_ltx2_fp4_t2v_workflow(
     return workflow
 
 
+
+def build_ltx2_fp4_i2v_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    image_filename: str,
+    width: int = 848,
+    height: int = 480,
+    duration_sec: int = 5,
+    seed: int | None = None,
+    *,
+    model_filename: str | None = None,
+    ckpt_name: str | None = None,
+    audio: bool = True,
+) -> dict:
+    """
+    LTX-2 19B fp4 图生视频（云绘 fp4 I2V 工作流 API 平坦子图）。
+    基于 T2V 模板，经 LTXVImgToVideoInplace 将首帧条件写入两阶段 latent。
+    audio=False 时旁路删除音画支路，仅输出静音视频。
+    """
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    workflow = _load_ltx2_fp4_i2v_template()
+    positive = str(positive_prompt).strip()
+    negative = str(negative_prompt).strip()
+    out_w, out_h = align_ltx_dimensions(width, height)
+    latent_w, latent_h = align_ltx_dimensions(out_w // 2, out_h // 2)
+    length = ltx_video_length(duration_sec)
+    ckpt = (ckpt_name or model_filename or LTX2_CKPT).strip() or LTX2_CKPT
+    image_name = str(image_filename or "").strip()
+    if not image_name:
+        raise ValueError("LTX-2 I2V 需要 image_filename")
+
+    workflow["121"]["inputs"]["text"] = positive
+    workflow["110"]["inputs"]["text"] = negative
+    workflow["111"]["inputs"]["width"] = out_w
+    workflow["111"]["inputs"]["height"] = out_h
+    workflow["108"]["inputs"]["width"] = latent_w
+    workflow["108"]["inputs"]["height"] = latent_h
+    workflow["108"]["inputs"]["length"] = length
+    if "106" in workflow:
+        workflow["106"]["inputs"]["frames_number"] = length
+        workflow["106"]["inputs"]["frame_rate"] = VIDEO_FPS
+    workflow["107"]["inputs"]["frame_rate"] = float(VIDEO_FPS)
+    workflow["122"]["inputs"]["fps"] = float(VIDEO_FPS)
+    workflow["115"]["inputs"]["noise_seed"] = int(seed)
+    workflow["114"]["inputs"]["noise_seed"] = 0
+    workflow["200"]["inputs"]["image"] = image_name
+
+    for node_id in ("99", "123", "138"):
+        if node_id in workflow:
+            workflow[node_id]["inputs"]["ckpt_name"] = ckpt
+    if "99" in workflow:
+        workflow["99"]["inputs"]["text_encoder"] = LTX2_GEMMA_ENCODER
+
+    if not audio:
+        _strip_ltx2_audio_branch(workflow)
+
+    return workflow
+
+
 def build_ltx_video_workflow_compat(
     positive_prompt: str,
     negative_prompt: str,
@@ -1069,7 +1192,7 @@ def build_ltx_video_workflow_compat(
     negative = str(negative_prompt).strip()
     ckpt = (model_filename or LTX_CKPT).strip() or LTX_CKPT
 
-    node_info = info if info is not None else (_object_info_cache or {})
+    node_info = info if info is not None else {}
     workflow = {
         VC_CKPT: {
             "class_type": "CheckpointLoaderSimple",
@@ -1963,6 +2086,17 @@ HUNYUAN_DEFAULT_WIDTH = 1280
 HUNYUAN_DEFAULT_HEIGHT = 720
 
 
+def _is_hunyuan_15_checkpoint(model_filename: str | None) -> bool:
+    name = (model_filename or "").strip().lower()
+    if not name:
+        return True  # 默认走 1.5
+    if "hunyuanvideo1.5" in name or "hunyuan_video_1.5" in name or "hunyuanvideo15" in name:
+        return True
+    if name == HUNYUAN_CKPT.lower() or "hunyuan_video_t2v" in name:
+        return False
+    return "1.5" in name or name == HUNYUAN15_CKPT.lower()
+
+
 def build_hunyuan_video_workflow(
     positive_prompt: str,
     negative_prompt: str,
@@ -1973,29 +2107,71 @@ def build_hunyuan_video_workflow(
     *,
     model_filename: str | None = None,
     steps: int | None = None,
+    use_distilled: bool = False,
+    cfg_distilled: bool = False,
+    use_cache: bool = False,
 ) -> dict:
     """
-    HunyuanVideo T2V：UNETLoader + DualCLIPLoader + EmptyHunyuanLatentVideo
-    + KSampler + VAEDecode + VHS_VideoCombine（ComfyUI 原生节点）。
-    默认 720p、steps=50。
+    HunyuanVideo T2V。
+    - 1.5（默认）：UNET + DualCLIP(hunyuan_video_15) + EmptyHunyuanVideo15Latent
+    - 原版 13B：DualCLIP(hunyuan_video) + EmptyHunyuanLatentVideo
+    use_distilled=True → steps=12；cfg_distilled=True → cfg=1.0；
+    use_cache=True → MagCache（不可用时回退 EasyCache）接在 KSampler 前。
     """
     if seed is None:
         seed = random.randint(0, 2**32)
 
-    ckpt = (model_filename or HUNYUAN_CKPT).strip() or HUNYUAN_CKPT
+    use_15 = _is_hunyuan_15_checkpoint(model_filename)
+    if use_15:
+        ckpt = (model_filename or HUNYUAN15_CKPT).strip() or HUNYUAN15_CKPT
+    else:
+        ckpt = (model_filename or HUNYUAN_CKPT).strip() or HUNYUAN_CKPT
+
     length = video_frame_length(duration_sec)
     positive = str(positive_prompt).strip()
     negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
-    sample_steps = int(steps) if steps is not None else HUNYUAN_DEFAULT_STEPS
+
+    if use_distilled and steps is None:
+        sample_steps = HUNYUAN15_DISTILLED_STEPS
+    else:
+        sample_steps = int(steps) if steps is not None else HUNYUAN_DEFAULT_STEPS
     if sample_steps < 1:
-        sample_steps = HUNYUAN_DEFAULT_STEPS
+        sample_steps = HUNYUAN15_DISTILLED_STEPS if use_distilled else HUNYUAN_DEFAULT_STEPS
+
+    cfg_value = HUNYUAN15_CFG_DISTILLED if cfg_distilled else HUNYUAN15_CFG_DEFAULT
 
     studio_print(
         "comfyui-video",
-        f"Hunyuan workflow: {ckpt} {width}x{height} length={length} steps={sample_steps}",
+        f"Hunyuan workflow: {ckpt} v={'1.5' if use_15 else '13b'} "
+        f"{width}x{height} length={length} steps={sample_steps} cfg={cfg_value} "
+        f"cache={use_cache} distilled={use_distilled}",
     )
 
-    return {
+    if use_15:
+        dual_clip = {
+            "class_type": "DualCLIPLoader",
+            "inputs": {
+                "clip_name1": HUNYUAN15_CLIP_QWEN,
+                "clip_name2": HUNYUAN15_CLIP_BYT5,
+                "type": "hunyuan_video_15",
+            },
+        }
+        vae_name = HUNYUAN15_VAE
+        latent_type = "EmptyHunyuanVideo15Latent"
+    else:
+        dual_clip = {
+            "class_type": "DualCLIPLoader",
+            "inputs": {
+                "clip_name1": HUNYUAN_CLIP_L,
+                "clip_name2": HUNYUAN_CLIP_LLAVA,
+                "type": "hunyuan_video",
+            },
+        }
+        vae_name = HUNYUAN_VAE
+        latent_type = "EmptyHunyuanLatentVideo"
+
+    model_src = HY_UNET
+    workflow: dict = {
         HY_UNET: {
             "class_type": "UNETLoader",
             "inputs": {
@@ -2003,17 +2179,10 @@ def build_hunyuan_video_workflow(
                 "weight_dtype": "default",
             },
         },
-        HY_DUAL_CLIP: {
-            "class_type": "DualCLIPLoader",
-            "inputs": {
-                "clip_name1": HUNYUAN_CLIP_L,
-                "clip_name2": HUNYUAN_CLIP_LLAVA,
-                "type": "hunyuan_video",
-            },
-        },
+        HY_DUAL_CLIP: dual_clip,
         HY_VAE: {
             "class_type": "VAELoader",
-            "inputs": {"vae_name": HUNYUAN_VAE},
+            "inputs": {"vae_name": vae_name},
         },
         HY_CLIP_POS: {
             "class_type": "CLIPTextEncode",
@@ -2030,7 +2199,7 @@ def build_hunyuan_video_workflow(
             },
         },
         HY_EMPTY_LATENT: {
-            "class_type": "EmptyHunyuanLatentVideo",
+            "class_type": latent_type,
             "inputs": {
                 "width": int(width),
                 "height": int(height),
@@ -2038,33 +2207,51 @@ def build_hunyuan_video_workflow(
                 "batch_size": 1,
             },
         },
-        HY_SAMPLER: {
-            "class_type": "KSampler",
+    }
+
+    if use_cache:
+        # MagCache（Zehong-Ma/ComfyUI-MagCache）；无自定义节点时可用 EasyCache 原生替代
+        workflow[HY_CACHE] = {
+            "class_type": "MagCache",
             "inputs": {
-                "seed": int(seed),
-                "steps": sample_steps,
-                "cfg": 6.0,
-                "sampler_name": "euler",
-                "scheduler": "simple",
-                "denoise": 1.0,
                 "model": [HY_UNET, 0],
-                "positive": [HY_CLIP_POS, 0],
-                "negative": [HY_CLIP_NEG, 0],
-                "latent_image": [HY_EMPTY_LATENT, 0],
+                "model_type": "hunyuan_video1.5",
+                "magcache_thresh": 0.06,
+                "retention_ratio": 0.2,
+                "magcache_K": 2,
+                "start_step": 0,
+                "end_step": -1,
             },
-        },
-        HY_DECODE: {
-            "class_type": "VAEDecode",
-            "inputs": {
-                "samples": [HY_SAMPLER, 0],
-                "vae": [HY_VAE, 0],
-            },
-        },
-        HY_SAVE: {
-            "class_type": "VHS_VideoCombine",
-            "inputs": _vhs_video_combine_inputs(HY_DECODE),
+        }
+        model_src = HY_CACHE
+
+    workflow[HY_SAMPLER] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": int(seed),
+            "steps": sample_steps,
+            "cfg": float(cfg_value),
+            "sampler_name": "euler",
+            "scheduler": "simple",
+            "denoise": 1.0,
+            "model": [model_src, 0],
+            "positive": [HY_CLIP_POS, 0],
+            "negative": [HY_CLIP_NEG, 0],
+            "latent_image": [HY_EMPTY_LATENT, 0],
         },
     }
+    workflow[HY_DECODE] = {
+        "class_type": "VAEDecode",
+        "inputs": {
+            "samples": [HY_SAMPLER, 0],
+            "vae": [HY_VAE, 0],
+        },
+    }
+    workflow[HY_SAVE] = {
+        "class_type": "VHS_VideoCombine",
+        "inputs": _vhs_video_combine_inputs(HY_DECODE),
+    }
+    return workflow
 
 
 # 会通过 ComfyUI progress 事件上报步数的采样节点
@@ -2098,7 +2285,11 @@ async def _log_and_post_video_workflow(
     height: int,
     duration: int,
     mode: str,
-) -> tuple[str, str, dict]:
+    task_id: str | None = None,
+    estimated_duration_sec: int = 180,
+    required_vram: int = 0,
+    node_url: str | None = None,
+) -> tuple[str, str, dict, str]:
     workflow_json = json.dumps(workflow, ensure_ascii=False, indent=2)
     logger.info(
         "submit_%s_video_prompt workflow (truncated): %s",
@@ -2114,7 +2305,14 @@ async def _log_and_post_video_workflow(
     for line in workflow_json.splitlines():
         print(f"[AIStudio:comfyui-video] {line}", flush=True)
     studio_print("comfyui-video", "── workflow JSON 结束 ──")
-    prompt_id, used_client = await _post_workflow(workflow, client_id)
+    prompt_id, used_client, posted_node = await _post_workflow(
+        workflow,
+        client_id,
+        task_id=task_id,
+        estimated_duration_sec=estimated_duration_sec,
+        required_vram=required_vram,
+        node_url=node_url,
+    )
     try:
         from services import comfyui_progress
 
@@ -2131,9 +2329,9 @@ async def _log_and_post_video_workflow(
         pass
     studio_print(
         "comfyui-video",
-        f"[{backend}] 已提交 prompt_id={prompt_id} client_id={used_client}",
+        f"[{backend}] 已提交 prompt_id={prompt_id} client_id={used_client} node={posted_node}",
     )
-    return prompt_id, used_client, workflow
+    return prompt_id, used_client, workflow, posted_node
 
 
 async def _resolve_video_workflow(
@@ -2148,7 +2346,6 @@ async def _resolve_video_workflow(
     model_filename: str | None = None,
 ) -> dict:
     ckpt = (model_filename or LTX_CKPT).strip() or LTX_CKPT
-    global _object_info_cache
     info = await _fetch_object_info()
 
     use_official = (
@@ -2197,7 +2394,7 @@ async def _resolve_video_workflow(
     )
 
 
-async def upload_image_from_url(image_url: str) -> str:
+async def upload_image_from_url(image_url: str, *, node_url: str | None = None) -> str:
     """
     将服务器本地路径或 http URL 的图片上传到 ComfyUI，返回 ComfyUI filename。
     支持:
@@ -2215,7 +2412,7 @@ async def upload_image_from_url(image_url: str) -> str:
         mime = "image/jpeg" if suffix.lower() in (".jpg", ".jpeg") else "image/png"
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(
-                f"{COMFYUI_URL}/upload/image",
+                f"{_resolve_comfyui_base(node_url)}/upload/image",
                 files={"image": (local_path.name, data, mime)},
             )
             res.raise_for_status()
@@ -2228,20 +2425,20 @@ async def upload_image_from_url(image_url: str) -> str:
         ct = img_res.headers.get("content-type", "image/jpeg")
         fname = image_url.split("/")[-1] or "ref.jpg"
         res = await client.post(
-            f"{COMFYUI_URL}/upload/image",
+            f"{_resolve_comfyui_base(node_url)}/upload/image",
             files={"image": (fname, data, ct)},
         )
         res.raise_for_status()
         return res.json().get("name") or ""
 
 
-async def upload_image_base64(image_b64: str) -> str:
+async def upload_image_base64(image_b64: str, *, node_url: str | None = None) -> str:
     if "," in image_b64:
         image_b64 = image_b64.split(",", 1)[1]
     data = base64.b64decode(image_b64)
     async with httpx.AsyncClient(timeout=30.0) as client:
         res = await client.post(
-            f"{COMFYUI_URL}/upload/image",
+            f"{_resolve_comfyui_base(node_url)}/upload/image",
             files={"image": ("upload.png", data, "image/png")},
         )
         res.raise_for_status()
@@ -2252,12 +2449,33 @@ async def upload_image_base64(image_b64: str) -> str:
     return name
 
 
-async def _post_workflow(workflow: dict, client_id: str | None) -> tuple[str, str]:
+async def _post_workflow(
+    workflow: dict,
+    client_id: str | None,
+    *,
+    task_id: str | None = None,
+    estimated_duration_sec: int = 120,
+    required_vram: int = 0,
+    prefer_short: bool = True,
+    node_url: str | None = None,
+) -> tuple[str, str, str]:
     if client_id is None:
         client_id = str(uuid.uuid4())
     payload = {"prompt": workflow, "client_id": client_id}
+    from services.gpu_pool import get_gpu_pool
+
+    pool = get_gpu_pool()
+    if node_url:
+        base_url = node_url.rstrip("/")
+    else:
+        node = pool.get_available_node(
+            required_vram=required_vram,
+            prefer_short=prefer_short,
+            estimated_duration_sec=estimated_duration_sec,
+        )
+        base_url = (node.comfyui_url or comfyui_http_url()).rstrip("/")
     async with httpx.AsyncClient(timeout=60.0) as client:
-        res = await client.post(f"{COMFYUI_URL}/prompt", json=payload)
+        res = await client.post(f"{base_url}/prompt", json=payload)
         res.raise_for_status()
         data = res.json()
     if data.get("node_errors"):
@@ -2267,7 +2485,9 @@ async def _post_workflow(workflow: dict, client_id: str | None) -> tuple[str, st
     prompt_id = data.get("prompt_id")
     if not prompt_id:
         raise ValueError("ComfyUI 未返回 prompt_id")
-    return prompt_id, client_id
+    occupy_task_id = task_id or str(prompt_id)
+    pool.mark_busy_by_url(base_url, occupy_task_id, estimated_duration_sec)
+    return str(prompt_id), client_id, base_url
 
 
 async def submit_prompt(
@@ -2280,7 +2500,7 @@ async def submit_prompt(
     client_id: str | None = None,
     raw_prompt: bool = False,
     reference_image: str | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     if raw_prompt:
         positive = str(prompt).strip()
         negative = str(negative_prompt).strip()
@@ -2296,16 +2516,21 @@ async def submit_prompt(
     )
     if reference_image:
         try:
-            ref_filename = await upload_image_from_url(reference_image)
+            reserved_node = _acquire_gpu_node_url()
+            ref_filename = await upload_image_from_url(
+                reference_image, node_url=reserved_node
+            )
             if ref_filename:
-                # Inject LoadImage node + IPAdapterSimple if available, else just log
                 workflow["ref_load"] = {
                     "class_type": "LoadImage",
                     "inputs": {"image": ref_filename, "upload": "image"},
                 }
         except Exception as e:
             print(f"[comfyui] 参考图上传失败，跳过: {e}")
-    return await _post_workflow(workflow, client_id)
+            reserved_node = None
+    else:
+        reserved_node = None
+    return await _post_workflow(workflow, client_id, node_url=reserved_node)
 
 
 async def submit_video_prompt(
@@ -2320,7 +2545,7 @@ async def submit_video_prompt(
     raw_prompt: bool = False,
     *,
     model_filename: str | None = None,
-) -> tuple[str, str, dict]:
+) -> tuple[str, str, dict, str]:
     positive = prompt.strip()
     if raw_prompt:
         negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
@@ -2329,12 +2554,16 @@ async def submit_video_prompt(
     width, height = align_ltx_dimensions(width, height)
 
     image_filename = None
+    reserved_node = None
     if mode == "image2video":
         if not image_b64:
             raise ValueError("图生视频需要上传图片")
-        image_filename = await upload_image_base64(image_b64)
+        reserved_node = _acquire_gpu_node_url(
+            estimated_duration_sec=max(120, duration * 30), required_vram=16
+        )
+        image_filename = await upload_image_base64(image_b64, node_url=reserved_node)
 
-    await ensure_video_mp4_capable()
+    await ensure_video_mp4_capable(reserved_node)
 
     logger.info(
         "submit_video_prompt inputs: mode=%s duration=%s width=%s height=%s "
@@ -2357,7 +2586,7 @@ async def submit_video_prompt(
         image_filename,
         model_filename=model_filename,
     )
-    prompt_id, used_client, workflow = await _log_and_post_video_workflow(
+    prompt_id, used_client, workflow, _node_url = await _log_and_post_video_workflow(
         workflow,
         client_id=client_id,
         backend="ltx",
@@ -2365,8 +2594,9 @@ async def submit_video_prompt(
         height=height,
         duration=duration,
         mode=mode,
+        node_url=reserved_node,
     )
-    return prompt_id, used_client, workflow
+    return prompt_id, used_client, workflow, _node_url
 
 
 async def submit_wan_video_prompt(
@@ -2385,7 +2615,7 @@ async def submit_wan_video_prompt(
     model_filename: str | None = None,
     sampling_profile: str | None = None,
     steps: int | None = None,
-) -> tuple[str, str, dict]:
+) -> tuple[str, str, dict, str]:
     positive = prompt.strip()
     if raw_prompt:
         negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
@@ -2397,17 +2627,28 @@ async def submit_wan_video_prompt(
     image_filename = None
     start_image_filename = None
     end_image_filename = None
+    reserved_node = None
     if mode in ("flf2v", "fun_inpaint"):
         if not start_image_b64 or not end_image_b64:
             raise ValueError("首尾帧视频需要首帧与尾帧图片")
-        start_image_filename = await upload_image_base64(start_image_b64)
-        end_image_filename = await upload_image_base64(end_image_b64)
+        reserved_node = _acquire_gpu_node_url(
+            estimated_duration_sec=max(120, duration * 30), required_vram=16
+        )
+        start_image_filename = await upload_image_base64(
+            start_image_b64, node_url=reserved_node
+        )
+        end_image_filename = await upload_image_base64(
+            end_image_b64, node_url=reserved_node
+        )
     elif mode == "image2video":
         if not image_b64:
             raise ValueError("图生视频需要上传图片")
-        image_filename = await upload_image_base64(image_b64)
+        reserved_node = _acquire_gpu_node_url(
+            estimated_duration_sec=max(120, duration * 30), required_vram=16
+        )
+        image_filename = await upload_image_base64(image_b64, node_url=reserved_node)
 
-    await ensure_video_mp4_capable()
+    await ensure_video_mp4_capable(reserved_node)
 
     logger.info(
         "submit_wan_video_prompt inputs: mode=%s duration=%s width=%s height=%s "
@@ -2473,6 +2714,7 @@ async def submit_wan_video_prompt(
         height=height,
         duration=duration,
         mode=mode,
+        node_url=reserved_node,
     )
 
 
@@ -2489,7 +2731,10 @@ async def submit_hunyuan_video_prompt(
     *,
     model_filename: str | None = None,
     steps: int | None = None,
-) -> tuple[str, str, dict]:
+    use_distilled: bool = False,
+    cfg_distilled: bool = False,
+    use_cache: bool = False,
+) -> tuple[str, str, dict, str]:
     positive = prompt.strip()
     if raw_prompt:
         negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
@@ -2503,12 +2748,16 @@ async def submit_hunyuan_video_prompt(
     await ensure_video_mp4_capable()
 
     logger.info(
-        "submit_hunyuan_video_prompt inputs: duration=%s width=%s height=%s prompt_len=%s steps=%s",
+        "submit_hunyuan_video_prompt inputs: duration=%s width=%s height=%s prompt_len=%s "
+        "steps=%s distilled=%s cfg_distilled=%s cache=%s",
         duration,
         width,
         height,
         len(positive or ""),
-        steps if steps is not None else HUNYUAN_DEFAULT_STEPS,
+        steps if steps is not None else (HUNYUAN15_DISTILLED_STEPS if use_distilled else HUNYUAN_DEFAULT_STEPS),
+        use_distilled,
+        cfg_distilled,
+        use_cache,
     )
     workflow = build_hunyuan_video_workflow(
         positive,
@@ -2516,8 +2765,11 @@ async def submit_hunyuan_video_prompt(
         width,
         height,
         duration,
-        model_filename=model_filename,
+        model_filename=model_filename or HUNYUAN15_CKPT,
         steps=steps,
+        use_distilled=use_distilled,
+        cfg_distilled=cfg_distilled,
+        use_cache=use_cache,
     )
     return await _log_and_post_video_workflow(
         workflow,
@@ -2527,6 +2779,8 @@ async def submit_hunyuan_video_prompt(
         height=height,
         duration=duration,
         mode=mode,
+        estimated_duration_sec=480,
+        required_vram=24,
     )
 
 
@@ -2544,10 +2798,10 @@ async def submit_ltx2_video_prompt(
     model_filename: str | None = None,
     audio: bool = True,
     **_ignored,
-) -> tuple[str, str, dict]:
-    """LTX-2 19B fp4 文生视频（ComfyUI SaveVideo MP4）。"""
-    if mode != "text2video":
-        raise ValueError("LTX-2 fp4 workflow 暂仅支持文生视频")
+) -> tuple[str, str, dict, str]:
+    """LTX-2 19B fp4 文生/图生视频（ComfyUI SaveVideo MP4）。"""
+    if mode not in ("text2video", "image2video"):
+        raise ValueError("LTX-2 fp4 workflow 仅支持文生视频或图生视频")
 
     positive = prompt.strip()
     if raw_prompt:
@@ -2556,25 +2810,48 @@ async def submit_ltx2_video_prompt(
         negative = normalize_video_negative(negative_prompt)
     width, height = align_ltx_dimensions(width, height)
 
-    await ensure_video_mp4_capable()
+    image_filename = None
+    reserved_node = None
+    if mode == "image2video":
+        if not image_b64:
+            raise ValueError("图生视频需要上传图片")
+        reserved_node = _acquire_gpu_node_url(
+            estimated_duration_sec=max(120, duration * 30), required_vram=16
+        )
+        image_filename = await upload_image_base64(image_b64, node_url=reserved_node)
+
+    await ensure_video_mp4_capable(reserved_node)
 
     logger.info(
-        "submit_ltx2_video_prompt inputs: duration=%s width=%s height=%s audio=%s prompt_len=%s",
+        "submit_ltx2_video_prompt inputs: mode=%s duration=%s width=%s height=%s audio=%s prompt_len=%s",
+        mode,
         duration,
         width,
         height,
         bool(audio),
         len(positive or ""),
     )
-    workflow = build_ltx2_fp4_t2v_workflow(
-        positive,
-        negative,
-        width,
-        height,
-        duration,
-        model_filename=model_filename,
-        audio=bool(audio),
-    )
+    if mode == "image2video":
+        workflow = build_ltx2_fp4_i2v_workflow(
+            positive,
+            negative,
+            image_filename,
+            width,
+            height,
+            duration,
+            model_filename=model_filename,
+            audio=bool(audio),
+        )
+    else:
+        workflow = build_ltx2_fp4_t2v_workflow(
+            positive,
+            negative,
+            width,
+            height,
+            duration,
+            model_filename=model_filename,
+            audio=bool(audio),
+        )
     return await _log_and_post_video_workflow(
         workflow,
         client_id=client_id,
@@ -2583,13 +2860,15 @@ async def submit_ltx2_video_prompt(
         height=height,
         duration=duration,
         mode=mode,
+        node_url=reserved_node,
     )
 
 
-async def get_comfyui_output_dir() -> Path:
+async def get_comfyui_output_dir(node_url: str | None = None) -> Path:
     """从 ComfyUI system_stats 解析 output 目录。"""
+    base = _resolve_comfyui_base(node_url)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        res = await client.get(f"{COMFYUI_URL}/system_stats")
+        res = await client.get(f"{base}/system_stats")
         res.raise_for_status()
         data = res.json()
 
@@ -2598,7 +2877,7 @@ async def get_comfyui_output_dir() -> Path:
         if arg == "--output-directory" and i + 1 < len(argv):
             return Path(argv[i + 1])
 
-    return Path(r"D:\ComfyUI\ComfyUI\output")
+    return Path("/root/autodl-tmp/ComfyUI/output")
 
 
 def _scan_output_storage(output_dir: Path) -> dict:
@@ -2632,24 +2911,38 @@ def _scan_output_storage(output_dir: Path) -> dict:
 
 
 async def get_storage_info() -> dict:
-    output_dir = await get_comfyui_output_dir()
+    nodes = comfyui_nodes_list()
+    output_dir = await get_comfyui_output_dir(nodes[0] if nodes else None)
     stats = _scan_output_storage(output_dir)
     return {
         "comfyui_output": str(output_dir.resolve()),
+        "comfyui_nodes": nodes,
         **stats,
     }
 
 
-async def cancel_task(task_id: str) -> None:
+async def cancel_task(task_id: str, node_url: str | None = None) -> None:
+    base = _resolve_comfyui_base(node_url)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         res = await client.post(
-            f"{COMFYUI_URL}/queue",
+            f"{base}/queue",
             json={"delete": [task_id]},
         )
         res.raise_for_status()
+    from services.gpu_pool import release_gpu_node
+
+    release_gpu_node(base)
 
 
-def _view_url_for_media(entry: dict) -> str:
+async def interrupt_execution(node_url: str | None = None) -> None:
+    """中断指定 ComfyUI 节点上当前正在执行的 workflow。"""
+    base = _resolve_comfyui_base(node_url)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        res = await client.post(f"{base}/interrupt")
+        res.raise_for_status()
+
+
+def _view_url_for_media(entry: dict, node_url: str | None = None) -> str:
     from urllib.parse import quote
 
     filename = entry.get("filename") or ""
@@ -2658,6 +2951,9 @@ def _view_url_for_media(entry: dict) -> str:
     params = f"filename={quote(filename, safe='')}&type={media_type}"
     if subfolder:
         params += f"&subfolder={quote(subfolder, safe='')}"
+    port = comfyui_node_port(node_url)
+    if port:
+        params += f"&node={quote(port, safe='')}"
     return f"/api/view?{params}"
 
 
@@ -2703,7 +2999,7 @@ def map_comfy_execution_error(message: str) -> str:
         or "torch.cuda.outofmemoryerror" in lower
         or "allocation on device" in lower
     ):
-        return "显存不足（GPU OOM）。请改用 720P，或去掉首帧后重试；也可先停止其他生成任务释放显存。"
+        return "显存不足（GPU OOM）。此模型最高支持 720P，请降低清晰度后重试；也可先停止其他生成任务释放显存。"
     if "非法上传路径" in raw or "视频源无效" in raw:
         return "视频源无效或无权访问"
     if "vhs" in lower or "video helper suite" in lower:
@@ -2746,13 +3042,17 @@ def _execution_status_failed(
     }
 
 
-async def get_prompt_execution_status(prompt_id: str) -> dict:
+async def get_prompt_execution_status(
+    prompt_id: str,
+    node_url: str | None = None,
+) -> dict:
     """
     查询单个 ComfyUI prompt 的执行状态（队列 + history + WS 进度缓存）。
     返回: status (pending|running|completed|failed), progress (0-100), result, error
     """
     from services import comfyui_progress
 
+    base = _resolve_comfyui_base(node_url)
     cached = comfyui_progress.get_progress(prompt_id) or {}
     progress = int(cached.get("progress") or 0)
     stage = cached.get("stage") or cached.get("node")
@@ -2765,8 +3065,8 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
     hist_res = None
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            queue_res = await client.get(f"{COMFYUI_URL}/queue")
-            hist_res = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
+            queue_res = await client.get(f"{base}/queue")
+            hist_res = await client.get(f"{base}/history/{prompt_id}")
         queue_data = queue_res.json()
         for item in queue_data.get("queue_running", []):
             if len(item) > 1 and str(item[1]) == str(prompt_id):
@@ -2794,6 +3094,7 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
             payload = {}
         if prompt_id in payload:
             entry = payload[prompt_id]
+            _, _, generation_seconds = _extract_timestamps(entry)
             status = entry.get("status") or {}
             if status.get("status_str") == "error":
                 comfyui_progress.clear_progress(prompt_id)
@@ -2804,6 +3105,7 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
                     "message": message,
                     "result": None,
                     "error": _history_error_message(entry),
+                    "generation_seconds": generation_seconds,
                 }
 
             workflow = None
@@ -2821,8 +3123,9 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
                     "progress": 100,
                     "stage": "done",
                     "message": "completed",
-                    "result": _view_url_for_media(videos[0]),
+                    "result": _view_url_for_media(videos[0], node_url=base),
                     "error": None,
+                    "generation_seconds": generation_seconds,
                 }
             if images:
                 comfyui_progress.clear_progress(prompt_id)
@@ -2831,8 +3134,9 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
                     "progress": 100,
                     "stage": "done",
                     "message": "completed",
-                    "result": _view_url_for_media(images[0]),
+                    "result": _view_url_for_media(images[0], node_url=base),
                     "error": None,
+                    "generation_seconds": generation_seconds,
                 }
 
             if status.get("completed") is True:
@@ -2843,6 +3147,7 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
                     "message": message,
                     "result": None,
                     "error": "任务已完成但未找到输出",
+                    "generation_seconds": generation_seconds,
                 }
 
     if in_running:
@@ -2887,28 +3192,28 @@ async def get_prompt_execution_status(prompt_id: str) -> dict:
 
 
 async def get_progress():
+    from services import comfyui_progress
+
+    nodes = comfyui_nodes_list()
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        try:
-            res = await client.get(f"{COMFYUI_URL}/queue")
-            data = res.json()
+        for node_url in nodes:
+            base = node_url.rstrip("/")
+            try:
+                res = await client.get(f"{base}/queue")
+                data = res.json()
+            except Exception:
+                continue
             running = data.get("queue_running", [])
             if running:
                 prompt_id = running[0][1]
-                cached = None
-                try:
-                    from services import comfyui_progress
-
-                    cached = comfyui_progress.get_progress(prompt_id)
-                except Exception:
-                    pass
+                cached = comfyui_progress.get_progress(prompt_id) or {}
                 return {
                     "running": True,
                     "prompt_id": prompt_id,
-                    "progress": (cached or {}).get("progress", 0),
+                    "progress": cached.get("progress", 0),
+                    "comfyui_node_url": base,
                 }
-            return {"running": False}
-        except Exception:
-            return {"running": False}
+    return {"running": False}
 
 
 def _is_video_file(filename: str) -> bool:
@@ -2989,77 +3294,105 @@ def _collect_media(outputs: dict, workflow: dict | None = None) -> tuple[list, l
     return images, videos
 
 
-async def get_tasks() -> list:
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        queue_res = await client.get(f"{COMFYUI_URL}/queue")
-        history_res = await client.get(f"{COMFYUI_URL}/history")
+async def _collect_tasks_from_node(
+    client: httpx.AsyncClient,
+    node_url: str,
+) -> list:
+    base = node_url.rstrip("/")
+    try:
+        queue_res = await client.get(f"{base}/queue")
+        history_res = await client.get(f"{base}/history")
+    except Exception:
+        return []
 
-        try:
-            queue_data = queue_res.json()
-        except Exception:
-            queue_data = {}
+    try:
+        queue_data = queue_res.json()
+    except Exception:
+        queue_data = {}
 
-        try:
-            history_data = history_res.json()
-        except Exception:
-            history_data = {}
+    try:
+        history_data = history_res.json()
+    except Exception:
+        history_data = {}
 
-        tasks = []
+    tasks: list = []
 
-        for item in queue_data.get("queue_running", []):
-            prompt_id = item[1]
-            workflow = item[2] if len(item) > 2 else None
-            tasks.append(
-                _base_task(prompt_id, "running", "生成中", workflow=workflow)
-            )
-
-        for item in queue_data.get("queue_pending", []):
-            prompt_id = item[1]
-            workflow = item[2] if len(item) > 2 else None
-            tasks.append(
-                _base_task(prompt_id, "pending", "排队中", workflow=workflow)
-            )
-
-        history_items = list(history_data.items())
-
-        def _sort_key(item):
-            _, data = item
-            _, completed_at, _ = _extract_timestamps(data)
-            return completed_at or 0
-
-        history_items.sort(key=_sort_key, reverse=True)
-        history_items = history_items[:HISTORY_LIMIT]
-
-        for prompt_id, data in history_items:
-            workflow = None
-            prompt_field = data.get("prompt")
-            if isinstance(prompt_field, list) and len(prompt_field) > 2:
-                workflow = prompt_field[2]
-            elif isinstance(prompt_field, dict):
-                workflow = prompt_field
-
-            images, videos = _collect_media(data.get("outputs", {}), workflow)
-            tasks.append(
-                _base_task(
-                    prompt_id,
-                    "done",
-                    "已完成",
-                    workflow=workflow,
-                    history_data=data,
-                    images=images,
-                    videos=videos,
-                )
-            )
-
-        status_order = {"running": 0, "pending": 1, "done": 2}
-        tasks.sort(
-            key=lambda t: (
-                status_order.get(t["status"], 9),
-                -(t.get("completed_at") or t.get("started_at") or t.get("timestamp") or 0),
+    for item in queue_data.get("queue_running", []):
+        prompt_id = item[1]
+        workflow = item[2] if len(item) > 2 else None
+        tasks.append(
+            _base_task(
+                prompt_id,
+                "running",
+                "生成中",
+                workflow=workflow,
+                comfyui_node_url=base,
             )
         )
 
-        return tasks
+    for item in queue_data.get("queue_pending", []):
+        prompt_id = item[1]
+        workflow = item[2] if len(item) > 2 else None
+        tasks.append(
+            _base_task(
+                prompt_id,
+                "pending",
+                "排队中",
+                workflow=workflow,
+                comfyui_node_url=base,
+            )
+        )
+
+    history_items = list(history_data.items())
+
+    def _sort_key(item):
+        _, data = item
+        _, completed_at, _ = _extract_timestamps(data)
+        return completed_at or 0
+
+    history_items.sort(key=_sort_key, reverse=True)
+    history_items = history_items[:HISTORY_LIMIT]
+
+    for prompt_id, data in history_items:
+        workflow = None
+        prompt_field = data.get("prompt")
+        if isinstance(prompt_field, list) and len(prompt_field) > 2:
+            workflow = prompt_field[2]
+        elif isinstance(prompt_field, dict):
+            workflow = prompt_field
+
+        images, videos = _collect_media(data.get("outputs", {}), workflow)
+        tasks.append(
+            _base_task(
+                prompt_id,
+                "done",
+                "已完成",
+                workflow=workflow,
+                history_data=data,
+                images=images,
+                videos=videos,
+                comfyui_node_url=base,
+            )
+        )
+
+    return tasks
+
+
+async def get_tasks() -> list:
+    nodes = comfyui_nodes_list()
+    tasks: list = []
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        for node_url in nodes:
+            tasks.extend(await _collect_tasks_from_node(client, node_url))
+
+    status_order = {"running": 0, "pending": 1, "done": 2}
+    tasks.sort(
+        key=lambda t: (
+            status_order.get(t["status"], 9),
+            -(t.get("completed_at") or t.get("started_at") or t.get("timestamp") or 0),
+        )
+    )
+    return tasks
 
 
 # ── Video enhance (SeedVR2 / Real-ESRGAN) ─────────────────────────────────────
@@ -3152,7 +3485,7 @@ def build_seedvr2_enhance_workflow(
             "class_type": "SeedVR2LoadDiTModel",
             "inputs": {
                 "model": dit_model,
-                "device": "cuda",
+                "device": "cuda:0",
                 "blocks_to_swap": int(block_swap),
                 "swap_io": False,
             },
@@ -3161,7 +3494,7 @@ def build_seedvr2_enhance_workflow(
             "class_type": "SeedVR2LoadVAEModel",
             "inputs": {
                 "model": SEEDVR2_VAE,
-                "device": "cuda",
+                "device": "cuda:0",
                 "encode_tiled": True,
                 "encode_tile_size": 1024,
                 "decode_tiled": True,
@@ -3176,7 +3509,8 @@ def build_seedvr2_enhance_workflow(
                 "vae": [VE_VAE, 0],
                 "seed": 42,
                 "resolution": target_resolution,
-                "batch_size": int(batch_size),
+                "max_resolution": 0,
+                "batch_size": int(batch_size) if int(batch_size) % 4 == 1 else 5,
                 "color_correction": color_mode,
                 "input_noise_scale": float(input_noise_scale),
                 "uniform_batch_size": False,
@@ -3240,6 +3574,7 @@ async def upload_video_from_url(
     *,
     db=None,
     user=None,
+    node_url: str | None = None,
 ) -> str:
     """将服务器本地路径或 http URL 的视频上传到 ComfyUI input，返回 filename。"""
     from services.media_access import normalize_media_reference_url, resolve_video_source_for_enhance
@@ -3277,7 +3612,7 @@ async def upload_video_from_url(
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         res = await client.post(
-            f"{COMFYUI_URL}/upload/image",
+            f"{_resolve_comfyui_base(node_url)}/upload/image",
             files={"image": (fname, data, "video/mp4")},
         )
         res.raise_for_status()
@@ -3292,8 +3627,9 @@ async def _submit_video_enhance_workflow(
     *,
     backend: str,
     client_id: str | None = None,
-) -> tuple[str, str, dict]:
-    await ensure_video_mp4_capable()
+    node_url: str | None = None,
+) -> tuple[str, str, dict, str]:
+    await ensure_video_mp4_capable(node_url)
     return await _log_and_post_video_workflow(
         workflow,
         client_id=client_id,
@@ -3302,6 +3638,7 @@ async def _submit_video_enhance_workflow(
         height=0,
         duration=0,
         mode="enhance",
+        node_url=node_url,
     )
 
 
@@ -3317,7 +3654,7 @@ async def submit_seedvr2_enhance_prompt(
     color_correction: str = "lab",
     model_size: str = "7b",
     client_id: str | None = None,
-) -> tuple[str, str, dict]:
+) -> tuple[str, str, dict, str]:
     source_height: int | None = None
     try:
         from services.media_access import resolve_video_source_for_enhance
@@ -3330,7 +3667,10 @@ async def submit_seedvr2_enhance_prompt(
     except Exception:
         source_height = None
 
-    video_filename = await upload_video_from_url(video_url, db=db, user=user)
+    reserved_node = _acquire_gpu_node_url(estimated_duration_sec=300, required_vram=16)
+    video_filename = await upload_video_from_url(
+        video_url, db=db, user=user, node_url=reserved_node
+    )
     workflow = build_seedvr2_enhance_workflow(
         video_filename,
         upscale_factor=upscale_factor,
@@ -3345,6 +3685,7 @@ async def submit_seedvr2_enhance_prompt(
         workflow,
         backend="seedvr2_enhance",
         client_id=client_id,
+        node_url=reserved_node,
     )
 
 
@@ -3355,8 +3696,11 @@ async def submit_realesrgan_enhance_prompt(
     user,
     upscale_factor: float = 2.0,
     client_id: str | None = None,
-) -> tuple[str, str, dict]:
-    video_filename = await upload_video_from_url(video_url, db=db, user=user)
+) -> tuple[str, str, dict, str]:
+    reserved_node = _acquire_gpu_node_url(estimated_duration_sec=180, required_vram=12)
+    video_filename = await upload_video_from_url(
+        video_url, db=db, user=user, node_url=reserved_node
+    )
     workflow = build_realesrgan_enhance_workflow(
         video_filename,
         upscale_factor=upscale_factor,
@@ -3365,4 +3709,5 @@ async def submit_realesrgan_enhance_prompt(
         workflow,
         backend="realesrgan_enhance",
         client_id=client_id,
+        node_url=reserved_node,
     )

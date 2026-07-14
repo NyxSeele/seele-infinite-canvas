@@ -1,0 +1,120 @@
+.aub-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  max-width: min(560px, calc(100vw - 24px));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  border: 1px solid transparent;
+  box-sizing: border-box;
+}
+
+.aub-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.aub-banner--dark {
+  background: rgba(17, 24, 39, 0.94);
+  color: #f9fafb;
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+
+.aub-banner--light {
+  background: rgba(255, 255, 255, 0.96);
+  color: #111827;
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.12);
+}
+
+.aub-btn {
+  border: none;
+  border-radius: 999px;
+  background: #3b82f6;
+  color: #fff;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.aub-banner--dark .aub-btn {
+  background: linear-gradient(120deg, #22d3ee, #34d399);
+  color: #061016;
+  font-weight: 650;
+}
+
+.aub-banner--light .aub-btn {
+  background: #2563eb;
+}
+
+.aub-dismiss {
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+  flex-shrink: 0;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.aub-banner--dark .aub-dismiss {
+  color: #9ca3af;
+}
+
+.aub-banner--light .aub-dismiss {
+  color: #6b7280;
+}
+
+@media (max-width: 640px) {
+  .aub-banner {
+    top: max(8px, env(safe-area-inset-top));
+    left: max(10px, env(safe-area-inset-left));
+    right: max(10px, env(safe-area-inset-right));
+    transform: none;
+    width: auto;
+    max-width: none;
+    border-radius: 14px;
+    padding: 12px 12px 12px 14px;
+    gap: 10px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .aub-text {
+    flex: 1 1 calc(100% - 48px);
+    font-size: 13px;
+    padding-top: 2px;
+  }
+
+  .aub-dismiss {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+  }
+
+  .aub-banner {
+    position: fixed;
+    padding-right: 40px;
+  }
+
+  .aub-btn {
+    flex: 1 1 100%;
+    min-height: 40px;
+    font-size: 14px;
+    font-weight: 650;
+    order: 3;
+  }
+}

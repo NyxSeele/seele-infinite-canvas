@@ -16,7 +16,8 @@ from db.session import SessionLocal
 from models import Task, User
 from services import mock_generation, tasks_cache
 from services.generation_guard import check_concurrent_generations
-from services.quota_service import QuotaExceededError, check_and_consume, create_task_record
+from services.task_state import task_is_writable
+from services.quota_service import QuotaExceededError, check_and_consume, create_task_record, refund_quota
 from services.video_lut_service import (
     apply_lut_to_video_file,
     new_lut_output_path,
@@ -32,6 +33,10 @@ def _release_task_slots(task: Task) -> None:
 
     if task.user_id:
         release_slots(task.user_id, team_id=task.team_id)
+
+
+def _refund_lut_quota(db: Session, user_id: int) -> None:
+    refund_quota(db, user_id, "video", 1)
 
 
 async def queue_video_lut_task(
@@ -64,10 +69,18 @@ async def queue_video_lut_task(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="视频源无效或无权访问") from exc
 
+    if node_id:
+        from routers.tasks import _mark_stale_node_tasks_terminal
+
+        _mark_stale_node_tasks_terminal(db, node_id, user.id)
+
     check_concurrent_generations(db, user, slots_needed=1, team_id=team_id)
     try:
         check_and_consume(db, user.id, "video")
     except QuotaExceededError as e:
+        from services.generation_slots import release_slots
+
+        release_slots(user.id, team_id=team_id, slots=1)
         raise HTTPException(status_code=429, detail=e.message) from e
 
     task_id = str(uuid.uuid4())
@@ -83,7 +96,7 @@ async def queue_video_lut_task(
         prompt_text=label,
         comfyui_prompt_id=mock_generation.MOCK_PROMPT_ID
         if settings.agent_mock_generation
-        else "lut",
+        else None,
         node_id=node_id,
     )
     db.commit()
@@ -164,6 +177,8 @@ def _run_video_lut_sync(
         task = db.get(Task, task_id)
         if not task:
             return
+        if not task_is_writable(task):
+            return
         from services.media_access import resolve_video_source_for_enhance
         from models import User
 
@@ -171,7 +186,12 @@ def _run_video_lut_sync(
         if not user:
             task.status = "failed"
             task.error = "用户不存在"
+            _release_task_slots(task)
+            _refund_lut_quota(db, user_id)
             db.commit()
+            return
+
+        if not task_is_writable(task):
             return
 
         input_path = resolve_video_source_for_enhance(db, user, source_video_url)
@@ -179,6 +199,7 @@ def _run_video_lut_sync(
             task.status = "failed"
             task.error = "无法读取源视频"
             _release_task_slots(task)
+            _refund_lut_quota(db, user_id)
             db.commit()
             return
 
@@ -189,11 +210,18 @@ def _run_video_lut_sync(
             task.status = "failed"
             task.error = "LUT 文件无效"
             _release_task_slots(task)
+            _refund_lut_quota(db, user_id)
             db.commit()
+            return
+
+        if not task_is_writable(task):
             return
 
         output_path = new_lut_output_path()
         apply_lut_to_video_file(Path(input_path), lut_path, output_path)
+        task = db.get(Task, task_id)
+        if not task_is_writable(task):
+            return
         task.status = "completed"
         task.result = f"/api/uploads/videos/{output_path.name}"
         task.error = None
@@ -209,6 +237,7 @@ def _run_video_lut_sync(
             task.status = "failed"
             task.error = str(exc.detail)
             _release_task_slots(task)
+            _refund_lut_quota(db, user_id)
             db.commit()
     except Exception:
         db.rollback()
@@ -218,6 +247,7 @@ def _run_video_lut_sync(
             task.status = "failed"
             task.error = "LUT 处理内部错误"
             _release_task_slots(task)
+            _refund_lut_quota(db, user_id)
             db.commit()
     finally:
         db.close()

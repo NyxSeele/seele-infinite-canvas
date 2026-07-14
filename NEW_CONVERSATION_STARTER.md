@@ -1,8 +1,10 @@
 # AI Studio · 新对话起手（NEW_CONVERSATION_STARTER）
 
-用于开启新对话时快速恢复上下文。最后更新：**2026-07-10**
+用于开启新对话时快速恢复上下文。最后更新：**2026-07-14**
 
 主交接仍以 [`HANDOFF.md`](HANDOFF.md) / [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) / [`GPU_DEBT.md`](GPU_DEBT.md) 为准。
+
+**硬约束（Cursor）**：勿整文件覆盖 `deploy/supervisor-autodl.conf`；必须保留 comfyui0/comfyui1/backend/**nginx**/**cloudflared** 五段（缺 cloudflared → 公网 1033）。见 HANDOFF 文首。
 
 ---
 

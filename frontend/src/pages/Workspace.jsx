@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useLocation } from "react-router-dom"
 import { useAuth } from "../contexts/AuthContext"
 import { useCanvasStore, useTeamStore } from "../stores"
 import { getActiveTeamId } from "../utils/teamContext"
@@ -21,6 +21,9 @@ import mammoth from "mammoth"
 import ImportDocumentModal from "../components/canvas/ImportDocumentModal"
 import { showDevNotice } from "../components/common/ProductNoticeModal"
 import { useLocale } from "../utils/locale"
+import { navigateWithReturn } from "../utils/navReturn"
+import OnboardingTour from "../components/Onboarding/OnboardingTour"
+import { WORKSPACE_STEPS } from "../components/Onboarding/tourSteps"
 
 const SCRIPT_MAX_CHARS = 100_000
 import "./Canvas.css"
@@ -56,6 +59,7 @@ function TabAiIcon() {
 
 export default function Workspace() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user } = useAuth()
   const theme = useCanvasStore((s) => s.theme)
   const activeTeamId = useTeamStore((s) => s.activeTeamId)
@@ -447,7 +451,6 @@ export default function Workspace() {
                     >
                       <LineIcon name="style" size={16} />
                       <span>{t("ws.ai.styleLib")}</span>
-                      <span className="ws-plain-chevron">▾</span>
                     </button>
                     <span className="ws-ai-opt-sep" />
                     <WorkspaceDropSelect
@@ -519,13 +522,44 @@ export default function Workspace() {
             <h2 className="ws-section-title">
               {activeTeam ? `${activeTeam.name} · ${t("ws.projects")}` : t("ws.projects")}
             </h2>
-            <button
-              type="button"
-              className="ws-link-btn"
-              onClick={() => navigate("/workspace/projects")}
-            >
-              {t("ws.projects.all")}
-            </button>
+            <div className="ws-section-actions">
+              <div className="ws-tool-chips" aria-label="快捷入口">
+                <button
+                  type="button"
+                  className="ws-tool-chip"
+                  data-tour="ws-team-files"
+                  onClick={() => navigateWithReturn(navigate, location, "/team-files")}
+                >
+                  <LineIcon name="doc" size={15} />
+                  <span>团队文件</span>
+                </button>
+                <button
+                  type="button"
+                  className="ws-tool-chip"
+                  data-tour="ws-review"
+                  onClick={() => navigateWithReturn(navigate, location, "/review-publish")}
+                >
+                  <LineIcon name="video" size={15} />
+                  <span>视频审阅</span>
+                </button>
+                <button
+                  type="button"
+                  className="ws-tool-chip ws-tool-chip--accent"
+                  data-tour="ws-review-public"
+                  onClick={() => navigateWithReturn(navigate, location, "/review")}
+                >
+                  <LineIcon name="book" size={15} />
+                  <span>审阅公开页</span>
+                </button>
+              </div>
+              <button
+                type="button"
+                className="ws-link-btn ws-link-btn--all"
+                onClick={() => navigate("/workspace/projects")}
+              >
+                {t("ws.projects.all")}
+              </button>
+            </div>
           </div>
           {loading ? (
             <div className="ws-empty">{t("ws.loading")}</div>
@@ -575,6 +609,8 @@ export default function Workspace() {
           if (result?.projectId) navigate(`/canvas/${result.projectId}`)
         }}
       />
+
+      <OnboardingTour tourId="ws" steps={WORKSPACE_STEPS} />
     </div>
   )
 }

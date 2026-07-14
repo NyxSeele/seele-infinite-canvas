@@ -115,7 +115,9 @@ export default function TeamInviteLinkSettingsModal({ open, onClose, teamId, onG
       modalClass="tils-modal"
     >
         <header className="tils-head">
-          <button type="button" className="tils-back" onClick={onClose} aria-label="返回">←</button>
+          <button type="button" className="tils-back" onClick={onClose} aria-label="返回">
+            返回
+          </button>
           <div>
             <h2>链接设置</h2>
             <p>自定义邀请链接的有效期和使用限制</p>

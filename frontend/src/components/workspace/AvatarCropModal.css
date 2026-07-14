@@ -1,7 +1,6 @@
 .acm-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 8000;
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: center;

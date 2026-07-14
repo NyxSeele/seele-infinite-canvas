@@ -5,6 +5,7 @@ import logging
 import re
 import traceback
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -18,7 +19,14 @@ from db.session import get_db
 from core.dependencies import get_current_user
 from models import RegisteredModel, Task, User
 from models.team import Team
-from services.team_service import get_member_role
+from services.task_state import (
+    SEEDANCE_PENDING_IDS,
+    comfy_id_counts_as_executed,
+    is_comfy_cancellable_prompt_id,
+    reload_task_if_active,
+    task_is_writable,
+)
+from services.video_postprocess import schedule_video_postprocess
 from providers import comfyui as comfyui_image
 from providers.qwen import call_openai_compatible
 from schemas.tasks import (
@@ -32,20 +40,33 @@ from schemas.tasks import (
     VideoEnhanceRecommendRequest,
     VideoEnhanceRecommendResponse,
     VideoLutRequest,
+    TaskRatingRequest,
 )
 from services.generation_guard import (
     check_concurrent_generations,
     reconcile_active_tasks_from_comfyui,
 )
 from services.media_access import append_media_ticket, grant_output_access, issue_media_ticket
-from services.prompt import maybe_optimize_prompt
+from services.prompt import (
+    apply_video_anatomy_guard,
+    maybe_optimize_prompt,
+    resolve_video_sampling_profile,
+)
+from services.prompt_builder import (
+    apply_flux_positive_suffixes,
+    build_hunyuan_prompt,
+    is_flux_workflow_type,
+)
 from services.quota_service import (
     QuotaExceededError,
     check_and_consume,
     create_task_record,
+    refund_quota,
 )
 from model_registry import (
     MODEL_MAP,
+    get_video_allowed_resolutions,
+    resolve_generation_profile,
     resolve_image_dimensions_for_model,
     resolve_video_backend,
     resolve_video_enhance_workflow,
@@ -56,6 +77,10 @@ from services import mock_generation
 from services import tasks_cache
 from services.mention_context import enrich_prompt, resolve_mentions, strip_mention_tokens
 from services.quality_presets import get_suffixes, normalize_quality_preset_id
+from services.task_generation_params import (
+    build_image_generation_params,
+    build_video_generation_params,
+)
 from core.logging_setup import studio_print
 from trace_bus import (
     build_lut_trace,
@@ -69,6 +94,83 @@ from trace_bus import (
 _MEDIA_TASK_TYPES = ("image", "video", "video_enhance", "video_lut")
 
 
+def _with_comfy_prompt_id(payload: dict, task: Task) -> dict:
+    """媒体任务轮询响应附带 comfy_prompt_id，供前端对齐 WS prompt_id。"""
+    if task.task_type in _MEDIA_TASK_TYPES:
+        payload["comfy_prompt_id"] = task.comfyui_prompt_id
+    return payload
+
+
+def _release_task_gpu_node(task: Task | None) -> None:
+    if not task:
+        return
+    from services.gpu_pool import release_gpu_node
+
+    release_gpu_node(task.comfyui_node_url)
+
+
+def _assign_comfy_submission(
+    task: Task | None,
+    *,
+    comfy_prompt_id: str,
+    node_url: str | None,
+) -> None:
+    if not task:
+        return
+    task.comfyui_prompt_id = comfy_prompt_id
+    if node_url:
+        task.comfyui_node_url = node_url.rstrip("/")
+
+
+def estimate_duration(model_id: str, params: dict | None = None) -> int:
+    """估算生成耗时（秒），用于 short/long 队列分流。"""
+    params = params or {}
+    mid = (model_id or "").strip().lower()
+    steps = int(params.get("steps") or 0) or None
+    duration = int(params.get("duration") or params.get("duration_sec") or 5)
+    width = int(params.get("width") or 0)
+    height = int(params.get("height") or 0)
+    use_distilled = bool(params.get("use_distilled"))
+    pixels = max(width, 1) * max(height, 1) if width and height else 0
+
+    if mid in ("flux-dev", "hidream", "flux", "hidream-i1") or mid.startswith("flux") or mid.startswith("hidream"):
+        return 30
+    if mid in ("video-enhance-seedvr2",) or "seedvr2" in mid:
+        return 60
+    if mid.startswith("wan") or mid in ("wan-2.6", "wan-i2v", "wan-fun-inpaint"):
+        base_steps = steps or 4
+        # 轻量估算：时长 × 步数 × 基准
+        return max(45, int(duration * max(base_steps, 1) * 2.5))
+    if (
+        mid == "hunyuan-video-1.5"
+        or "hunyuanvideo1.5" in mid
+        or mid.startswith("hunyuan-video-1")
+    ):
+        # 50 步按分辨率；12 步蒸馏 ÷4
+        if pixels >= 1280 * 720:
+            base = 480
+        elif pixels >= 832 * 480:
+            base = 300
+        else:
+            base = 360  # 默认按 720p 估
+        if use_distilled or (steps is not None and steps <= 12):
+            return max(60, base // 4)
+        if steps and steps != 50:
+            return max(90, int(base * (steps / 50.0)))
+        return base
+    if mid == "hunyuan-video" or mid.startswith("hunyuan"):
+        return 600
+    if "ltx" in mid:
+        return 180
+    return 120
+
+
+def estimate_queue_bucket(model_id: str, params: dict | None = None) -> str:
+    from services.gpu_pool import queue_bucket
+
+    return queue_bucket(estimate_duration(model_id, params))
+
+
 def _merge_negative_prompt(built: str, optimized: str) -> str:
     """保留分镜预构建 negative（含二次元排除项），与 L3 结果合并。"""
     chunks: list[str] = []
@@ -78,6 +180,20 @@ def _merge_negative_prompt(built: str, optimized: str) -> str:
             if p and p not in chunks:
                 chunks.append(p)
     return ", ".join(chunks)
+
+
+def _finalize_image_positive_for_model(
+    positive: str,
+    *,
+    model_key: str,
+    model_filename: str,
+) -> str:
+    profile = resolve_generation_profile(model_key, model_filename)
+    workflow_type = profile.get("workflow_type", "sd15")
+    if is_flux_workflow_type(workflow_type):
+        return apply_flux_positive_suffixes(positive)
+    return positive
+
 
 router = APIRouter(tags=["tasks"])
 
@@ -104,16 +220,43 @@ _TERMINAL_TASK_STATUSES = frozenset(
 )
 
 
+def _placeholder_task_progress(task: Task) -> int:
+    """无 Comfy/外部细粒度进度时的占位值（勿用 50，前端会误以为已完成一半）。"""
+    if task.status == "completed":
+        return 100
+    if task.status in _TERMINAL_TASK_STATUSES:
+        return 0
+    return 0
+
+
+def _media_task_poll_response(task: Task, user: User) -> dict:
+    """终态或不可再 poll 的任务：直接返回 DB 状态，勿用 Comfy 进度覆盖。"""
+    progress = 100 if task.status == "completed" else 0
+    result = None
+    if task.result:
+        result = _sign_result_url_for_user(task.result, user.id)
+    return _with_comfy_prompt_id(
+        {
+            "task_id": task.id,
+            "status": task.status,
+            "progress": progress,
+            "result": result,
+            "error": task.error,
+        },
+        task,
+    )
+
+
 def _release_stale_node_tasks(
     db: Session,
     node_id: str | None,
     user_id: int,
     *,
     reason: str = "被新任务取代",
-) -> int:
+) -> list[Task]:
     """将同一画布节点上未结束的任务标为 failed，避免阻塞新提交。"""
     if not node_id:
-        return 0
+        return []
     rows = (
         db.query(Task)
         .filter(
@@ -123,28 +266,93 @@ def _release_stale_node_tasks(
         )
         .all()
     )
+    return rows
+
+
+async def _cancel_stale_comfy_tasks(tasks: list[Task]) -> None:
+    """释放同节点旧任务时，取消 ComfyUI 队列/执行，避免 GPU 被占而前端像卡住。"""
+    seen: set[tuple[str, str]] = set()
+    for task in tasks:
+        comfy_id = (task.comfyui_prompt_id or "").strip()
+        if not is_comfy_cancellable_prompt_id(comfy_id):
+            continue
+        node_url = (task.comfyui_node_url or "").strip() or None
+        key = (comfy_id, node_url or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            await comfyui.cancel_task(comfy_id, node_url=node_url)
+        except Exception as exc:
+            logger.warning(
+                "cancel stale comfy task failed prompt_id=%s node=%s: %s",
+                comfy_id,
+                node_url,
+                exc,
+            )
+        try:
+            await comfyui.interrupt_execution(node_url=node_url)
+        except Exception as exc:
+            logger.warning(
+                "interrupt stale comfy node failed prompt_id=%s node=%s: %s",
+                comfy_id,
+                node_url,
+                exc,
+            )
+
+
+def _mark_stale_node_tasks_terminal(
+    db: Session,
+    node_id: str | None,
+    user_id: int,
+    *,
+    reason: str = "被新任务取代",
+) -> list[Task]:
+    """同节点旧任务标为 failed 并立即 commit，避免轮询/worker 竞态写回 running。"""
+    rows = _release_stale_node_tasks(db, node_id, user_id, reason=reason)
+    if not rows:
+        return []
     for task in rows:
+        _refund_task_quota_if_not_executed(db, task)
         _mark_task_terminal(task, status="failed", error=reason)
-    if rows:
-        logger.info(
-            "released %s stale task(s) for node_id=%s user_id=%s",
-            len(rows),
-            node_id,
-            user_id,
-        )
+    db.commit()
+    logger.info(
+        "released %s stale task(s) for node_id=%s user_id=%s",
+        len(rows),
+        node_id,
+        user_id,
+    )
+    return rows
+
+
+async def _release_stale_node_tasks_async(
+    db: Session,
+    node_id: str | None,
+    user_id: int,
+    *,
+    reason: str = "被新任务取代",
+) -> int:
+    rows = _mark_stale_node_tasks_terminal(db, node_id, user_id, reason=reason)
+    if not rows:
+        return 0
+    await _cancel_stale_comfy_tasks(rows)
     return len(rows)
 
 
 async def _resolve_image_result_from_history(
     comfy_prompt_id: str,
     user_id: int,
+    node_url: str | None = None,
 ) -> str | None:
     """从 ComfyUI history 解析图片 view URL（与 providers.comfyui 逻辑互补）。"""
     from comfyui.client import _view_url_for_media
 
-    raw = await comfyui_image.get_image_result(comfy_prompt_id)
+    raw = await comfyui_image.get_image_result(comfy_prompt_id, node_url=node_url)
     if isinstance(raw, str) and raw.strip():
-        url = _view_url_for_media({"filename": raw.strip(), "type": "output"})
+        url = _view_url_for_media(
+            {"filename": raw.strip(), "type": "output"},
+            node_url=node_url,
+        )
         return _sign_result_url_for_user(url, user_id)
     return None
 
@@ -155,6 +363,7 @@ def _mark_task_terminal(
     status: str,
     error: str | None = None,
     result: str | None = None,
+    generation_seconds: float | None = None,
 ) -> None:
     """写入终态，供轮询与僵尸释放逻辑一致使用。"""
     was_active = task.status in _ACTIVE_TASK_STATUSES
@@ -164,26 +373,44 @@ def _mark_task_terminal(
         task.result = result
     elif status in _TERMINAL_TASK_STATUSES and status != "completed":
         task.result = None
+    if status in _TERMINAL_TASK_STATUSES:
+        from models.task import utcnow
+
+        task.completed_at = utcnow()
+        if generation_seconds is not None:
+            task.generation_seconds = generation_seconds
     if was_active and status in _TERMINAL_TASK_STATUSES:
         from services.generation_slots import release_slots
 
         release_slots(task.user_id, team_id=task.team_id)
+    if status in _TERMINAL_TASK_STATUSES:
+        _release_task_gpu_node(task)
+
+
+_MEDIA_QUOTA_REFUND_TYPES = frozenset({"image", "video", "video_enhance", "video_lut"})
+
+
+def _refund_task_quota_if_not_executed(db: Session, task: Task) -> None:
+    """任务从未进入执行时退还配额（与 async 提交失败退还一致）。"""
+    if not task or not task.user_id:
+        return
+    if task.task_type not in _MEDIA_QUOTA_REFUND_TYPES:
+        return
+    should_refund = False
+    quota_kind = "video"
+    if task.task_type == "image":
+        quota_kind = "image"
+        should_refund = not task.comfyui_prompt_id
+    elif task.task_type == "video_lut":
+        should_refund = not (task.result and str(task.result).strip())
+    else:
+        should_refund = not comfy_id_counts_as_executed(task)
+    if should_refund:
+        refund_quota(db, task.user_id, quota_kind, 1)
 
 
 def _schedule_video_postprocess(task: Task) -> None:
-    """G45 逐帧换脸（若 use_reactor）→ 链式 G39 sound_note；仅 sound_note 时直接混音。"""
-    if bool(getattr(task, "use_reactor", False)):
-        from services.reactor_video import maybe_apply_reactor_video
-
-        asyncio.create_task(maybe_apply_reactor_video(task.id))
-        return
-    if (
-        (task.sound_note or "").strip()
-        and (task.video_backend or "").strip().lower() != "ltx2"
-    ):
-        from services.audiogen_postprocess import maybe_apply_sound_note_mix
-
-        asyncio.create_task(maybe_apply_sound_note_mix(task.id))
+    schedule_video_postprocess(task)
 
 
 def _release_acquired_slots(
@@ -241,7 +468,7 @@ async def _submit_image_task(body: SubmitRequest, user: User, db: Session):
     )
 
     try:
-        task_id, client_id = await comfyui.submit_prompt(
+        task_id, client_id, node_url = await comfyui.submit_prompt(
             prompt=positive,
             negative_prompt=negative,
             style=body.style,
@@ -279,6 +506,7 @@ async def _submit_image_task(body: SubmitRequest, user: User, db: Session):
         user_id=user.id,
         team_id=body.team_id,
         prompt_text=prompt,
+        comfyui_node_url=node_url,
     )
     db.commit()
     tasks_cache.invalidate_tasks_cache()
@@ -306,8 +534,8 @@ async def _submit_video_task(body: SubmitVideoRequest, user: User, db: Session):
     if not prompt:
         raise HTTPException(status_code=400, detail="请填写画面描述")
 
-    if body.duration not in (3, 5):
-        raise HTTPException(status_code=400, detail="视频时长仅支持 3 秒或 5 秒")
+    if body.duration not in (3, 5, 10, 15):
+        raise HTTPException(status_code=400, detail="视频时长仅支持 3 / 5 / 10 / 15 秒")
 
     if body.mode not in ("text2video", "image2video"):
         raise HTTPException(status_code=400, detail="无效的生成模式")
@@ -327,7 +555,7 @@ async def _submit_video_task(body: SubmitVideoRequest, user: User, db: Session):
     )
 
     try:
-        task_id, client_id, _workflow = await comfyui.submit_video_prompt(
+        task_id, client_id, _workflow, node_url = await comfyui.submit_video_prompt(
             prompt=positive,
             negative_prompt=negative,
             duration=body.duration,
@@ -365,6 +593,7 @@ async def _submit_video_task(body: SubmitVideoRequest, user: User, db: Session):
         user_id=user.id,
         team_id=body.team_id,
         prompt_text=prompt,
+        comfyui_node_url=node_url,
     )
     db.commit()
     tasks_cache.invalidate_tasks_cache()
@@ -451,10 +680,10 @@ async def get_task_by_id(
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if task.user_id is not None and task.user_id != user.id and user.role != "admin":
+    if user.role != "admin" and (task.user_id is None or task.user_id != user.id):
         raise HTTPException(status_code=403, detail="无权访问该任务")
 
-    # JSON async jobs (screenplay / prompt LLM / import LLM / enhance reco): no ComfyUI
+    # JSON async jobs (screenplay / prompt LLM / import LLM / enhance reco / style_ref): no ComfyUI
     if task.task_type in (
         "sp_structure",
         "sp_shots",
@@ -463,6 +692,7 @@ async def get_task_by_id(
         "imp_parse",
         "imp_group",
         "ve_reco",
+        "style_ref",
     ):
         progress = (
             100
@@ -488,58 +718,102 @@ async def get_task_by_id(
         }
 
     if task.task_type in _MEDIA_TASK_TYPES and task.status == "completed" and task.result:
-        return {
-            "task_id": task.id,
-            "status": "completed",
-            "progress": 100,
-            "result": _sign_result_url_for_user(task.result, user.id),
-            "error": None,
-        }
+        schedule_video_postprocess(task)
+        return _with_comfy_prompt_id(
+            {
+                "task_id": task.id,
+                "status": "completed",
+                "progress": 100,
+                "result": _sign_result_url_for_user(task.result, user.id),
+                "error": None,
+            },
+            task,
+        )
 
     if task.comfyui_prompt_id == mock_generation.MOCK_PROMPT_ID:
         if task.status == "failed":
-            return {
+            return _with_comfy_prompt_id(
+                {
+                    "task_id": task.id,
+                    "status": "failed",
+                    "progress": 0,
+                    "result": None,
+                    "error": task.error,
+                },
+                task,
+            )
+        return _with_comfy_prompt_id(
+            {
                 "task_id": task.id,
-                "status": "failed",
-                "progress": 0,
+                "status": task.status,
+                "progress": _placeholder_task_progress(task),
                 "result": None,
-                "error": task.error,
-            }
-        return {
-            "task_id": task.id,
-            "status": task.status,
-            "progress": 50 if task.status in ("pending", "queued", "running") else 0,
-            "result": None,
-            "error": None,
-        }
+                "error": None,
+            },
+            task,
+        )
 
     # Seedance / 外部异步任务：不走 ComfyUI poll，直接读 DB
     if (
         task.task_type == "video"
         and task.comfyui_prompt_id
         and (
-            task.comfyui_prompt_id == "seedance"
+            task.comfyui_prompt_id in SEEDANCE_PENDING_IDS
             or str(task.comfyui_prompt_id).startswith("seedance:")
         )
     ):
-        progress = 100 if task.status == "completed" else (
-            50 if task.status in ("pending", "queued", "running") else 0
+        progress = _placeholder_task_progress(task)
+        return _with_comfy_prompt_id(
+            {
+                "task_id": task.id,
+                "status": task.status,
+                "progress": progress,
+                "result": _sign_result_url_for_user(task.result, user.id) if task.result else None,
+                "error": task.error,
+            },
+            task,
         )
-        return {
-            "task_id": task.id,
-            "status": task.status,
-            "progress": progress,
-            "result": _sign_result_url_for_user(task.result, user.id) if task.result else None,
-            "error": task.error,
-        }
+
+    # 媒体任务后台提交尚未拿到 Comfy prompt id：勿用 task.id 误查 Comfy
+    if task.task_type in _MEDIA_TASK_TYPES and not task.comfyui_prompt_id:
+        progress = _placeholder_task_progress(task)
+        return _with_comfy_prompt_id(
+            {
+                "task_id": task.id,
+                "status": task.status,
+                "progress": progress,
+                "result": (
+                    _sign_result_url_for_user(task.result, user.id) if task.result else None
+                ),
+                "error": task.error,
+            },
+            task,
+        )
 
     comfy_prompt_id = task.comfyui_prompt_id or (
         task.id if task.task_type in _MEDIA_TASK_TYPES else None
     )
 
-    if comfy_prompt_id and task.task_type in _MEDIA_TASK_TYPES:
-        if task.status in ("pending", "queued", "running"):
-            exec_info = await comfyui.get_prompt_execution_status(comfy_prompt_id)
+    if (
+        comfy_prompt_id
+        and task.task_type in _MEDIA_TASK_TYPES
+        and task.task_type != "video_lut"
+    ):
+        if task.status in _TERMINAL_TASK_STATUSES:
+            return _media_task_poll_response(task, user)
+
+        if task.status in ("pending", "queued", "running", "processing"):
+            exec_info = await comfyui.get_prompt_execution_status(
+                comfy_prompt_id,
+                node_url=task.comfyui_node_url,
+            )
+            task = reload_task_if_active(db, task)
+            if task is None:
+                stale = db.get(Task, task_id)
+                if not stale:
+                    raise HTTPException(status_code=404, detail="任务不存在")
+                return _media_task_poll_response(stale, user)
+
             api_status = exec_info.get("status") or task.status
             progress = int(exec_info.get("progress") or 0)
             studio_print(
@@ -557,6 +831,7 @@ async def get_task_by_id(
                         exec_info["result"],
                         task.user_id or user.id,
                     ),
+                    generation_seconds=exec_info.get("generation_seconds"),
                 )
                 db.commit()
                 studio_print(
@@ -566,89 +841,115 @@ async def get_task_by_id(
                 )
                 if task.task_type == "video":
                     _schedule_video_postprocess(task)
-                return {
-                    "task_id": task.id,
-                    "status": "completed",
-                    "progress": 100,
-                    "result": task.result,
-                    "error": None,
-                }
+                return _with_comfy_prompt_id(
+                    {
+                        "task_id": task.id,
+                        "status": "completed",
+                        "progress": 100,
+                        "result": task.result,
+                        "error": None,
+                    },
+                    task,
+                )
 
             if api_status == "failed":
                 _mark_task_terminal(
                     task,
                     status="failed",
                     error=exec_info.get("error") or "生成失败",
+                    generation_seconds=exec_info.get("generation_seconds"),
                 )
                 db.commit()
                 studio_print(
                     task.task_type,
                     f"任务失败 task_id={task_id} error={task.error}",
                 )
-                return {
-                    "task_id": task.id,
-                    "status": "failed",
-                    "progress": progress,
-                    "result": None,
-                    "error": task.error,
-                }
+                return _with_comfy_prompt_id(
+                    {
+                        "task_id": task.id,
+                        "status": "failed",
+                        "progress": progress,
+                        "result": None,
+                        "error": task.error,
+                    },
+                    task,
+                )
 
             if api_status == "completed" and not exec_info.get("result"):
                 fallback_result = await _resolve_image_result_from_history(
                     comfy_prompt_id,
                     task.user_id or user.id,
+                    node_url=task.comfyui_node_url,
                 )
                 if fallback_result:
                     _mark_task_terminal(
                         task,
                         status="completed",
                         result=fallback_result,
+                        generation_seconds=exec_info.get("generation_seconds"),
                     )
                     db.commit()
                     studio_print(
                         "poll",
                         f"history 回退命中图片 task_id={task_id} result={fallback_result}",
                     )
-                    return {
-                        "task_id": task.id,
-                        "status": "completed",
-                        "progress": 100,
-                        "result": task.result,
-                        "error": None,
-                    }
+                    return _with_comfy_prompt_id(
+                        {
+                            "task_id": task.id,
+                            "status": "completed",
+                            "progress": 100,
+                            "result": task.result,
+                            "error": None,
+                        },
+                        task,
+                    )
                 err = "ComfyUI 已完成但未返回图片 URL"
-                _mark_task_terminal(task, status="failed", error=err)
+                _mark_task_terminal(
+                    task,
+                    status="failed",
+                    error=err,
+                    generation_seconds=exec_info.get("generation_seconds"),
+                )
                 db.commit()
                 studio_print("poll", f"任务异常完成无输出 task_id={task_id}")
-                return {
-                    "task_id": task.id,
-                    "status": "failed",
-                    "progress": progress,
-                    "result": None,
-                    "error": err,
-                }
+                return _with_comfy_prompt_id(
+                    {
+                        "task_id": task.id,
+                        "status": "failed",
+                        "progress": progress,
+                        "result": None,
+                        "error": err,
+                    },
+                    task,
+                )
 
             if api_status in ("running", "pending"):
                 if task.status != api_status:
                     task.status = api_status
                     db.commit()
-                return {
-                    "task_id": task.id,
-                    "status": api_status,
-                    "progress": progress,
-                    "stage": exec_info.get("stage"),
-                    "message": exec_info.get("message"),
-                    "result": None,
-                    "error": None,
-                }
+                return _with_comfy_prompt_id(
+                    {
+                        "task_id": task.id,
+                        "status": api_status,
+                        "progress": progress,
+                        "stage": exec_info.get("stage"),
+                        "message": exec_info.get("message"),
+                        "result": None,
+                        "error": None,
+                    },
+                    task,
+                )
 
-    return {
-        "task_id": task.id,
-        "status": task.status,
-        "progress": 0,
-        "result": task.result,
-        "error": task.error,
-    }
+    return _with_comfy_prompt_id(
+        {
+            "task_id": task.id,
+            "status": task.status,
+            "progress": 0,
+            "result": task.result,
+            "error": task.error,
+        },
+        task,
+    )
 
 
 @router.get("/api/tasks")
@@ -673,31 +974,76 @@ async def get_tasks(
 @router.post("/api/task/{task_id}/cancel")
 async def cancel_task(
     task_id: str,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """取消 ComfyUI 队列任务；画布 task_id 会解析为 comfyui_prompt_id。"""
-    comfy_id = task_id
     task = db.get(Task, task_id)
-    if task and task.comfyui_prompt_id:
-        comfy_id = task.comfyui_prompt_id
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if user.role != "admin" and (task.user_id is None or task.user_id != user.id):
+        raise HTTPException(status_code=403, detail="无权取消该任务")
+
+    comfy_id = (task.comfyui_prompt_id or "").strip()
+    if task.status not in ("completed", "failed", "cancelled"):
         _mark_task_terminal(
             task,
             status="cancelled",
             error="用户已停止生成",
         )
+        _refund_task_quota_if_not_executed(db, task)
         db.commit()
-    try:
-        await comfyui.cancel_task(comfy_id)
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"取消失败: {e.response.text}",
-        ) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"取消失败: {e}") from e
+    if is_comfy_cancellable_prompt_id(comfy_id):
+        try:
+            await comfyui.cancel_task(comfy_id, node_url=task.comfyui_node_url)
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"取消失败: {e.response.text}",
+            ) from e
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"取消失败: {e}") from e
 
     tasks_cache.invalidate_tasks_cache()
     return {"message": "已取消", "task_id": task_id}
+
+
+@router.post("/api/tasks/{task_id}/rating")
+async def submit_task_rating(
+    task_id: str,
+    body: TaskRatingRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """提交生成任务满意度评价。"""
+    if body.rating not in (0, 1):
+        raise HTTPException(status_code=400, detail="rating 只能是 0 或 1")
+
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if user.role != "admin" and (task.user_id is None or task.user_id != user.id):
+        raise HTTPException(status_code=403, detail="无权评价该任务")
+
+    if body.rating == 0:
+        tags = [t.strip() for t in (body.tags or []) if t and str(t).strip()]
+        if not tags:
+            raise HTTPException(status_code=400, detail="不满意时请至少选择一个原因标签")
+        comment = (body.comment or "").strip()
+        if "其他" in tags and not comment:
+            raise HTTPException(status_code=400, detail="选择「其他」时请填写简短说明（1-200字）")
+        if comment and len(comment) > 200:
+            raise HTTPException(status_code=400, detail="补充说明不能超过200字")
+    else:
+        tags = []
+        comment = None
+
+    task.user_rating = body.rating
+    task.rating_tags = json.dumps(tags, ensure_ascii=False) if body.rating == 0 else None
+    task.rating_comment = comment if body.rating == 0 else None
+    task.rated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/api/progress")
@@ -733,6 +1079,9 @@ for _ratio, (_w, _h) in _IMAGE_2K.items():
     RESOLUTION_MAP[(_ratio, "3K")] = _scale_resolution(_w, _h)
 
 RESOLUTION_MAP.update({
+    ("16:9", "480P"):  (854, 480),
+    ("9:16", "480P"):  (480, 854),
+    ("1:1",  "480P"):  (480, 480),
     ("16:9", "720P"):  (1280, 720),
     ("9:16", "720P"):  (720, 1280),
     ("1:1",  "720P"):  (720, 720),
@@ -742,11 +1091,17 @@ RESOLUTION_MAP.update({
 })
 
 def resolve_canvas_image_dimensions(
-    model_id: str, ratio: str, quality: str | None
+    model_id: str,
+    ratio: str,
+    quality: str | None,
+    width: int | None = None,
+    height: int | None = None,
 ) -> tuple[int, int]:
-    """画布图像：按模型 recommended_resolutions 解析宽高。"""
+    """画布图像：按模型 recommended_resolutions / 显式宽高解析。"""
     try:
-        return resolve_image_dimensions_for_model(model_id, ratio, quality)
+        return resolve_image_dimensions_for_model(
+            model_id, ratio, quality, width=width, height=height
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -842,6 +1197,7 @@ async def canvas_text_task(
     create_task_record(
         db, task_id, "text", "queued",
         user_id=user.id, team_id=body.team_id, prompt_text=prompt,
+        model_id=model,
     )
     db.commit()
 
@@ -859,7 +1215,174 @@ async def canvas_text_task(
     return {"task_id": task_id, "status": "queued"}
 
 
-# ── Canvas: image generation ──────────────────────────────────────────────────
+async def _run_canvas_image_submit_task(
+    task_ids: list[str],
+    *,
+    user_id: int,
+    team_id: str | None,
+    prompt: str,
+    negative_in: str,
+    reference_image: str | None,
+    reference_images: list[str],
+    model_key: str,
+    model_filename: str,
+    width: int,
+    height: int,
+    denoise: float,
+    use_reactor: bool,
+    ratio: str,
+    quality: str,
+    trace_id: str,
+) -> None:
+    """后台：optimize + Comfy 提交，写回各 image 任务的 comfyui_prompt_id。"""
+    from db.session import SessionLocal
+
+    db = SessionLocal()
+    batch_count = len(task_ids)
+    try:
+        user = db.get(User, user_id)
+        if not user:
+            raise ValueError("用户不存在")
+
+        for tid in task_ids:
+            task = db.get(Task, tid)
+            if task and task.status != "cancelled":
+                task.status = "processing"
+                task.error = None
+        db.commit()
+
+        prompt_before_optimize = prompt
+        positive, negative_opt, optimized, translate_note = await maybe_optimize_prompt(
+            prompt, negative_in, "image", True, model_hint=model_key
+        )
+        if negative_in:
+            negative_opt = _merge_negative_prompt(negative_in, negative_opt or "")
+        prompt_for_comfy = _finalize_image_positive_for_model(
+            positive,
+            model_key=model_key,
+            model_filename=model_filename,
+        )
+        l3_trace = {
+            "trace_id": trace_id,
+            "before": prompt_before_optimize,
+            "after": positive,
+            "after_final": prompt_for_comfy,
+            "optimized": optimized,
+            "negative_before": negative_in or None,
+            "negative_after": negative_opt or None,
+        }
+        if not optimized and prompt_before_optimize.strip() == positive.strip():
+            l3_trace["optimize_note"] = translate_note or (
+                "未翻译：请在管理后台「模型管理」配置并启用文本 LLM"
+            )
+        await push_trace(3, "TRANSLATED", l3_trace)
+
+        for tid in task_ids:
+            trace_task = db.get(Task, tid)
+            if trace_task and trace_task.status != "cancelled":
+                trace_task.compiled_prompt = prompt_for_comfy
+        db.commit()
+
+        submitted = 0
+        for batch_index, task_id in enumerate(task_ids):
+            task = db.get(Task, task_id)
+            if not task_is_writable(task):
+                continue
+            studio_print(
+                "image",
+                f"ComfyUI 后台提交 batch={batch_index + 1}/{batch_count} "
+                f"model={model_filename} size={width}x{height}",
+            )
+            try:
+                prompt_id, trace_meta, node_url = await comfyui_image.submit_image_prompt(
+                    prompt_for_comfy,
+                    model_filename,
+                    width,
+                    height,
+                    reference_image,
+                    reference_images,
+                    model_key,
+                    skip_translate=optimized
+                    or not re.search(r"[\u4e00-\u9fff]", prompt_for_comfy or ""),
+                    denoise=denoise,
+                    negative_prompt=negative_opt or None,
+                    use_reactor=use_reactor,
+                    db=db,
+                    user=user,
+                    task_id=task_id,
+                )
+            except Exception as exc:
+                studio_print("image", f"ComfyUI 提交失败: {exc}")
+                logger.exception("canvas_image_task async submit failed")
+                remaining_ids = task_ids[batch_index:]
+                for fail_id in remaining_ids:
+                    fail_task = db.get(Task, fail_id)
+                    if fail_task and fail_task.status not in (
+                        "completed",
+                        "failed",
+                        "cancelled",
+                    ):
+                        _mark_task_terminal(
+                            fail_task, status="failed", error=f"提交失败: {exc}"
+                        )
+                # 未成功进队列的任务退还配额
+                if remaining_ids:
+                    refund_quota(db, user_id, "image", len(remaining_ids))
+                db.commit()
+                tasks_cache.invalidate_tasks_cache()
+                return
+
+            if batch_index == 0:
+                await push_trace(
+                    4,
+                    "WORKFLOW",
+                    {
+                        "trace_id": trace_id,
+                        **trace_meta["workflow"],
+                        "reference_count": trace_meta["workflow"].get(
+                            "reference_count", 0
+                        ),
+                        "workflow_mode": trace_meta["workflow"].get(
+                            "workflow_mode", "txt2img"
+                        ),
+                    },
+                )
+
+            task = reload_task_if_active(db, db.get(Task, task_id))
+            if task:
+                _assign_comfy_submission(
+                    task,
+                    comfy_prompt_id=prompt_id,
+                    node_url=node_url,
+                )
+                task.status = "pending"
+                task.error = None
+                task.prompt_text = prompt
+                db.commit()
+                submitted += 1
+                studio_print(
+                    "image",
+                    f"后台入库完成 task_id={task_id} comfy_prompt_id={prompt_id}",
+                )
+
+        tasks_cache.invalidate_tasks_cache()
+        studio_print("image", f"后台提交完成 submitted={submitted}/{batch_count}")
+    except Exception as e:
+        logger.exception("canvas_image async failed")
+        unsubmitted = 0
+        for tid in task_ids:
+            task = db.get(Task, tid)
+            if task and task.status not in ("completed", "failed", "cancelled"):
+                if not task.comfyui_prompt_id:
+                    unsubmitted += 1
+                _mark_task_terminal(task, status="failed", error=f"提交失败: {e}")
+        if unsubmitted:
+            refund_quota(db, user_id, "image", unsubmitted)
+        db.commit()
+        tasks_cache.invalidate_tasks_cache()
+    finally:
+        db.close()
+
 
 @router.post("/api/tasks/image")
 async def canvas_image_task(
@@ -905,7 +1428,13 @@ async def canvas_image_task(
         )
 
         clean_prompt = strip_mention_tokens(raw_prompt)
-        mention_ctx = resolve_mentions(db, user.id, body.mentions)
+        mention_ctx = resolve_mentions(
+            db,
+            user,
+            body.mentions,
+            project_id=getattr(body, "project_id", None),
+            team_id=body.team_id,
+        )
         prompt = enrich_prompt(clean_prompt, mention_ctx.get("context_parts") or [])
         pos_suffix, neg_suffix_preset = get_suffixes(preset_id)
         if pos_suffix:
@@ -945,8 +1474,14 @@ async def canvas_image_task(
         )
 
         model_key = body.model.strip()
+        # 优先显式宽高；否则 quality 可带 WxH（前端清晰度芯片）；再回退 ratio 推荐尺寸
+        quality_for_dim = body.quality
         width, height = resolve_canvas_image_dimensions(
-            model_key, body.ratio, body.quality
+            model_key,
+            body.ratio,
+            quality_for_dim,
+            width=body.width,
+            height=body.height,
         )
 
         row = db.get(RegisteredModel, model_key)
@@ -963,14 +1498,31 @@ async def canvas_image_task(
                 detail=f"模型未配置 ComfyUI 权重文件: {body.model}",
             )
 
+        profile = resolve_generation_profile(model_key, model_filename)
+        has_ref = bool(reference_images) or bool(reference_image)
+        wf = profile.get("workflow_type")
+        img2img = profile.get("img2img_support")
+        if has_ref and img2img == "unsupported" and wf != "flux_pulid":
+            raise HTTPException(
+                status_code=400,
+                detail=f"模型 {model_key} 不支持参考图/img2img，请移除参考图或更换支持图生图的模型",
+            )
+        if wf == "flux_pulid" and not has_ref:
+            raise HTTPException(status_code=400, detail="flux-pulid 需要角色正脸参考图")
+
         batch_count = max(1, min(int(body.count or 1), 4))
 
-        _release_stale_node_tasks(db, body.node_id, user.id)
+        await _release_stale_node_tasks_async(db, body.node_id, user.id)
         await reconcile_active_tasks_from_comfyui(db, user.id)
         check_concurrent_generations(db, user, slots_needed=batch_count, team_id=body.team_id)
+        consumed = 0
         try:
-            check_and_consume(db, user.id, "image")
+            for _ in range(batch_count):
+                check_and_consume(db, user.id, "image")
+                consumed += 1
         except QuotaExceededError as e:
+            if consumed:
+                refund_quota(db, user.id, "image", consumed)
             _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
             raise HTTPException(status_code=429, detail=e.message) from e
 
@@ -989,35 +1541,6 @@ async def canvas_image_task(
         studio_print(
             "trace",
             f"L2 RECEIVED trace_id={trace_id} model={body.model} prompt_len={len(prompt)} count={batch_count}",
-        )
-
-        prompt_before_optimize = prompt
-        negative_in = (body.negative_prompt or "").strip()
-        if neg_suffix_preset and not negative_in:
-            negative_in = neg_suffix_preset
-        positive, negative_opt, optimized, translate_note = await maybe_optimize_prompt(
-            prompt, negative_in, "image", True
-        )
-        if negative_in:
-            negative_opt = _merge_negative_prompt(negative_in, negative_opt or "")
-        prompt_for_comfy = positive
-        l3_trace = {
-            "trace_id": trace_id,
-            "before": prompt_before_optimize,
-            "after": positive,
-            "optimized": optimized,
-            "negative_before": negative_in or None,
-            "negative_after": negative_opt or None,
-        }
-        if not optimized and prompt_before_optimize.strip() == positive.strip():
-            l3_trace["optimize_note"] = translate_note or (
-                "未翻译：请配置 DASHSCOPE_API_KEY 或启用文本模型以翻译中文"
-            )
-        await push_trace(3, "TRANSLATED", l3_trace)
-        studio_print(
-            "trace",
-            f"L3 TRANSLATED trace_id={trace_id} optimized={optimized} "
-            f"before_len={len(prompt_before_optimize)} after_len={len(positive)}",
         )
 
         logger.info(
@@ -1041,8 +1564,45 @@ async def canvas_image_task(
             model_filename,
         )
 
+        negative_in = (body.negative_prompt or "").strip()
+        if neg_suffix_preset and not negative_in:
+            negative_in = neg_suffix_preset
+
         if settings.agent_mock_generation:
             # MOCK PROVIDER — 移除时机：ComfyUI 真实模型接入后
+            image_gen_params = build_image_generation_params(
+                ratio=body.ratio,
+                quality=body.quality,
+                width=width,
+                height=height,
+                reference_images=reference_images,
+                use_reactor=bool(getattr(body, "use_reactor", False)),
+                mock=True,
+            )
+            prompt_before_optimize = prompt
+            positive, negative_opt, optimized, translate_note = await maybe_optimize_prompt(
+                prompt, negative_in, "image", True, model_hint=model_key
+            )
+            if negative_in:
+                negative_opt = _merge_negative_prompt(negative_in, negative_opt or "")
+            positive = _finalize_image_positive_for_model(
+                positive,
+                model_key=model_key,
+                model_filename=model_filename,
+            )
+            l3_trace = {
+                "trace_id": trace_id,
+                "before": prompt_before_optimize,
+                "after": positive,
+                "optimized": optimized,
+                "negative_before": negative_in or None,
+                "negative_after": negative_opt or None,
+            }
+            if not optimized and prompt_before_optimize.strip() == positive.strip():
+                l3_trace["optimize_note"] = translate_note or (
+                    "未翻译：请在管理后台「模型管理」配置并启用文本 LLM"
+                )
+            await push_trace(3, "TRANSLATED", l3_trace)
             task_ids: list[str] = []
             for _ in range(batch_count):
                 task_id = str(uuid.uuid4())
@@ -1056,6 +1616,10 @@ async def canvas_image_task(
                     prompt_text=prompt,
                     comfyui_prompt_id=mock_generation.MOCK_PROMPT_ID,
                     node_id=body.node_id,
+                    original_input=raw_prompt,
+                    compiled_prompt=positive,
+                    model_id=model_key,
+                    generation_params=image_gen_params,
                 )
                 task_ids.append(task_id)
             db.commit()
@@ -1084,56 +1648,18 @@ async def canvas_image_task(
                 )
             return {"task_ids": task_ids, "task_id": task_ids[0]}
 
-        task_ids: list[str] = []
-
-        for batch_index in range(batch_count):
-            studio_print(
-                "image",
-                f"ComfyUI 提交前 batch={batch_index + 1}/{batch_count} "
-                f"model={model_filename} size={width}x{height} ratio={body.ratio} quality={body.quality}",
-            )
-            try:
-                prompt_id, trace_meta = await comfyui_image.submit_image_prompt(
-                    prompt_for_comfy,
-                    model_filename,
-                    width,
-                    height,
-                    reference_image,
-                    reference_images,
-                    model_key,
-                    skip_translate=optimized or not re.search(r"[\u4e00-\u9fff]", prompt_for_comfy or ""),
-                    denoise=body.denoise,
-                    negative_prompt=negative_opt or None,
-                    use_reactor=bool(getattr(body, "use_reactor", False)),
-                    db=db,
-                    user=user,
-                )
-                if batch_index == 0:
-                    await push_trace(4, "WORKFLOW", {
-                        "trace_id": trace_id,
-                        **trace_meta["workflow"],
-                        "reference_count": trace_meta["workflow"].get("reference_count", 0),
-                        "workflow_mode": trace_meta["workflow"].get("workflow_mode", "txt2img"),
-                    })
-                    studio_print("trace", f"L4 WORKFLOW trace_id={trace_id} {trace_meta['workflow']}")
-                studio_print(
-                    "image",
-                    f"comfyui.submit_image_prompt 返回 prompt_id={prompt_id}",
-                )
-            except Exception as exc:
-                studio_print("image", f"ComfyUI 提交失败: {exc}")
-                logger.exception("canvas_image_task comfyui submit failed")
-                _release_acquired_slots(
-                    user.id,
-                    team_id=body.team_id,
-                    slots=max(0, batch_count - len(task_ids)),
-                )
-                raise
+        image_gen_params = build_image_generation_params(
+            ratio=body.ratio,
+            quality=body.quality,
+            width=width,
+            height=height,
+            reference_images=reference_images,
+            use_reactor=bool(getattr(body, "use_reactor", False)),
+            mock=False,
+        )
+        task_ids = []
+        for _ in range(batch_count):
             task_id = str(uuid.uuid4())
-            studio_print(
-                "image",
-                f"任务入库 task_id={task_id} comfy_prompt_id={prompt_id}",
-            )
             create_task_record(
                 db,
                 task_id,
@@ -1142,14 +1668,36 @@ async def canvas_image_task(
                 user_id=user.id,
                 team_id=body.team_id,
                 prompt_text=prompt,
-                comfyui_prompt_id=prompt_id,
+                comfyui_prompt_id=None,
                 node_id=body.node_id,
+                original_input=raw_prompt,
+                model_id=model_key,
+                generation_params=image_gen_params,
             )
             task_ids.append(task_id)
-
         db.commit()
-        studio_print("image", f"响应 task_ids={task_ids}")
-
+        tasks_cache.invalidate_tasks_cache()
+        asyncio.create_task(
+            _run_canvas_image_submit_task(
+                task_ids,
+                user_id=user.id,
+                team_id=body.team_id,
+                prompt=prompt,
+                negative_in=negative_in,
+                reference_image=reference_image,
+                reference_images=reference_images,
+                model_key=model_key,
+                model_filename=model_filename,
+                width=width,
+                height=height,
+                denoise=body.denoise,
+                use_reactor=bool(getattr(body, "use_reactor", False)),
+                ratio=body.ratio,
+                quality=body.quality,
+                trace_id=trace_id,
+            )
+        )
+        studio_print("image", f"已入库异步提交 task_ids={task_ids}")
         return {"task_ids": task_ids, "task_id": task_ids[0]}
     except HTTPException:
         raise
@@ -1180,6 +1728,289 @@ async def _image_url_to_base64(
         path = resolve_image_reference_path(db, user, image_url)
         data = path.read_bytes()
     return base64.b64encode(data).decode("ascii")
+
+
+async def _run_canvas_video_submit_task(
+    task_id: str,
+    *,
+    user_id: int,
+    team_id: str | None,
+    batch_count: int,
+    prompt: str,
+    neg_suffix: str,
+    pos_suffix: str,
+    mode: str,
+    first_frame: str | None,
+    last_frame: str | None,
+    ref_image: str | None,
+    model_id: str,
+    model_entry: dict | None,
+    video_backend: str,
+    aligned_w: int,
+    aligned_h: int,
+    duration: int,
+    ratio: str,
+    resolution: str,
+    audio: bool,
+    client_id: str | None,
+    sampling_profile: str | None,
+    steps: int | None,
+    use_distilled: bool,
+    cfg_distilled: bool,
+    use_cache: bool,
+    camera_move: str | None,
+    shot_scale: str | None,
+    sound_note: str | None,
+    use_reactor: bool,
+    reactor_face: str | None,
+    trace_id: str,
+) -> None:
+    """后台：参考图转码 + optimize + Comfy/Seedance 提交。"""
+    from db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        task = db.get(Task, task_id)
+        if not task_is_writable(task):
+            return
+        task.status = "processing"
+        task.error = None
+        db.commit()
+
+        user = db.get(User, user_id)
+        if not user:
+            raise ValueError("用户不存在")
+
+        image_b64 = None
+        start_image_b64 = None
+        end_image_b64 = None
+        if mode == "fun_inpaint":
+            start_image_b64 = await _image_url_to_base64(first_frame, db=db, user=user)
+            end_image_b64 = await _image_url_to_base64(last_frame, db=db, user=user)
+        elif mode == "flf2v":
+            start_image_b64 = await _image_url_to_base64(first_frame, db=db, user=user)
+            end_image_b64 = await _image_url_to_base64(last_frame, db=db, user=user)
+        elif mode == "image2video" and ref_image:
+            image_b64 = await _image_url_to_base64(ref_image, db=db, user=user)
+
+        # Wan：运镜/景别注入到 prompt（与 /api/prompt/compile 一致）
+        if video_backend == "wan" and (
+            (camera_move or "auto") != "auto" or (shot_scale or "auto") != "auto"
+        ):
+            try:
+                from services.prompt_builder import build_prompt
+
+                compiled = build_prompt(
+                    prompt,
+                    model_target="wan-t2v" if mode == "text2video" else "wan-i2v",
+                    camera_move=camera_move or "auto",
+                    shot_scale=shot_scale or "auto",
+                )
+                prompt = compiled.positive_prompt or prompt
+            except Exception:
+                logger.exception("wan camera/shot inject failed; continue without")
+
+        prompt_before_optimize = prompt
+        video_model_hint = "hunyuan" if video_backend == "hunyuan" else model_id
+        positive, negative, optimized, translate_note = await maybe_optimize_prompt(
+            prompt, neg_suffix, "video", True, model_hint=video_model_hint
+        )
+        positive = apply_video_anatomy_guard(positive)
+        if video_backend == "hunyuan":
+            positive = build_hunyuan_prompt(positive)
+        translated_positive = positive
+        if pos_suffix:
+            positive = f"{positive}, {pos_suffix}" if positive.strip() else pos_suffix
+        l3_trace = {
+            "trace_id": trace_id,
+            "before": prompt_before_optimize,
+            "after": translated_positive,
+            "after_final": positive,
+            "optimized": optimized,
+        }
+        if not optimized and prompt_before_optimize.strip() == translated_positive.strip():
+            l3_trace["optimize_note"] = translate_note or (
+                "未翻译：请在管理后台「模型管理」配置并启用文本 LLM"
+            )
+        await push_trace(3, "TRANSLATED", l3_trace)
+
+        task = db.get(Task, task_id)
+        if task and task.status != "cancelled":
+            task.compiled_prompt = positive
+
+        model_ckpt = (model_entry or {}).get("comfyui_model_file")
+        if video_backend == "ltx":
+            model_ckpt = comfyui.LTX_CKPT or model_ckpt
+        elif video_backend == "ltx2":
+            model_ckpt = (model_entry or {}).get("comfyui_model_file") or comfyui.LTX2_CKPT
+
+        if video_backend == "seedance":
+            from providers.seedance import SeedanceClient
+            from services.prompt_builder import compress_for_seedance
+            from services.seedance_task_service import run_seedance_video_task
+
+            client = SeedanceClient()
+            if not client.is_configured():
+                raise ValueError("未配置 SEEDANCE_API_KEY，无法提交 Seedance 任务")
+            compressed = compress_for_seedance(
+                positive,
+                camera_move=camera_move or "auto",
+                shot_scale=shot_scale or "auto",
+            )
+            task = reload_task_if_active(db, db.get(Task, task_id))
+            if not task:
+                return
+            task.comfyui_prompt_id = "seedance:pending"
+            task.prompt_text = compressed.positive_prompt
+            task.compiled_prompt = compressed.positive_prompt
+            task.status = "pending"
+            task.error = None
+            db.commit()
+            await push_trace(
+                4,
+                "WORKFLOW",
+                build_mock_workflow_trace(
+                    "video",
+                    trace_id=trace_id,
+                    positive_prompt=compressed.positive_prompt,
+                    width=aligned_w,
+                    height=aligned_h,
+                    workflow_mode="seedance",
+                    duration=duration,
+                ),
+            )
+            asyncio.create_task(
+                run_seedance_video_task(
+                    task_id,
+                    prompt=compressed.positive_prompt,
+                    ratio=ratio,
+                    duration=int(duration),
+                    resolution=str(resolution or "720p"),
+                )
+            )
+            tasks_cache.invalidate_tasks_cache()
+            studio_print("video", f"后台 seedance 提交 task_id={task_id}")
+            return
+
+        video_submit_kwargs = dict(
+            prompt=positive,
+            negative_prompt=negative,
+            duration=duration,
+            width=aligned_w,
+            height=aligned_h,
+            mode=mode,
+            image_b64=image_b64,
+            start_image_b64=start_image_b64,
+            end_image_b64=end_image_b64,
+            raw_prompt=optimized,
+            client_id=client_id,
+            model_filename=model_ckpt,
+        )
+        if video_backend == "ltx2":
+            video_submit_kwargs["audio"] = bool(audio)
+
+        comfy_node_url: str | None = None
+        if video_backend == "wan":
+            comfy_prompt_id, _client_id, workflow, comfy_node_url = (
+                await comfyui.submit_wan_video_prompt(
+                **video_submit_kwargs,
+                sampling_profile=sampling_profile or "fast",
+                )
+            )
+            trace_ckpt = model_ckpt or comfyui.WAN_CKPT
+        elif video_backend == "hunyuan":
+            est_params = {
+                "duration": duration,
+                "width": aligned_w,
+                "height": aligned_h,
+                "steps": steps,
+                "use_distilled": bool(use_distilled),
+            }
+            est_sec = estimate_duration(model_id, est_params)
+            queue_name = estimate_queue_bucket(model_id, est_params)
+            studio_print(
+                "video",
+                f"GPUPool hunyuan est={est_sec}s queue={queue_name}",
+            )
+            comfy_prompt_id, _client_id, workflow, comfy_node_url = (
+                await comfyui.submit_hunyuan_video_prompt(
+                    prompt=positive,
+                    negative_prompt=negative,
+                    duration=duration,
+                    width=aligned_w,
+                    height=aligned_h,
+                    mode=mode,
+                    image_b64=image_b64,
+                    raw_prompt=optimized,
+                    client_id=client_id,
+                    model_filename=model_ckpt,
+                    steps=steps,
+                    use_distilled=bool(use_distilled),
+                    cfg_distilled=bool(cfg_distilled),
+                    use_cache=bool(use_cache),
+                )
+            )
+            trace_ckpt = model_ckpt or comfyui.HUNYUAN15_CKPT
+        elif video_backend == "ltx2":
+            comfy_prompt_id, _client_id, workflow, comfy_node_url = (
+                await comfyui.submit_ltx2_video_prompt(
+                **video_submit_kwargs
+                )
+            )
+            trace_ckpt = model_ckpt or comfyui.LTX2_CKPT
+        else:
+            comfy_prompt_id, _client_id, workflow, comfy_node_url = (
+                await comfyui.submit_video_prompt(
+                **video_submit_kwargs
+                )
+            )
+            trace_ckpt = comfyui.LTX_CKPT
+
+        workflow_trace = extract_workflow_trace(workflow, trace_ckpt)
+        workflow_trace["trace_id"] = trace_id
+        workflow_trace["task_type"] = "video"
+        workflow_trace["duration"] = duration
+        await push_trace(4, "WORKFLOW", workflow_trace)
+
+        task = reload_task_if_active(db, db.get(Task, task_id))
+        if not task:
+            stale = db.get(Task, task_id)
+            studio_print(
+                "video",
+                f"跳过后台提交 task_id={task_id} 任务已终态 status={getattr(stale, 'status', None)}",
+            )
+            return
+        _assign_comfy_submission(
+            task,
+            comfy_prompt_id=comfy_prompt_id,
+            node_url=comfy_node_url,
+        )
+        task.status = "pending"
+        task.error = None
+        db.commit()
+        tasks_cache.invalidate_tasks_cache()
+        studio_print(
+            "video",
+            f"后台提交完成 task_id={task_id} comfy_prompt_id={comfy_prompt_id}",
+        )
+    except Exception as e:
+        err = str(e)
+        if isinstance(e, httpx.ConnectError):
+            err = "ComfyUI 服务未启动，请先启动 ComfyUI（端口 8000）"
+        elif isinstance(e, httpx.HTTPStatusError):
+            err = f"ComfyUI 返回错误: {e.response.status_code}"
+        task = db.get(Task, task_id)
+        if task and task.status != "cancelled":
+            _mark_task_terminal(task, status="failed", error=err[:2000])
+            if not comfy_id_counts_as_executed(task):
+                refund_quota(db, user_id, "video", 1)
+            db.commit()
+            tasks_cache.invalidate_tasks_cache()
+        elif not task:
+            _release_acquired_slots(user_id, team_id=team_id, slots=batch_count)
+        logger.exception("canvas_video async submit failed task_id=%s", task_id)
+    finally:
+        db.close()
 
 
 # ── Canvas: video generation ──────────────────────────────────────────────────
@@ -1237,7 +2068,13 @@ async def canvas_video_task(
     )
 
     clean_prompt = strip_mention_tokens(raw_prompt)
-    mention_ctx = resolve_mentions(db, user.id, body.mentions)
+    mention_ctx = resolve_mentions(
+        db,
+        user,
+        body.mentions,
+        project_id=getattr(body, "project_id", None),
+        team_id=body.team_id,
+    )
     prompt = enrich_prompt(clean_prompt, mention_ctx.get("context_parts") or [])
 
     pos_suffix, neg_suffix = get_suffixes(preset_id)
@@ -1278,7 +2115,8 @@ async def canvas_video_task(
     )
 
     model_entry = MODEL_MAP.get(body.model.strip()) or MODEL_MAP.get(body.model.strip().lower())
-    allowed_durations = (model_entry or {}).get("capabilities", {}).get("durations")
+    model_caps = (model_entry or {}).get("capabilities") or {}
+    allowed_durations = model_caps.get("durations")
     if not isinstance(allowed_durations, list) or not allowed_durations:
         allowed_durations = [5, 10, 15]
     allowed_durations = [int(d) for d in allowed_durations]
@@ -1289,17 +2127,39 @@ async def canvas_video_task(
             detail=f"视频时长仅支持 {opts} 秒",
         )
 
+    allowed_ratios = model_caps.get("aspect_ratios") or []
+    if allowed_ratios and body.ratio not in allowed_ratios:
+        opts = " / ".join(str(r) for r in allowed_ratios)
+        raise HTTPException(
+            status_code=400,
+            detail=f"该模型不支持宽高比 {body.ratio}，可选：{opts}",
+        )
+
+    allowed_res = get_video_allowed_resolutions(body.model.strip())
+    res_norm = str(body.resolution or "").strip().upper()
+    if allowed_res and res_norm not in allowed_res:
+        opts = " / ".join(allowed_res)
+        raise HTTPException(
+            status_code=400,
+            detail=f"该模型不支持清晰度 {body.resolution}，可选：{opts}",
+        )
+    # 规范化后用于 RESOLUTION_MAP 查找
+    body_resolution = res_norm or body.resolution
+
+    if body.audio and not bool(model_caps.get("supports_audio")):
+        body.audio = False
+
     # 解析分辨率（探针可同时传 width+height 覆盖）
     override_w = getattr(body, "width", None)
     override_h = getattr(body, "height", None)
     if override_w is not None and override_h is not None:
         width, height = int(override_w), int(override_h)
     else:
-        res_key = (body.ratio, body.resolution)
+        res_key = (body.ratio, body_resolution)
         if res_key not in RESOLUTION_MAP:
             raise HTTPException(
                 status_code=400,
-                detail=f"不支持的比例/清晰度组合: {body.ratio} · {body.resolution}",
+                detail=f"不支持的比例/清晰度组合: {body.ratio} · {body_resolution}",
             )
         width, height = RESOLUTION_MAP[res_key]
     video_backend = resolve_video_backend(body.model.strip())
@@ -1324,52 +2184,60 @@ async def canvas_video_task(
         f"(对齐后 {aligned_w}x{aligned_h}, backend={video_backend})",
     )
 
-    batch_count = max(1, min(int(body.count or 1), 4))
-    _release_stale_node_tasks(db, body.node_id, user.id)
+    batch_count = 1
+    await _release_stale_node_tasks_async(db, body.node_id, user.id)
     await reconcile_active_tasks_from_comfyui(db, user.id)
-    check_concurrent_generations(db, user, slots_needed=batch_count, team_id=body.team_id)
-    ref_image = body.first_frame or body.reference_image
-    if not ref_image and body.reference_images:
-        ref_image = body.reference_images[0]
 
     model_id = (body.model or "").strip()
+    row = db.get(RegisteredModel, model_id)
+    if not row:
+        raise HTTPException(status_code=400, detail=f"模型不存在: {body.model}")
+    if not row.enabled:
+        raise HTTPException(status_code=400, detail=f"模型未启用: {body.model}")
+    if row.category != "video":
+        raise HTTPException(status_code=400, detail=f"模型类别不是视频: {body.model}")
+
+    check_concurrent_generations(db, user, slots_needed=batch_count, team_id=body.team_id)
+    ref_image = first_frame or reference_image
+    if not ref_image and reference_images:
+        ref_image = reference_images[0]
+
     use_fun_inpaint = model_id == "wan-fun-inpaint"
+    # 首尾同图视为单帧 I2V，不能走 FLF2V
     use_flf2v = (
         not use_fun_inpaint
         and body.generation_mode == "keyframe"
-        and body.first_frame
-        and body.last_frame
+        and bool(first_frame)
+        and bool(last_frame)
+        and first_frame != last_frame
     )
     mode = "text2video"
-    image_b64 = None
-    start_image_b64 = None
-    end_image_b64 = None
-
     if use_fun_inpaint:
-        if not body.first_frame or not body.last_frame:
+        if not first_frame or not last_frame:
             raise HTTPException(
                 status_code=400,
                 detail="wan-fun-inpaint 需要首帧与尾帧（first_frame + last_frame）",
             )
         mode = "fun_inpaint"
-        try:
-            start_image_b64 = await _image_url_to_base64(body.first_frame, db=db, user=user)
-            end_image_b64 = await _image_url_to_base64(body.last_frame, db=db, user=user)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
     elif use_flf2v:
         mode = "flf2v"
-        try:
-            start_image_b64 = await _image_url_to_base64(body.first_frame, db=db, user=user)
-            end_image_b64 = await _image_url_to_base64(body.last_frame, db=db, user=user)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
     elif ref_image:
         mode = "image2video"
-        try:
-            image_b64 = await _image_url_to_base64(ref_image, db=db, user=user)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # T2V-only 权重不能跑 i2v/flf2v：自动切到 wan-i2v
+    t2v_only = {
+        "wan-2.6",
+        "ltx-video",
+        "hunyuan-video",
+        "hunyuan-video-1.5",
+    }
+    # LTX-2 支持 I2V，但不支持首尾帧 FLF2V → 切 wan-i2v
+    if mode == "flf2v" and model_id == "ltx2-fp4":
+        model_id = "wan-i2v"
+        video_backend = resolve_video_backend(model_id)
+    elif mode in ("image2video", "flf2v") and model_id in t2v_only:
+        model_id = "wan-i2v"
+        video_backend = resolve_video_backend(model_id)
 
     await push_trace(
         2,
@@ -1397,52 +2265,67 @@ async def canvas_video_task(
         _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
         raise HTTPException(status_code=429, detail=e.message) from e
 
-    prompt_before_optimize = prompt
-    positive, negative, optimized, translate_note = await maybe_optimize_prompt(
-        prompt, neg_suffix, "video", True
+    sound_note = (body.sound_note or "").strip() or None
+    reactor_face = (body.reactor_face_image or "").strip() or None
+    use_reactor = bool(body.use_reactor) and bool(reactor_face)
+
+    sampling_profile, sampling_upgrade_reason = resolve_video_sampling_profile(
+        sampling_profile=getattr(body, "sampling_profile", None),
+        generation_mode=body.generation_mode,
+        workflow_mode=mode,
+        has_reference_image=bool(ref_image),
+        prompt=prompt,
+        video_backend=video_backend,
     )
-    translated_positive = positive
-    if pos_suffix:
-        positive = f"{positive}, {pos_suffix}" if positive.strip() else pos_suffix
-    l3_trace = {
-        "trace_id": trace_id,
-        "before": prompt_before_optimize,
-        "after": translated_positive,
-        "after_final": positive,
-        "optimized": optimized,
-    }
-    if not optimized and prompt_before_optimize.strip() == translated_positive.strip():
-        l3_trace["optimize_note"] = translate_note or (
-            "未翻译：请配置 DASHSCOPE_API_KEY 或启用文本模型以翻译中文"
+    if sampling_upgrade_reason:
+        logger.info(
+            "video sampling_profile fast→quality: reason=%s node_id=%s task_mode=%s",
+            sampling_upgrade_reason,
+            body.node_id,
+            mode,
         )
-    await push_trace(3, "TRANSLATED", l3_trace)
-    studio_print(
-        "trace",
-        f"L3 TRANSLATED trace_id={trace_id} optimized={optimized} "
-        f"before_len={len(prompt_before_optimize)} after_len={len(translated_positive)} "
-        f"final_len={len(positive)}",
-    )
+        studio_print(
+            "video",
+            f"高风险 freeref I2V 自动升档 quality ({sampling_upgrade_reason})",
+        )
 
-    logger.info(
-        "canvas_video_task before comfyui: mode=%s duration=%s optimized=%s",
-        mode,
-        body.duration,
-        optimized,
-    )
-
-    studio_print(
-        "video",
-        f"ComfyUI 提交前 size={width}x{height} ratio={body.ratio} "
-        f"resolution={body.resolution} duration={body.duration}s mode={mode} "
-        f"generation_mode={body.generation_mode}",
+    video_gen_params = build_video_generation_params(
+        ratio=body.ratio,
+        resolution=body.resolution,
+        duration=body.duration,
+        mode=mode,
+        width=aligned_w,
+        height=aligned_h,
+        reference_images=reference_images,
+        use_reactor=use_reactor,
+        mock=settings.agent_mock_generation,
     )
 
     if settings.agent_mock_generation:
-        # MOCK PROVIDER — 移除时机：ComfyUI 真实模型接入后
+        prompt_before_optimize = prompt
+        video_model_hint = "hunyuan" if video_backend == "hunyuan" else model_id
+        positive, negative, optimized, translate_note = await maybe_optimize_prompt(
+            prompt, neg_suffix, "video", True, model_hint=video_model_hint
+        )
+        positive = apply_video_anatomy_guard(positive)
+        if video_backend == "hunyuan":
+            positive = build_hunyuan_prompt(positive)
+        translated_positive = positive
+        if pos_suffix:
+            positive = f"{positive}, {pos_suffix}" if positive.strip() else pos_suffix
+        l3_trace = {
+            "trace_id": trace_id,
+            "before": prompt_before_optimize,
+            "after": translated_positive,
+            "after_final": positive,
+            "optimized": optimized,
+        }
+        if not optimized and prompt_before_optimize.strip() == translated_positive.strip():
+            l3_trace["optimize_note"] = translate_note or (
+                "未翻译：请在管理后台「模型管理」配置并启用文本 LLM"
+            )
+        await push_trace(3, "TRANSLATED", l3_trace)
         task_id = str(uuid.uuid4())
-        sound_note = (body.sound_note or "").strip() or None
-        reactor_face = (body.reactor_face_image or "").strip() or None
-        use_reactor = bool(body.use_reactor) and bool(reactor_face)
         create_task_record(
             db,
             task_id,
@@ -1457,6 +2340,10 @@ async def canvas_video_task(
             video_backend=video_backend,
             use_reactor=use_reactor,
             reactor_face_image=reactor_face if use_reactor else None,
+            original_input=raw_prompt,
+            compiled_prompt=positive,
+            model_id=model_id,
+            generation_params=video_gen_params,
         )
         db.commit()
         tasks_cache.invalidate_tasks_cache()
@@ -1486,147 +2373,7 @@ async def canvas_video_task(
             "status": "pending",
         }
 
-    try:
-        model_ckpt = (model_entry or {}).get("comfyui_model_file")
-        if video_backend == "ltx":
-            # 以启动时从 ComfyUI 扫描到的权重为准，避免注册表占位名与磁盘不一致
-            model_ckpt = comfyui.LTX_CKPT or model_ckpt
-        elif video_backend == "ltx2":
-            model_ckpt = (model_entry or {}).get("comfyui_model_file") or comfyui.LTX2_CKPT
-        video_submit_kwargs = dict(
-            prompt=positive,
-            negative_prompt=negative,
-            duration=body.duration,
-            width=aligned_w,
-            height=aligned_h,
-            mode=mode,
-            image_b64=image_b64,
-            start_image_b64=start_image_b64,
-            end_image_b64=end_image_b64,
-            raw_prompt=optimized,
-            client_id=body.client_id,
-            model_filename=model_ckpt,
-        )
-        if video_backend == "ltx2":
-            video_submit_kwargs["audio"] = bool(body.audio)
-        if video_backend == "wan":
-            comfy_prompt_id, _client_id, workflow = await comfyui.submit_wan_video_prompt(
-                **video_submit_kwargs,
-                sampling_profile=getattr(body, "sampling_profile", None) or "fast",
-            )
-            trace_ckpt = model_ckpt or comfyui.WAN_CKPT
-        elif video_backend == "hunyuan":
-            comfy_prompt_id, _client_id, workflow = await comfyui.submit_hunyuan_video_prompt(
-                prompt=positive,
-                negative_prompt=negative,
-                duration=body.duration,
-                width=aligned_w,
-                height=aligned_h,
-                mode=mode,
-                image_b64=image_b64,
-                raw_prompt=optimized,
-                client_id=body.client_id,
-                model_filename=model_ckpt,
-                steps=getattr(body, "steps", None),
-            )
-            trace_ckpt = model_ckpt or comfyui.HUNYUAN_CKPT
-        elif video_backend == "seedance":
-            from providers.seedance import SeedanceClient, SeedanceNotConfiguredError
-            from services.prompt_builder import compress_for_seedance
-            from services.seedance_task_service import queue_seedance_video_task
-
-            client = SeedanceClient()
-            if not client.is_configured():
-                _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
-                raise HTTPException(
-                    status_code=503,
-                    detail="未配置 SEEDANCE_API_KEY，无法提交 Seedance 任务",
-                )
-            compressed = compress_for_seedance(
-                positive,
-                camera_move=getattr(body, "camera_move", None) or "auto",
-                shot_scale=getattr(body, "shot_scale", None) or "auto",
-            )
-            reactor_face = (body.reactor_face_image or "").strip() or None
-            use_reactor = bool(body.use_reactor) and bool(reactor_face)
-            task_id = await queue_seedance_video_task(
-                db,
-                user_id=user.id,
-                team_id=body.team_id,
-                node_id=body.node_id,
-                prompt=compressed.positive_prompt,
-                ratio=body.ratio,
-                duration=body.duration,
-                resolution=body.resolution,
-                sound_note=(body.sound_note or "").strip() or None,
-                use_reactor=use_reactor,
-                reactor_face_image=reactor_face if use_reactor else None,
-                video_backend=video_backend,
-            )
-            db.commit()
-            tasks_cache.invalidate_tasks_cache()
-            await push_trace(
-                4,
-                "WORKFLOW",
-                build_mock_workflow_trace(
-                    "video",
-                    trace_id=trace_id,
-                    positive_prompt=compressed.positive_prompt,
-                    width=aligned_w,
-                    height=aligned_h,
-                    workflow_mode="seedance",
-                    duration=body.duration,
-                ),
-            )
-            studio_print("video", f"seedance 异步提交 task_id={task_id}")
-            return {
-                "task_id": task_id,
-                "comfy_prompt_id": "seedance",
-                "status": "pending",
-            }
-        elif video_backend == "ltx2":
-            comfy_prompt_id, _client_id, workflow = await comfyui.submit_ltx2_video_prompt(
-                **video_submit_kwargs
-            )
-            trace_ckpt = model_ckpt or comfyui.LTX2_CKPT
-        else:
-            comfy_prompt_id, _client_id, workflow = await comfyui.submit_video_prompt(
-                **video_submit_kwargs
-            )
-            trace_ckpt = comfyui.LTX_CKPT
-        workflow_trace = extract_workflow_trace(workflow, trace_ckpt)
-        workflow_trace["trace_id"] = trace_id
-        workflow_trace["task_type"] = "video"
-        workflow_trace["duration"] = body.duration
-        await push_trace(4, "WORKFLOW", workflow_trace)
-        studio_print("trace", f"L4 WORKFLOW {workflow_trace}")
-    except ValueError as e:
-        db.rollback()
-        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except httpx.ConnectError:
-        db.rollback()
-        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
-        raise HTTPException(
-            status_code=503,
-            detail="ComfyUI 服务未启动，请先启动 ComfyUI（端口 8000）",
-        )
-    except httpx.HTTPStatusError as e:
-        db.rollback()
-        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
-        raise HTTPException(
-            status_code=502,
-            detail=f"ComfyUI 返回错误: {e.response.status_code}",
-        ) from e
-    except Exception as e:
-        db.rollback()
-        _release_acquired_slots(user.id, team_id=body.team_id, slots=batch_count)
-        raise HTTPException(status_code=500, detail=f"提交失败: {e}") from e
-
     task_id = str(uuid.uuid4())
-    sound_note = (body.sound_note or "").strip() or None
-    reactor_face = (body.reactor_face_image or "").strip() or None
-    use_reactor = bool(body.use_reactor) and bool(reactor_face)
     create_task_record(
         db,
         task_id,
@@ -1635,25 +2382,58 @@ async def canvas_video_task(
         user_id=user.id,
         team_id=body.team_id,
         prompt_text=prompt,
-        comfyui_prompt_id=comfy_prompt_id,
+        comfyui_prompt_id=None,
         node_id=body.node_id,
         sound_note=sound_note,
         video_backend=video_backend,
         use_reactor=use_reactor,
         reactor_face_image=reactor_face if use_reactor else None,
+        original_input=raw_prompt,
+        model_id=model_id,
+        generation_params=video_gen_params,
     )
     db.commit()
     tasks_cache.invalidate_tasks_cache()
-
-    studio_print(
-        "video",
-        f"已入库 task_id={task_id} comfy_prompt_id={comfy_prompt_id} "
-        f"轮询请 GET /api/tasks/{task_id}",
+    asyncio.create_task(
+        _run_canvas_video_submit_task(
+            task_id,
+            user_id=user.id,
+            team_id=body.team_id,
+            batch_count=batch_count,
+            prompt=prompt,
+            neg_suffix=neg_suffix or "",
+            pos_suffix=pos_suffix or "",
+            mode=mode,
+            first_frame=first_frame,
+            last_frame=last_frame,
+            ref_image=ref_image,
+            model_id=model_id,
+            model_entry=model_entry,
+            video_backend=video_backend,
+            aligned_w=aligned_w,
+            aligned_h=aligned_h,
+            duration=body.duration,
+            ratio=body.ratio,
+            resolution=body.resolution,
+            audio=bool(body.audio),
+            client_id=body.client_id,
+            sampling_profile=sampling_profile,
+            steps=getattr(body, "steps", None),
+            use_distilled=bool(getattr(body, "use_distilled", False)),
+            cfg_distilled=bool(getattr(body, "cfg_distilled", False)),
+            use_cache=bool(getattr(body, "use_cache", False)),
+            camera_move=getattr(body, "camera_move", None),
+            shot_scale=getattr(body, "shot_scale", None),
+            sound_note=sound_note,
+            use_reactor=use_reactor,
+            reactor_face=reactor_face if use_reactor else None,
+            trace_id=trace_id,
+        )
     )
-
+    studio_print("video", f"已入库异步提交 task_id={task_id} backend={video_backend}")
     return {
         "task_id": task_id,
-        "comfy_prompt_id": comfy_prompt_id,
+        "comfy_prompt_id": None,
         "status": "pending",
     }
 
@@ -1679,10 +2459,11 @@ async def _run_video_enhance_recommend_task(
     db = SessionLocal()
     try:
         task = db.get(Task, task_id)
-        if task:
-            task.status = "processing"
-            task.error = None
-            db.commit()
+        if not task_is_writable(task):
+            return
+        task.status = "processing"
+        task.error = None
+        db.commit()
 
         user = db.get(User, user_id)
         if not user:
@@ -1722,7 +2503,7 @@ async def _run_video_enhance_recommend_task(
             quality_preset_id=quality_preset_id,
         )
         task = db.get(Task, task_id)
-        if task and task.status != "cancelled":
+        if task_is_writable(task):
             task.status = "completed"
             task.error = None
             task.result = json.dumps(
@@ -1732,7 +2513,7 @@ async def _run_video_enhance_recommend_task(
             db.commit()
     except Exception as e:
         task = db.get(Task, task_id)
-        if task and task.status != "cancelled":
+        if task_is_writable(task):
             task.status = "failed"
             task.error = str(e)[:2000]
             task.result = None
@@ -1783,6 +2564,108 @@ async def canvas_video_enhance_recommend_params(
         )
     )
     return {"task_id": task_id, "status": "queued"}
+
+
+async def _run_video_enhance_submit_task(
+    task_id: str,
+    *,
+    user_id: int,
+    team_id: str | None,
+    video_url: str,
+    provider_id: str,
+    seedvr2_params: dict,
+    client_id: str | None,
+    trace_id: str,
+) -> None:
+    """后台：上传视频到 Comfy 并提交 enhance workflow，写回 comfyui_prompt_id。"""
+    from db.session import SessionLocal
+    from comfyui.client import map_enhance_submit_error
+
+    db = SessionLocal()
+    try:
+        task = db.get(Task, task_id)
+        if not task_is_writable(task):
+            return
+        task.status = "processing"
+        task.error = None
+        db.commit()
+
+        user = db.get(User, user_id)
+        if not user:
+            raise ValueError("用户不存在")
+
+        upscale_factor = seedvr2_params["upscale_factor"]
+        if provider_id == VIDEO_ENHANCE_SEEDVR2_ID:
+            comfy_prompt_id, _client_id, workflow, comfy_node_url = (
+                await comfyui.submit_seedvr2_enhance_prompt(
+                video_url,
+                db=db,
+                user=user,
+                upscale_factor=upscale_factor,
+                strength=seedvr2_params["strength"],
+                input_noise_scale=seedvr2_params["input_noise_scale"],
+                batch_size=seedvr2_params["batch_size"],
+                color_correction=seedvr2_params["color_correction"],
+                model_size=seedvr2_params["model_size"],
+                client_id=client_id,
+                )
+            )
+        else:
+            comfy_prompt_id, _client_id, workflow, comfy_node_url = (
+                await comfyui.submit_realesrgan_enhance_prompt(
+                video_url,
+                db=db,
+                user=user,
+                upscale_factor=upscale_factor,
+                client_id=client_id,
+                )
+            )
+
+        task = db.get(Task, task_id)
+        if not task_is_writable(task):
+            return
+
+        workflow_trace = extract_enhance_trace(workflow, provider_id)
+        workflow_trace["trace_id"] = trace_id
+        await push_trace(4, "WORKFLOW", workflow_trace)
+        studio_print("trace", f"L4 WORKFLOW video-enhance {workflow_trace}")
+
+        _assign_comfy_submission(
+            task,
+            comfy_prompt_id=comfy_prompt_id,
+            node_url=comfy_node_url,
+        )
+        task.status = "pending"
+        task.error = None
+        db.commit()
+        tasks_cache.invalidate_tasks_cache()
+        studio_print(
+            "video-enhance",
+            f"后台提交完成 task_id={task_id} provider={provider_id} "
+            f"comfy_prompt_id={comfy_prompt_id} node={comfy_node_url}",
+        )
+    except Exception as e:
+        err: str
+        if isinstance(e, ValueError):
+            err = map_enhance_submit_error(str(e))
+        elif isinstance(e, httpx.ConnectError):
+            err = "ComfyUI 服务未启动，请先启动 ComfyUI"
+        elif isinstance(e, httpx.HTTPStatusError):
+            err = f"ComfyUI 返回错误: {e.response.status_code}"
+        else:
+            err = f"提交失败: {e}"
+        task = db.get(Task, task_id)
+        if task and task.status != "cancelled":
+            _mark_task_terminal(task, status="failed", error=err)
+            if not comfy_id_counts_as_executed(task):
+                refund_quota(db, user_id, "video", 1)
+            db.commit()
+            tasks_cache.invalidate_tasks_cache()
+        elif not task:
+            _release_acquired_slots(user_id, team_id=team_id, slots=1)
+        logger.exception("video-enhance submit async failed task_id=%s", task_id)
+    finally:
+        db.close()
 
 
 @router.post("/api/tasks/video-enhance")
@@ -1838,7 +2721,7 @@ async def canvas_video_enhance_task(
             detail="当前环境不支持画质增强",
         )
 
-    _release_stale_node_tasks(db, body.node_id, user.id)
+    await _release_stale_node_tasks_async(db, body.node_id, user.id)
     await reconcile_active_tasks_from_comfyui(db, user.id)
     check_concurrent_generations(db, user, slots_needed=1, team_id=body.team_id)
 
@@ -1910,57 +2793,6 @@ async def canvas_video_enhance_task(
         }
 
     provider_id, _provider = resolved
-    try:
-        if provider_id == VIDEO_ENHANCE_SEEDVR2_ID:
-            comfy_prompt_id, _client_id, workflow = await comfyui.submit_seedvr2_enhance_prompt(
-                video_url,
-                db=db,
-                user=user,
-                upscale_factor=upscale_factor,
-                strength=seedvr2_params["strength"],
-                input_noise_scale=seedvr2_params["input_noise_scale"],
-                batch_size=seedvr2_params["batch_size"],
-                color_correction=seedvr2_params["color_correction"],
-                model_size=seedvr2_params["model_size"],
-                client_id=body.client_id,
-            )
-        else:
-            comfy_prompt_id, _client_id, workflow = await comfyui.submit_realesrgan_enhance_prompt(
-                video_url,
-                db=db,
-                user=user,
-                upscale_factor=upscale_factor,
-                client_id=body.client_id,
-            )
-        workflow_trace = extract_enhance_trace(workflow, provider_id)
-        workflow_trace["trace_id"] = trace_id
-        await push_trace(4, "WORKFLOW", workflow_trace)
-        studio_print("trace", f"L4 WORKFLOW video-enhance {workflow_trace}")
-    except ValueError as e:
-        db.rollback()
-        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
-        from comfyui.client import map_enhance_submit_error
-
-        raise HTTPException(status_code=400, detail=map_enhance_submit_error(str(e))) from e
-    except httpx.ConnectError:
-        db.rollback()
-        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
-        raise HTTPException(
-            status_code=503,
-            detail="ComfyUI 服务未启动，请先启动 ComfyUI",
-        )
-    except httpx.HTTPStatusError as e:
-        db.rollback()
-        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
-        raise HTTPException(
-            status_code=502,
-            detail=f"ComfyUI 返回错误: {e.response.status_code}",
-        ) from e
-    except Exception as e:
-        db.rollback()
-        _release_acquired_slots(user.id, team_id=body.team_id, slots=1)
-        raise HTTPException(status_code=500, detail=f"提交失败: {e}") from e
-
     task_id = str(uuid.uuid4())
     create_task_record(
         db,
@@ -1970,20 +2802,32 @@ async def canvas_video_enhance_task(
         user_id=user.id,
         team_id=body.team_id,
         prompt_text=prompt_label,
-        comfyui_prompt_id=comfy_prompt_id,
+        comfyui_prompt_id=None,
         node_id=body.node_id,
     )
     db.commit()
     tasks_cache.invalidate_tasks_cache()
 
+    asyncio.create_task(
+        _run_video_enhance_submit_task(
+            task_id,
+            user_id=user.id,
+            team_id=body.team_id,
+            video_url=video_url,
+            provider_id=provider_id,
+            seedvr2_params=seedvr2_params,
+            client_id=body.client_id,
+            trace_id=trace_id,
+        )
+    )
     studio_print(
         "video-enhance",
-        f"已入库 task_id={task_id} provider={provider_id} comfy_prompt_id={comfy_prompt_id}",
+        f"已入库异步提交 task_id={task_id} provider={provider_id}",
     )
 
     return {
         "task_id": task_id,
-        "comfy_prompt_id": comfy_prompt_id,
+        "comfy_prompt_id": None,
         "status": "pending",
     }
 

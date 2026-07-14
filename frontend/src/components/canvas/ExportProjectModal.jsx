@@ -9,7 +9,6 @@ import {
   getExportDownloadUrl,
   getExportJob,
 } from "../../services/exportApi"
-import api from "../../services/api"
 import { useCanvasTheme } from "./CanvasThemeContext"
 import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import "./ExportProjectModal.css"
@@ -136,28 +135,10 @@ export default function ExportProjectModal({
 
   const handleDownload = () => {
     if (!exportId) return
-    const url = getExportDownloadUrl(exportId)
     const token = localStorage.getItem("access_token")
-    if (!token) {
-      window.location.href = url
-      return
-    }
-    api
-      .get(url, { responseType: "blob" })
-      .then((res) => {
-        const blob = new Blob([res.data], { type: "application/zip" })
-        const objectUrl = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = objectUrl
-        a.download = `export_${exportId.slice(0, 8)}.zip`
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-        URL.revokeObjectURL(objectUrl)
-      })
-      .catch(() => {
-        window.open(url, "_blank")
-      })
+    const url = getExportDownloadUrl(exportId, token)
+    // 浏览器直链流式下载，避免 axios blob 整包缓冲触发 CF 超时
+    window.location.assign(url)
   }
 
   const handleClose = () => {

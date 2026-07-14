@@ -17,6 +17,7 @@ import {
 } from "../../utils/canvas/nodeNormalize"
 import { migrateCanvasBeatCards } from "../../utils/canvas/scriptBeatCard"
 import { migrateGenNodePositions } from "../../utils/canvas/migrateGenNodePositions"
+import { syncNodeIdSeq } from "../../utils/canvas/nodeHelpers"
 import { readDisplayName } from "../../utils/canvas/commentUserDisplay"
 import { parseServerTimestamp } from "../../utils/datetime"
 
@@ -147,6 +148,7 @@ export function useCanvasSave({
         0
       )
       zIndexCounterRef.current = maxZ
+      syncNodeIdSeq(restoredNodes)
       setNodes(restoredNodes)
       setEdges(edgesToRestore)
       if (meta.name) setProjectName(meta.name)

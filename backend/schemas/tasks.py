@@ -31,7 +31,7 @@ class SubmitVideoRequest(BaseModel):
     team_id: str | None = Field(default=None, description="团队上下文")
     prompt: str = Field(..., description="画面描述")
     negative_prompt: str = Field(default="", description="排除元素")
-    duration: int = Field(default=5, description="视频时长秒数，3 或 5")
+    duration: int = Field(default=5, description="视频时长秒数，3 / 5 / 10 / 15")
     width: int = Field(default=848, ge=64, le=2048)
     height: int = Field(default=480, ge=64, le=2048)
     mode: str = Field(default="text2video", description="text2video | image2video")
@@ -75,8 +75,9 @@ class CanvasImageRequest(BaseModel):
     model: 图像模型标识，如 flux-dev / hidream / jimeng-5.0-lite
     prompt: 画面描述
     reference_image: 参考图 URL（可选）
-    quality: 画质等级，2K | 3K
+    quality: 画质等级，480P | 720P | 1080P（兼容旧值 2K/3K）
     ratio: 宽高比，如 1:1 / 16:9 / 9:16 等
+    width/height: 可选显式像素；同时提供时优先于 ratio/quality
     count: 生成数量，1-4
     node_id: 前端节点 ID
     """
@@ -101,8 +102,23 @@ class CanvasImageRequest(BaseModel):
     reference_images: Optional[list[str]] = Field(
         default=None, description="参考图 URL 列表"
     )
-    quality: str = Field(default="2K", description="画质：2K | 3K")
+    quality: str = Field(
+        default="720P",
+        description="画质：480P | 720P | 1080P（兼容旧值 2K/3K）",
+    )
     ratio: str = Field(default="1:1", description="宽高比")
+    width: Optional[int] = Field(
+        default=None,
+        ge=64,
+        le=4096,
+        description="显式宽度；与 height 同时提供时优先",
+    )
+    height: Optional[int] = Field(
+        default=None,
+        ge=64,
+        le=4096,
+        description="显式高度；与 width 同时提供时优先",
+    )
     count: int = Field(default=1, ge=1, le=4, description="生成数量")
     node_id: str = Field(..., description="前端节点 ID")
     mentions: Optional[list[CanvasMention]] = Field(
@@ -113,6 +129,9 @@ class CanvasImageRequest(BaseModel):
     )
     quality_preset_id: Optional[str] = Field(
         default=None, description="画风预设 ID（trace 展示用）"
+    )
+    project_id: Optional[str] = Field(
+        default=None, description="画布项目 ID，用于解析 @mentions"
     )
     use_reactor: bool = Field(
         default=False,
@@ -130,7 +149,7 @@ class CanvasVideoRequest(BaseModel):
     resolution: 清晰度，720P | 1080P
     duration: 时长（秒），5 | 10 | 15
     audio: 是否生成音频
-    count: 生成数量，1-4
+    count: 生成数量（当前仅支持 1，批量视频未实现）
     node_id: 前端节点 ID
     """
 
@@ -138,10 +157,10 @@ class CanvasVideoRequest(BaseModel):
     prompt: str = Field(..., description="画面描述")
     generation_mode: str = Field(default="keyframe", description="keyframe | freeref")
     ratio: str = Field(default="16:9", description="宽高比")
-    resolution: str = Field(default="1080P", description="清晰度：720P | 1080P")
+    resolution: str = Field(default="720P", description="清晰度：480P | 720P | 1080P")
     duration: int = Field(default=5, description="时长（秒）：5 | 10 | 15")
     audio: bool = Field(default=False, description="是否生成音频")
-    count: int = Field(default=1, ge=1, le=4, description="生成数量")
+    count: int = Field(default=1, ge=1, le=1, description="生成数量（仅支持 1）")
     node_id: str = Field(..., description="前端节点 ID")
     reference_image: Optional[str] = Field(default=None, description="参考图 URL（兼容）")
     first_frame: Optional[str] = Field(default=None, description="首帧图片 URL")
@@ -159,6 +178,9 @@ class CanvasVideoRequest(BaseModel):
     )
     quality_preset_id: Optional[str] = Field(
         default=None, description="画风预设 ID（注入 prompt suffix）"
+    )
+    project_id: Optional[str] = Field(
+        default=None, description="画布项目 ID，用于解析 @mentions"
     )
     sampling_profile: Optional[Literal["fast", "quality"]] = Field(
         default="fast",
@@ -266,3 +288,9 @@ class VideoLutRequest(BaseModel):
     trace_id: Optional[str] = Field(
         default=None, description="Prompt Trace 会话 ID"
     )
+
+
+class TaskRatingRequest(BaseModel):
+    rating: int = Field(..., description="1=满意 0=不满意")
+    tags: list[str] = Field(default_factory=list, description="不满意原因标签")
+    comment: str | None = Field(default=None, description="不满意补充说明")

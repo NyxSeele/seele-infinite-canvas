@@ -11,13 +11,15 @@ from db.session import SessionLocal
 from models import Task
 from providers.seedance import SeedanceClient, SeedanceNotConfiguredError
 from services.generation_slots import release_slots
-from services.quota_service import create_task_record
+from services.task_state import task_is_writable
+from services.quota_service import create_task_record, refund_quota
 from core.logging_setup import studio_print
 
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SEC = 5.0
 POLL_MAX_ATTEMPTS = 120  # ~10 min
+SEEDANCE_PENDING_ID = "seedance:pending"
 
 
 def _extract_video_url(payload: dict[str, Any]) -> str | None:
@@ -38,6 +40,23 @@ def _extract_video_url(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _fail_seedance_task(
+    db,
+    task: Task,
+    *,
+    error: str,
+    refund: bool = True,
+) -> None:
+    if not task_is_writable(task):
+        return
+    task.status = "failed"
+    task.error = error
+    db.commit()
+    release_slots(task.user_id, team_id=task.team_id, slots=1)
+    if refund:
+        refund_quota(db, task.user_id, "video", 1)
+
+
 async def run_seedance_video_task(
     task_id: str,
     *,
@@ -50,13 +69,10 @@ async def run_seedance_video_task(
     db = SessionLocal()
     try:
         task = db.get(Task, task_id)
-        if not task:
+        if not task_is_writable(task):
             return
         if not client.is_configured():
-            task.status = "failed"
-            task.error = "未配置 SEEDANCE_API_KEY"
-            db.commit()
-            release_slots(task.user_id, team_id=task.team_id, slots=1)
+            _fail_seedance_task(db, task, error="未配置 SEEDANCE_API_KEY")
             return
 
         try:
@@ -67,27 +83,21 @@ async def run_seedance_video_task(
                 resolution=resolution,
             )
         except SeedanceNotConfiguredError as e:
-            task.status = "failed"
-            task.error = str(e)
-            db.commit()
-            release_slots(task.user_id, team_id=task.team_id, slots=1)
+            _fail_seedance_task(db, task, error=str(e))
             return
         except Exception as e:
             logger.exception("seedance create_task failed")
-            task.status = "failed"
-            task.error = f"Seedance 提交失败: {e}"
-            db.commit()
-            release_slots(task.user_id, team_id=task.team_id, slots=1)
+            _fail_seedance_task(db, task, error=f"Seedance 提交失败: {e}")
             return
 
         external_id = str(created.get("id") or created.get("task_id") or "").strip()
         if not external_id:
-            task.status = "failed"
-            task.error = "Seedance 未返回 task id"
-            db.commit()
-            release_slots(task.user_id, team_id=task.team_id, slots=1)
+            _fail_seedance_task(db, task, error="Seedance 未返回 task id")
             return
 
+        task = db.get(Task, task_id)
+        if not task_is_writable(task):
+            return
         task.comfyui_prompt_id = f"seedance:{external_id}"
         task.status = "running"
         db.commit()
@@ -95,6 +105,9 @@ async def run_seedance_video_task(
 
         for _ in range(POLL_MAX_ATTEMPTS):
             await asyncio.sleep(POLL_INTERVAL_SEC)
+            task = db.get(Task, task_id)
+            if not task_is_writable(task):
+                return
             try:
                 info = await client.get_task(external_id)
             except Exception as e:
@@ -102,27 +115,19 @@ async def run_seedance_video_task(
                 continue
             status = str(info.get("status") or "").lower()
             if status in ("succeeded", "success", "completed"):
-                url = _extract_video_url(info)
                 task = db.get(Task, task_id)
-                if not task:
+                if not task_is_writable(task):
                     return
+                url = _extract_video_url(info)
                 if url:
                     task.status = "completed"
                     task.result = url
                     task.error = None
                     db.commit()
                     release_slots(task.user_id, team_id=task.team_id, slots=1)
-                    if bool(getattr(task, "use_reactor", False)):
-                        from services.reactor_video import maybe_apply_reactor_video
+                    from services.video_postprocess import schedule_video_postprocess
 
-                        asyncio.create_task(maybe_apply_reactor_video(task_id))
-                    elif (
-                        (task.sound_note or "").strip()
-                        and (task.video_backend or "").strip().lower() != "ltx2"
-                    ):
-                        from services.audiogen_postprocess import maybe_apply_sound_note_mix
-
-                        asyncio.create_task(maybe_apply_sound_note_mix(task_id))
+                    schedule_video_postprocess(task)
                 else:
                     task.status = "failed"
                     task.error = "Seedance 完成但无 video_url"
@@ -131,7 +136,7 @@ async def run_seedance_video_task(
                 return
             if status in ("failed", "cancelled", "canceled", "error"):
                 task = db.get(Task, task_id)
-                if not task:
+                if not task_is_writable(task):
                     return
                 task.status = "failed"
                 task.error = str(info.get("error") or info.get("message") or status)
@@ -173,7 +178,7 @@ async def queue_seedance_video_task(
         user_id=user_id,
         team_id=team_id,
         prompt_text=prompt,
-        comfyui_prompt_id="seedance",
+        comfyui_prompt_id=SEEDANCE_PENDING_ID,
         node_id=node_id,
         sound_note=sound_note,
         video_backend=video_backend,

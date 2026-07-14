@@ -120,10 +120,10 @@
   line-height: 1;
 }
 
-/* 卡片本体 */
+/* 卡片本体 — 宽度由内联 style 按比例覆盖；默认 1:1 */
 .gn2-root {
   width: 280px;
-  min-width: 280px;
+  min-width: 0;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: 16px;
@@ -219,16 +219,17 @@
   color: #fff;
 }
 
-/* 视频节点更宽 */
+/* 视频节点宽度由内联 style 按比例覆盖；默认约 16:9 */
 .gn2-root--video {
   width: 400px;
+  min-width: 0;
 }
 
 /* 预览区：全角圆角，与卡片 border-radius 一致，消除底角缺口 */
 .gn2-preview {
   width: 100%;
-  aspect-ratio: 1 / 1;
-  background: var(--input-bg);
+  aspect-ratio: 1 / 1; /* 默认；内联 style 按 imgRatio 覆盖 */
+  background: var(--gn2-preview-bg, var(--card-bg));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -246,6 +247,7 @@
 }
 
 .gn2-root--video .gn2-preview {
+  /* 默认 16:9；实际比例由 VideoGenerationNode 内联 style 覆盖 */
   aspect-ratio: 16 / 9;
   border-radius: 16px;
 }
@@ -260,10 +262,16 @@
 
 .rf-page--light {
   --gn2-placeholder-fg: rgba(0, 0, 0, 0.22);
+  --gn2-preview-bg: #ffffff;
+  --gn2-cell-bg: #ffffff;
+  --gn2-cell-waiting-bg: rgba(15, 23, 42, 0.03);
 }
 
 .rf-page--dark {
   --gn2-placeholder-fg: rgba(255, 255, 255, 0.14);
+  --gn2-preview-bg: #141414;
+  --gn2-cell-bg: #101010;
+  --gn2-cell-waiting-bg: rgba(255, 255, 255, 0.04);
 }
 
 /* 生成中 */
@@ -395,10 +403,12 @@
 
 .results-grid-cell {
   position: relative;
-  width: 280px;
-  height: 280px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: visible;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--gn2-cell-bg, rgba(0, 0, 0, 0.25));
 }
 
 .results-grid-cell > img {
@@ -416,11 +426,11 @@
 }
 
 .results-cell-waiting {
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--gn2-cell-waiting-bg, rgba(0, 0, 0, 0.18));
 }
 
 .gn2-gen-label--waiting {
-  color: rgba(255, 255, 255, 0.32);
+  color: var(--gn2-waiting-fg, rgba(255, 255, 255, 0.32));
   font-size: 12px;
   letter-spacing: 0.02em;
 }
@@ -684,6 +694,11 @@ body:has(.rf-page--light) .cell-menu-portal .cell-dots-submenu-title {
   display: block;
   user-select: none;
   -webkit-user-drag: none;
+}
+
+.image-preview-area .gn2-result-img.gn2-result-img--uploaded {
+  object-fit: contain;
+  background: var(--gn2-preview-bg, var(--card-bg));
 }
 
 /* 结果图片/视频 */
@@ -960,13 +975,22 @@ body:has(.rf-page--light) .cell-menu-portal .cell-dots-submenu-title {
   color: var(--tl-text-secondary);
 }
 
+.rf-page--light .gn2-gen-label--waiting {
+  --gn2-waiting-fg: rgba(0, 0, 0, 0.38);
+  color: rgba(0, 0, 0, 0.38);
+}
+
 .rf-page--light .gn2-spinner {
   border-color: rgba(0, 0, 0, 0.1);
   border-top-color: rgba(0, 0, 0, 0.45);
 }
 
 .rf-page--light .gn2-progress-fill {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.rf-page--dark .gn2-progress-fill {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .rf-page--light .connected-thumbnail-bar {

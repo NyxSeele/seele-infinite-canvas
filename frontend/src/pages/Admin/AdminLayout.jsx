@@ -3,8 +3,9 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { useAuth } from "../../contexts/AuthContext.jsx"
 import VeloraShellBackground from "../../components/common/VeloraShellBackground"
 import {
-  IconChevron,
   IconDashboard,
+  IconFeedback,
+  IconFiles,
   IconModels,
   IconTasks,
   IconUsers,
@@ -17,12 +18,16 @@ const NAV_ITEMS = [
   { to: "/admin/users", label: "用户管理", Icon: IconUsers },
   { to: "/admin/models", label: "模型管理", Icon: IconModels },
   { to: "/admin/tasks", label: "任务监控", Icon: IconTasks },
+  { to: "/admin/files", label: "用户文件", Icon: IconFiles },
+  { to: "/admin/feedback", label: "生成反馈", Icon: IconFeedback },
 ]
 
 function pageTitle(pathname) {
   if (pathname.startsWith("/admin/users")) return "用户管理"
   if (pathname.startsWith("/admin/models")) return "模型管理"
   if (pathname.startsWith("/admin/tasks")) return "任务监控"
+  if (pathname.startsWith("/admin/files")) return "用户文件"
+  if (pathname.startsWith("/admin/feedback")) return "生成反馈"
   return "系统概览"
 }
 
@@ -83,7 +88,7 @@ export default function AdminLayout() {
               onClick={() => navigate("/canvas")}
               title="返回画布"
             >
-              {collapsed ? "←" : "← 返回画布"}
+              {collapsed ? "画布" : "返回画布"}
             </button>
             <button
               className="admin-nav-btn admin-nav-btn--danger"
@@ -101,9 +106,7 @@ export default function AdminLayout() {
           onClick={() => setCollapsed((v) => !v)}
           aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
         >
-          <span className={`admin-nav-collapse-icon${collapsed ? " admin-nav-collapse-icon--flipped" : ""}`}>
-            <IconChevron />
-          </span>
+          <span className="admin-nav-collapse-grip" aria-hidden />
         </button>
       </aside>
 

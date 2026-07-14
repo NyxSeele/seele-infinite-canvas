@@ -23,6 +23,65 @@ def parse_target_duration_from_text(text: str) -> int | None:
     return None
 
 
+def parse_shots_target_from_text(text: str) -> int | None:
+    """解析用户显式镜数，如「3个镜头」「共 5 镜」。"""
+    s = text or ""
+    patterns = (
+        r"(\d+)\s*个镜头",
+        r"(\d+)\s*个分镜",
+        r"(?:共|一共|总共)?\s*(\d+)\s*镜(?:头)?",
+        r"(\d+)\s*shots?\b",
+    )
+    for pat in patterns:
+        m = re.search(pat, s, re.I)
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= 60:
+                return n
+    return None
+
+
+def clamp_segments_to_shot_count(
+    segments: list, shots_target: int
+) -> tuple[list, str | None]:
+    """将 segment/shot 总数裁剪到 shots_target（保留前 N 镜）。"""
+    if not shots_target or shots_target < 1 or not segments:
+        return segments, None
+
+    flat: list[tuple[int, int, dict]] = []
+    for si, seg in enumerate(segments):
+        if not isinstance(seg, dict):
+            continue
+        for ji, shot in enumerate(seg.get("shots") or []):
+            if isinstance(shot, dict):
+                flat.append((si, ji, shot))
+
+    if len(flat) <= shots_target:
+        return segments, None
+
+    warning = (
+        f"镜头数 {len(flat)} 超过目标 {shots_target} 镜，已保留前 {shots_target} 镜。"
+    )
+    kept = 0
+    new_segments = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        new_shots = []
+        for shot in seg.get("shots") or []:
+            if kept >= shots_target:
+                break
+            if isinstance(shot, dict):
+                new_shots.append(shot)
+                kept += 1
+        if new_shots:
+            new_seg = dict(seg)
+            new_seg["shots"] = new_shots
+            new_seg["duration"] = sum(int(s.get("duration") or 0) for s in new_shots)
+            new_segments.append(new_seg)
+    return new_segments, warning
+
+
 def normalize_segments_to_target(segments: list, target_sec: int) -> tuple[list, str | None]:
     if not target_sec or target_sec < 1 or not segments:
         return segments, None

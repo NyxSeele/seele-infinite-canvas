@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import { createPortal } from "react-dom"
 import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
+import { ensureMediaUrl } from "../../utils/mediaTicket"
 import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { Z_REF_PICKER } from "../../utils/zIndexLayers"
 import "./ImageReferencePicker.css"
@@ -65,7 +66,7 @@ export default function ImageReferencePicker({
                 }}
               >
                 <img
-                  src={img.imageUrl}
+                  src={ensureMediaUrl(img.imageUrl)}
                   alt=""
                   draggable={false}
                   onDragStart={(e) => e.preventDefault()}

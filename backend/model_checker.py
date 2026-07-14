@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from core.comfyui_settings import comfyui_checkpoints_url, comfyui_http_url
+from core.comfyui_settings import comfyui_nodes_list
 from services.api_key_service import read_api_key
 
 CACHE_TTL_SECONDS = 60
@@ -49,8 +49,10 @@ def _flatten_comfyui_model_list(raw) -> list[str]:
 _LOCAL_MODEL_FOLDERS = ("checkpoints", "diffusion_models", "unet")
 
 
-async def _fetch_comfyui_model_files(client: httpx.AsyncClient, folder: str) -> list[str]:
-    response = await client.get(f"{comfyui_http_url()}/models/{folder}")
+async def _fetch_comfyui_model_files(
+    client: httpx.AsyncClient, folder: str, base_url: str
+) -> list[str]:
+    response = await client.get(f"{base_url.rstrip('/')}/models/{folder}")
     if response.status_code != 200:
         return []
     return _flatten_comfyui_model_list(response.json())
@@ -60,18 +62,19 @@ async def _check_local_model(comfyui_file: str | None) -> bool:
     target = (comfyui_file or "").strip()
     if not target:
         return False
+    nodes = comfyui_nodes_list()
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            for folder in _LOCAL_MODEL_FOLDERS:
-                files = await _fetch_comfyui_model_files(client, folder)
-                if any(target in f for f in files):
-                    return True
-            # 兼容旧逻辑：部分环境仅暴露 checkpoints 聚合端点
-            response = await client.get(comfyui_checkpoints_url())
-            if response.status_code == 200:
-                files = _flatten_comfyui_model_list(response.json())
-                if any(target in f for f in files):
-                    return True
+            for base_url in nodes:
+                for folder in _LOCAL_MODEL_FOLDERS:
+                    files = await _fetch_comfyui_model_files(client, folder, base_url)
+                    if any(target in f for f in files):
+                        return True
+                response = await client.get(f"{base_url.rstrip('/')}/models/checkpoints")
+                if response.status_code == 200:
+                    files = _flatten_comfyui_model_list(response.json())
+                    if any(target in f for f in files):
+                        return True
     except Exception:
         return False
     return False

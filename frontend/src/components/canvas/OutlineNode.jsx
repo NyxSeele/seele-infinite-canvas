@@ -224,9 +224,6 @@ export default function OutlineNode({ id, data, selected }) {
                     }))
                   }
                 >
-                  <span className="outline-scene-arrow">
-                    {isExpanded ? "▼" : "▶"}
-                  </span>
                   <span className="outline-scene-title cn-section-title">{scene.title}</span>
                 </div>
 

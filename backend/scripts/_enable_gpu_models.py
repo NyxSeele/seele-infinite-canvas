@@ -64,12 +64,12 @@ ENABLE_MODELS = {
         "provider": "comfyui",
         "comfyui_file": "ltx-2-19b-dev-fp4.safetensors",
     },
-    "hunyuan-video": {
-        "display_name": "HunyuanVideo",
+    "hunyuan-video-1.5": {
+        "display_name": "HunyuanVideo 1.5",
         "category": "video",
         "type": "local",
         "provider": "comfyui",
-        "comfyui_file": "hunyuan_video_t2v_720p_bf16.safetensors",
+        "comfyui_file": "hunyuanvideo1.5_720p_t2v_fp16.safetensors",
     },
 }
 
@@ -81,7 +81,7 @@ PROVIDER_ENABLE_IDS = (
     "wan-fun-inpaint",
     "hidream",
     "ltx2-fp4",
-    "hunyuan-video",
+    "hunyuan-video-1.5",
     VIDEO_ENHANCE_SEEDVR2_ID,
 )
 

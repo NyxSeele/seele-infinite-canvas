@@ -146,7 +146,6 @@ function LayerBlock({ layerNum, entry, comparePrompt }) {
     return (
       <div className={`prompt-trace-layer ${meta.className}`}>
         <div className="prompt-trace-layer-head">
-          <span className="prompt-trace-chevron">▸</span>
           <span className="prompt-trace-layer-title">{layerTitle}</span>
         </div>
         <div className="prompt-trace-layer-body prompt-trace-empty">{t("canvas.trace.waiting")}</div>
@@ -165,7 +164,6 @@ function LayerBlock({ layerNum, entry, comparePrompt }) {
         tabIndex={0}
         onKeyDown={(e) => e.key === "Enter" && setCollapsed((c) => !c)}
       >
-        <span className="prompt-trace-chevron">{collapsed ? "▸" : "▾"}</span>
         <span className="prompt-trace-layer-title">{layerTitle}</span>
         <span className="prompt-trace-layer-tag">{entry.tag}</span>
       </div>
@@ -525,7 +523,6 @@ function HistorySession({ session }) {
         role="button"
         tabIndex={0}
       >
-        <span className="prompt-trace-chevron">{open ? "▾" : "▸"}</span>
         <span className={`prompt-trace-status-dot${complete ? "" : " pending"}`} />
         <span className="prompt-trace-history-meta">{formatTime(session.ts)} · {label}</span>
       </div>

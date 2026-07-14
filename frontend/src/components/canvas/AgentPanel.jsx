@@ -40,8 +40,6 @@ import {
   IconSkills,
   IconThinking,
   IconCheck,
-  IconChevronDown,
-  IconChevronRight,
   IconStop,
   IconContinue,
   IconAcceptOnly,
@@ -95,13 +93,12 @@ const PLUS_MENU_TOP = [
 
 const PLUS_MENU_BOTTOM = [
   { id: "brainstorm", label: "头脑风暴", Icon: IconBrainstorm, placeholder: true },
-  { id: "skills", label: "技能", Icon: IconSkills, placeholder: true, chevron: true },
+  { id: "skills", label: "技能", Icon: IconSkills, placeholder: true },
   {
     id: "thinking",
     label: "思考等级",
     Icon: IconThinking,
     placeholder: true,
-    chevron: true,
     suffix: "Standard",
   },
 ]
@@ -692,7 +689,7 @@ export default function AgentPanel({
             onClick={() => setHistoryOpen(false)}
             aria-label="返回对话"
           >
-            ← 返回
+            返回
           </button>
         ) : (
           <span className="ap-header__spacer" />
@@ -1136,11 +1133,6 @@ export default function AgentPanel({
                       {item.suffix && (
                         <span className="ap-plus-menu__suffix">{item.suffix}</span>
                       )}
-                      {item.chevron && (
-                        <span className="ap-plus-menu__chevron" aria-hidden>
-                          <IconChevronRight />
-                        </span>
-                      )}
                     </button>
                   ))}
                 </div>
@@ -1169,9 +1161,6 @@ export default function AgentPanel({
                   <currentMode.Icon />
                 </span>
                 <span>{currentMode.label}</span>
-                <span className="ap-mode-chevron" aria-hidden>
-                  <IconChevronDown />
-                </span>
               </button>
               {modeOpen && (
                 <ul className="ap-mode-menu" role="listbox">

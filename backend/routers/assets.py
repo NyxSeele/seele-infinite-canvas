@@ -16,15 +16,25 @@ from services.media_access import (
     assert_user_can_read_upload_url,
     issue_media_ticket,
 )
+from services.r2 import is_r2_public_asset_url
 from services.team_service import EDIT_ROLES, get_member_role, require_team_editor
-from services.upload_validation import suffix_for_mime, validate_image_upload
+from services.upload_validation import normalize_image_upload, suffix_for_mime
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
 UPLOAD_DIR = Path("uploads/images")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 MAX_SIZE = 10 * 1024 * 1024
+
+
+def _asset_image_url(raw_url: str, ticket: str) -> str:
+    if not raw_url:
+        return raw_url
+    if is_r2_public_asset_url(raw_url) or raw_url.startswith(
+        ("http://", "https://")
+    ):
+        return raw_url
+    return append_media_ticket(raw_url, ticket)
 
 
 def _to_out(
@@ -37,7 +47,7 @@ def _to_out(
         id=row.id,
         name=row.name,
         kind=row.kind,
-        image_url=append_media_ticket(row.image_url, ticket),
+        image_url=_asset_image_url(row.image_url, ticket),
         note=row.note,
         source_canvas_id=row.source_canvas_id,
         source_canvas_name=row.source_canvas_name,
@@ -106,7 +116,7 @@ def create_asset(
     if body.team_id:
         require_team_editor(db, body.team_id, current_user)
     image_url = body.image_url.strip()
-    if image_url:
+    if image_url and not is_r2_public_asset_url(image_url):
         assert_user_can_read_upload_url(db, current_user, image_url)
     team = db.get(Team, body.team_id) if body.team_id else None
     row = UserAsset(
@@ -143,11 +153,8 @@ async def upload_asset(
 ):
     if team_id:
         require_team_editor(db, team_id, current_user)
-    if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(status_code=400, detail="不支持的图片格式")
-
     content = await file.read()
-    mime = validate_image_upload(content, file.content_type)
+    content, mime = normalize_image_upload(content, file.content_type)
 
     suffix = suffix_for_mime(mime, Path(file.filename or "image.jpg").suffix or ".jpg")
     if suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):

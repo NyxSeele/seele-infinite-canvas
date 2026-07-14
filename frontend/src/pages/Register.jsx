@@ -9,7 +9,7 @@ import "./Auth.css"
 export default function Register() {
   const { register, isAuthenticated, loading } = useAuth()
   const navigate = useNavigate()
-  const [form, setForm] = useState({ username: "", email: "", password: "" })
+  const [form, setForm] = useState({ username: "", email: "", password: "", invite_code: "" })
   const [submitting, setSubmitting] = useState(false)
 
   if (loading) {
@@ -24,7 +24,12 @@ export default function Register() {
     e.preventDefault()
     setSubmitting(true)
     try {
-      await register(form.username.trim(), form.email.trim(), form.password)
+      await register(
+        form.username.trim(),
+        form.email.trim(),
+        form.password,
+        form.invite_code.trim(),
+      )
       message.success("注册成功")
       navigate("/workspace")
     } catch (err) {
@@ -84,6 +89,17 @@ export default function Register() {
             autoComplete="new-password"
           />
           <span className="auth-field-hint">至少 8 位，需包含大小写字母和数字</span>
+        </div>
+        <div className="auth-field">
+          <label htmlFor="register-invite-code">邀请码</label>
+          <input
+            id="register-invite-code"
+            value={form.invite_code}
+            onChange={(e) => setForm((f) => ({ ...f, invite_code: e.target.value }))}
+            placeholder="请输入邀请码"
+            required
+            autoComplete="off"
+          />
         </div>
         <button type="submit" className="auth-submit" disabled={submitting}>
           {submitting ? "注册中…" : "注册"}

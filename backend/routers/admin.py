@@ -8,17 +8,30 @@ from core.dependencies import require_admin
 from db.session import get_db
 from models import Task, User, UserQuota
 from schemas.admin import (
+    AdminFeedbackAnalysesResponse,
+    AdminFeedbackAnalyzeResponse,
+    AdminFeedbackRecordsResponse,
+    AdminFeedbackStatsResponse,
+    AdminFeedbackTrendsResponse,
     AdminModelsListResponse,
     AdminOverviewResponse,
     AdminOverviewStats,
     AdminTaskListResponse,
     UpdateQuotaRequest,
     UpdateRoleRequest,
+    UpdateR2AccessRequest,
     UpdateStatusRequest,
     UpdateUserModelPermissionsRequest,
     UserDetailResponse,
     UserListResponse,
     UserModelPermissionsResponse,
+)
+from services.feedback_service import (
+    analyze_feedback_records,
+    build_feedback_stats,
+    build_feedback_trends,
+    list_feedback_analyses,
+    list_feedback_records,
 )
 from services.generation_guard import ACTIVE_TASK_STATUSES
 from services.model_permission_service import (
@@ -143,6 +156,87 @@ def list_all_tasks(
     }
 
 
+@router.get("/feedback/stats", response_model=AdminFeedbackStatsResponse)
+def admin_feedback_stats(
+    since: str | None = None,
+    until: str | None = None,
+    task_type: str | None = None,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return build_feedback_stats(db, since=since, until=until, task_type=task_type)
+
+
+@router.get("/feedback/records", response_model=AdminFeedbackRecordsResponse)
+def admin_feedback_records(
+    rating: int | None = None,
+    model_id: str | None = None,
+    task_type: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if rating is not None and rating not in (0, 1):
+        raise HTTPException(status_code=400, detail="rating 只能是 0、1 或省略")
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    return list_feedback_records(
+        db,
+        rating=rating,
+        model_id=model_id,
+        task_type=task_type,
+        since=since,
+        until=until,
+        limit=limit,
+        offset=offset,
+        admin_user_id=admin.id,
+    )
+
+
+@router.post("/feedback/analyze", response_model=AdminFeedbackAnalyzeResponse)
+async def admin_feedback_analyze(
+    rating: int | None = None,
+    model_id: str | None = None,
+    task_type: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if rating is not None and rating not in (0, 1):
+        raise HTTPException(status_code=400, detail="rating 只能是 0、1 或省略")
+    return await analyze_feedback_records(
+        db,
+        admin.id,
+        rating=rating,
+        model_id=model_id,
+        task_type=task_type,
+        since=since,
+        until=until,
+    )
+
+
+@router.get("/feedback/trends", response_model=AdminFeedbackTrendsResponse)
+def admin_feedback_trends(
+    days: int = 30,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return build_feedback_trends(db, days=days)
+
+
+@router.get("/feedback/analyses", response_model=AdminFeedbackAnalysesResponse)
+def admin_feedback_analyses(
+    limit: int = 20,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return list_feedback_analyses(db, limit=limit)
+
+
 @router.get("/users", response_model=UserListResponse)
 def list_users(
     page: int = 1,
@@ -170,6 +264,7 @@ def list_users(
                 "email": u.email,
                 "role": u.role,
                 "is_active": u.is_active,
+                "r2_access": bool(getattr(u, "r2_access", False)),
                 "created_at": to_utc_iso(u.created_at),
                 "quota": get_quota_info(db, u.id),
             }
@@ -192,6 +287,7 @@ def get_user_detail(
         "email": user.email,
         "role": user.role,
         "is_active": user.is_active,
+        "r2_access": bool(getattr(user, "r2_access", False)),
         "created_at": to_utc_iso(user.created_at),
         "quota": get_quota_info(db, user.id),
     }
@@ -270,6 +366,21 @@ def update_user_status(
     user.is_active = body.is_active
     db.commit()
     return {"message": "状态已更新", "is_active": user.is_active}
+
+
+@router.patch("/users/{user_id}/r2-access")
+def update_user_r2_access(
+    user_id: int,
+    body: UpdateR2AccessRequest,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    user.r2_access = bool(body.r2_access)
+    db.commit()
+    return {"message": "R2 权限已更新", "r2_access": user.r2_access}
 
 
 @router.post("/users/{user_id}/reset_quota")

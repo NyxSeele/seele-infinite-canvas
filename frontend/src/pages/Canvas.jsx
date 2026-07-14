@@ -92,6 +92,8 @@ import CanvasProfileModal from "../components/canvas/CanvasProfileModal"
 import MigrateToTeamModal, { getMigratableTeams } from "../components/workspace/MigrateToTeamModal"
 import AgentPanel, { AGENT_REF_SOURCE_ID } from "../components/canvas/AgentPanel"
 import CanvasAgentFab from "../components/canvas/CanvasAgentFab"
+import OnboardingTour from "../components/Onboarding/OnboardingTour"
+import { CANVAS_STEPS } from "../components/Onboarding/tourSteps"
 import "./Canvas.css"
 import "../styles/promptBarTokens.css"
 import "../components/canvas/menus-portal.css"
@@ -874,6 +876,7 @@ function CanvasInner() {
     handleNodeDragStop,
     handleNodeClick,
     handleCreateNode,
+    dismissPickerMenu,
     handleAddNodeOfType,
     handleQuickCreate,
     handleUploadImage,
@@ -902,6 +905,7 @@ function CanvasInner() {
     commentMode,
     onCommentNodeClick: handleCommentNodeClick,
     pushHistory,
+    readOnly,
   })
 
   const handleNodesChange = useCallback(
@@ -990,7 +994,7 @@ function CanvasInner() {
         setCommentMode(false)
         return
       }
-      setPickerMenu(null)
+      dismissPickerMenu()
       setContextMenu(null)
     }
     document.addEventListener("keydown", handler)
@@ -1002,6 +1006,7 @@ function CanvasInner() {
     commentTargetNodeId,
     setCommentMode,
     setCommentTargetNodeId,
+    dismissPickerMenu,
   ])
 
   const refSelectCtx = useMemo(() => {
@@ -1264,6 +1269,11 @@ function CanvasInner() {
             const prevUrl =
               target.kind === "direct" ? row.directResultUrl : target.kf.resultUrl
             if (cleanUrl && prevUrl !== cleanUrl) patch.resultUrl = cleanUrl
+          } else if (
+            (imgStatus === "pending" || imgStatus === "generating")
+            && (target.kind === "direct" ? row.directResultUrl : target.kf.resultUrl)
+          ) {
+            patch.resultUrl = null
           }
           if (imgNode.data?.error) {
             const prevErr = target.kind === "direct" ? row.error : target.kf.error
@@ -1277,9 +1287,10 @@ function CanvasInner() {
               rowId: row.id,
               patch: {
                 directStatus: patch.status,
-                directResultUrl: patch.resultUrl ?? row.directResultUrl,
+                directResultUrl:
+                  patch.resultUrl !== undefined ? patch.resultUrl : row.directResultUrl,
                 status: patch.status,
-                resultUrl: patch.resultUrl ?? row.directResultUrl,
+                resultUrl: patch.resultUrl !== undefined ? patch.resultUrl : row.directResultUrl,
                 error: patch.error ?? row.error,
               },
             })
@@ -1297,6 +1308,38 @@ function CanvasInner() {
               patch,
             })
           }
+        }
+      }
+    }
+
+    for (const n of nodes) {
+      if (n.type !== "script-table" || !Array.isArray(n.data.rows)) continue
+      for (const row of n.data.rows) {
+        const videoTargets = []
+        if (row.directVideoGenNodeId) {
+          videoTargets.push({ row, genId: row.directVideoGenNodeId })
+        }
+        const beatCard = row.beatCardNodeId
+          ? nodes.find((x) => x.id === row.beatCardNodeId && x.type === BEAT_CARD_NODE_TYPE)
+          : null
+        if (beatCard?.data?.videoGenNodeId) {
+          videoTargets.push({ row, genId: beatCard.data.videoGenNodeId })
+        }
+        for (const vt of videoTargets) {
+          const vidNode = nodes.find((x) => x.id === vt.genId)
+          if (!vidNode) continue
+          const vidStatus = vidNode.data?.status
+          if (vidStatus !== "failed" && vidStatus !== "error" && vidStatus !== "timeout") continue
+          const err = vidNode.data?.error
+          if (!err || row.error === err) continue
+          const syncId = `video:${vt.genId}|${err}`
+          if (scriptTableSyncRef.current.get(syncId) === syncId) continue
+          scriptTableSyncRef.current.set(syncId, syncId)
+          pendingRowUpdates.push({
+            scriptTableNodeId: n.id,
+            rowId: row.id,
+            patch: { error: err, status: "failed" },
+          })
         }
       }
     }
@@ -1385,6 +1428,7 @@ function CanvasInner() {
           d.uploadedImage
           || d.imageUrl
           || d.generatedImage
+          || d.resultUrl
           || rawResults.some(Boolean)
         )
         const isSelectable = n.type === "image-gen" && hasImage
@@ -1400,6 +1444,7 @@ function CanvasInner() {
         d.uploadedImage
         || d.imageUrl
         || d.generatedImage
+        || d.resultUrl
         || rawResults.some(Boolean)
       )
       const isSelectable = n.type === "image-gen" && hasImage
@@ -1763,9 +1808,9 @@ function CanvasInner() {
               setImportDocumentOpen(true)
               return
             }
-            handleCreateNode(item)
+            handleCreateNode(item, pickerMenu)
           }}
-          onClose={() => setPickerMenu(null)}
+          onClose={dismissPickerMenu}
         />
       )}
 
@@ -1828,6 +1873,8 @@ function CanvasInner() {
           onClose={() => setAgentOpen(false)}
         />
       )}
+
+      <OnboardingTour tourId="canvas" steps={CANVAS_STEPS} startDelayMs={1000} />
     </div>
     </CanvasActionsContext.Provider>
     </ReferenceSelectContext.Provider>

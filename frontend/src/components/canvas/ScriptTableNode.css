@@ -69,11 +69,8 @@
   min-width: 0;
 }
 
-.st-project-settings-chevron {
-  flex-shrink: 0;
-  display: block;
-  color: var(--tl-text-secondary);
-  opacity: 0.55;
+.st-project-settings-summary.is-open {
+  background: var(--tl-toolbar-btn-hover);
 }
 
 .st-duration-over {

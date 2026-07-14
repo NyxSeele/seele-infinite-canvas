@@ -2,6 +2,9 @@ import pytest
 
 from services.prompt_builder import (
     DEFAULT_NEGATIVE_ZH,
+    FLUX_QUALITY_SUFFIX,
+    apply_flux_positive_suffixes,
+    build_hunyuan_prompt,
     build_prompt,
     build_prompt_from_fields,
     build_script_shot_prompt,
@@ -197,8 +200,27 @@ def test_compile_prompt_flux_priority():
     )
     assert "Alice" in result.positive_prompt
     assert "sunset" in result.positive_prompt
+    assert "sharp focus" in result.positive_prompt
     assert result.negative_prompt == ""
     assert result.model_params.get("width") == 1344
+
+
+def test_apply_flux_positive_suffixes_person():
+    out = apply_flux_positive_suffixes("a woman in the rain")
+    assert "sharp focus" in out
+    assert "proper hand anatomy" in out
+
+
+def test_build_hunyuan_prompt_person():
+    out = build_hunyuan_prompt("a girl walking in rain")
+    assert "cinematic quality" in out
+    assert "proper hand anatomy" in out
+
+
+def test_build_hunyuan_prompt_landscape():
+    out = build_hunyuan_prompt("mountain sunrise")
+    assert "cinematic quality" in out
+    assert "proper hand anatomy" not in out
 
 
 def test_compile_prompt_wan_i2v():

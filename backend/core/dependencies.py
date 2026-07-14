@@ -79,3 +79,9 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="需要管理员权限")
     return user
+
+
+def require_r2_access(user: User = Depends(get_current_user)) -> User:
+    if user.role != "admin" and not getattr(user, "r2_access", False):
+        raise HTTPException(status_code=403, detail="未授权访问团队文件空间")
+    return user

@@ -96,7 +96,6 @@ export default function CanvasRightClickMenu({ x, y, onCreateNode, onUploadImage
       >
         <span className="tl-context-icon"><LineIcon name="plus" size={16} /></span>
         <span>{t("canvas.menu.addNode")}</span>
-        <span className="tl-context-arrow">›</span>
 
         {addNodeHover && (
           <div

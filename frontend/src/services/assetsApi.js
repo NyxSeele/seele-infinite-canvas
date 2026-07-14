@@ -33,7 +33,7 @@ export async function uploadUserAsset({
   if (source_node_id) form.append("source_node_id", source_node_id)
   if (team_id) form.append("team_id", team_id)
   const res = await api.post("/api/assets/upload", form, {
-    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120_000,
   })
   return res.data
 }

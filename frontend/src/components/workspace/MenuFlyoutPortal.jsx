@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useCanvasStore } from "../../stores"
@@ -20,7 +20,16 @@ export default function MenuFlyoutPortal({
   children,
 }) {
   const theme = useCanvasStore((s) => s.theme)
-  const [pos, setPos] = useState({ top: 0, left: 0, bridgeLeft: 0, bridgeWidth: 0, height: 0 })
+  const panelRef = useRef(null)
+  const [pos, setPos] = useState({
+    top: 0,
+    left: 0,
+    bridgeTop: 0,
+    bridgeLeft: 0,
+    bridgeWidth: 0,
+    bridgeHeight: 0,
+    height: 0,
+  })
   const { mounted, closing } = useOverlayMount(open)
 
   useLayoutEffect(() => {
@@ -33,23 +42,42 @@ export default function MenuFlyoutPortal({
       const bridgeLeft = left + width
       const bridgeWidth = Math.max(GAP_PX, menuLeft - bridgeLeft)
 
+      let top = anchor.top
+      const panel = panelRef.current
+      const flyoutHeight = panel?.offsetHeight ?? 0
+      const margin = 12
+      if (flyoutHeight > 0) {
+        const maxTop = window.innerHeight - flyoutHeight - margin
+        top = Math.max(margin, Math.min(top, maxTop))
+      }
+
+      const bridgeTop = flyoutHeight > 0 ? Math.min(anchor.top, top) : anchor.top
+      const bridgeHeight = flyoutHeight > 0
+        ? Math.max(anchor.bottom, top + flyoutHeight) - bridgeTop
+        : anchor.height
+
       setPos({
-        top: anchor.top,
+        top,
         left,
         height: anchor.height,
+        bridgeTop,
+        bridgeHeight,
         bridgeLeft,
         bridgeWidth,
       })
     }
 
     update()
+    const ro = panelRef.current ? new ResizeObserver(update) : null
+    ro?.observe(panelRef.current)
     window.addEventListener("scroll", update, true)
     window.addEventListener("resize", update)
     return () => {
+      ro?.disconnect()
       window.removeEventListener("scroll", update, true)
       window.removeEventListener("resize", update)
     }
-  }, [mounted, anchorRef, menuAlignRef, width])
+  }, [mounted, anchorRef, menuAlignRef, width, children])
 
   if (!mounted) return null
 
@@ -69,16 +97,17 @@ export default function MenuFlyoutPortal({
       <div
         className="wum-flyout-bridge"
         style={{
-          top: pos.top,
+          top: pos.bridgeTop,
           left: pos.bridgeLeft,
           width: pos.bridgeWidth,
-          height: Math.max(pos.height, 36),
+          height: Math.max(pos.bridgeHeight, 36),
         }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
         aria-hidden
       />
       <div
+        ref={panelRef}
         className={portalClasses}
         style={{ top: pos.top, left: pos.left, width }}
         onMouseEnter={onMouseEnter}

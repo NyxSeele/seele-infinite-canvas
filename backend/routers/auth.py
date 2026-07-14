@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 @router.post("/register")
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
     return auth_service.register(
-        db, body.username, str(body.email), body.password
+        db, body.username, str(body.email), body.password, body.invite_code
     )
 
 

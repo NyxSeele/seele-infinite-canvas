@@ -1,14 +1,17 @@
 import { useCallback, useRef } from "react"
+import { message } from "antd"
 import { addEdge, applyEdgeChanges } from "reactflow"
 import { useCanvasStore } from "../../stores"
 import { makeEmptyScriptRow } from "../../components/canvas/ScriptTableNode"
 import { makeId, NODE_WIDTHS_MAP, isEmptyImageGenNode } from "../../utils/canvas/nodeHelpers"
+import { buildIncomingEdgeDataPatch } from "../../components/canvas/videoReferenceHelpers"
 import {
   hasFlyoutDrag,
   parseFlyoutDrop,
 } from "../../utils/canvas/genHistoryDrag"
 import { getT } from "../../utils/locale"
-import { isPaneMenuSuppressed } from "../../utils/canvas/suppressPaneMenu"
+import { isPaneMenuSuppressed, markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
+import { uploadImageFileWithMeta, buildUploadedImageNodePatch } from "../../services/uploadImage"
 
 export function useCanvasInteraction({
   nodes,
@@ -29,8 +32,11 @@ export function useCanvasInteraction({
   commentMode = false,
   onCommentNodeClick,
   pushHistory,
+  readOnly = false,
 }) {
   const draggingRef = useRef(null)
+  /** 拖线结束到菜单选择之间保留连线上下文（避免 pane click 清空 picker 后丢边） */
+  const pendingEdgeCreateRef = useRef(null)
 
   const isRightSourceHandle = (handleId) =>
     !handleId || handleId === "src-right" || handleId === "src"
@@ -43,12 +49,12 @@ export function useCanvasInteraction({
         ns.map((n) => {
           if (n.id !== params.target) return n
           const sourceNode = ns.find((x) => x.id === params.source)
+          const incomingPatch = buildIncomingEdgeDataPatch(sourceNode, n.type, n.data)
           return {
             ...n,
             data: {
               ...n.data,
-              linkedSourceId: params.source,
-              linkedSourceType: sourceNode?.type || null,
+              ...incomingPatch,
               linkedSourceData: sourceNode?.data || null,
             },
           }
@@ -83,6 +89,7 @@ export function useCanvasInteraction({
   )
 
   const onConnectStart = useCallback((_, { nodeId, handleType, handleId }) => {
+    pendingEdgeCreateRef.current = null
     connectingNodeRef.current = { nodeId, handleType, handleId }
   }, [connectingNodeRef])
 
@@ -102,25 +109,23 @@ export function useCanvasInteraction({
       // If dropped on a valid handle, RF's onConnect already fired — skip
       if (isHandle) return
       if (!isPane) {
-        // dropped on node body — only open picker if same-source not already connected
         const droppedNodeId = target.closest(".react-flow__node")?.getAttribute("data-id")
-        if (droppedNodeId && droppedNodeId !== connecting.nodeId) {
-          // Direct connection to existing node
-          if (isRightSourceHandle(connecting.handleId)) {
-            pushHistory?.()
-            setEdges((es) => addEdge({ id: `e-${connecting.nodeId}-${droppedNodeId}-${Date.now()}`, source: connecting.nodeId, target: droppedNodeId, sourceHandle: connecting.handleId === "src" ? "src" : "src-right", targetHandle: 'tgt', type: "ghost", animated: false }, es))
-          }
-          return
-        }
+        // 落在其他节点主体上也应打开创建菜单，而非直接连到该节点（避免落点显示已有图片）
         if (!droppedNodeId) return
       }
 
       if (connecting.handleId === 'src-left') {
+        markSuppressPaneMenu()
         setPickerMenu({ x: event.clientX, y: event.clientY, nodeId: connecting.nodeId, handleId: connecting.handleId, toLeft: true, targetNodeId: connecting.nodeId })
       } else if (isRightSourceHandle(connecting.handleId)) {
         const sourceNode = nodes.find((n) => n.id === connecting.nodeId)
         const resolvedHandle =
           connecting.handleId === "src" ? "src" : "src-right"
+        pendingEdgeCreateRef.current = {
+          sourceNodeId: connecting.nodeId,
+          sourceHandle: resolvedHandle,
+        }
+        markSuppressPaneMenu()
         setPickerMenu({
           x: event.clientX,
           y: event.clientY,
@@ -132,14 +137,20 @@ export function useCanvasInteraction({
         })
       }
     },
-    [nodes, setEdges, connectingNodeRef, setPickerMenu, pushHistory]
+    [nodes, connectingNodeRef, setPickerMenu]
   )
 
   const handleCreateNode = useCallback(
-    (typeOrObj) => {
+    (typeOrObj, menuContext) => {
       pushHistory?.()
       const type = typeof typeOrObj === "string" ? typeOrObj : typeOrObj.type
-      const pm = pickerMenuRef.current
+      const pm = menuContext ?? pickerMenuRef.current
+      const pendingEdge = pendingEdgeCreateRef.current
+      const edgeSourceId = pm?.sourceNodeId || pendingEdge?.sourceNodeId || null
+      const edgeSourceHandle =
+        pm?.handleId === "src"
+          ? "src"
+          : pm?.handleId || pendingEdge?.sourceHandle || "src-right"
 
       if (pm?.toLeft && pm?.targetNodeId) {
         const targetNode = nodes.find((n) => n.id === pm.targetNodeId)
@@ -161,12 +172,13 @@ export function useCanvasInteraction({
             addEdge({ id: `e-${newId}-${pm.targetNodeId}-${Date.now()}`, source: newId, target: pm.targetNodeId, sourceHandle: 'src-right', targetHandle: 'tgt', type: "ghost", animated: false }, es)
           )
           setPickerMenu(null)
+          pendingEdgeCreateRef.current = null
           return
         }
       }
 
       const screenPos = pm ? { x: pm.x, y: pm.y } : { x: window.innerWidth / 2, y: window.innerHeight / 2 }
-      const extra = type === "script-table"
+      let extra = type === "script-table"
         ? {
             label: getT()("canvas.node.labelScriptTable"),
             rows: [makeEmptyScriptRow(1)],
@@ -183,29 +195,48 @@ export function useCanvasInteraction({
               referenceImages: [],
             }
           : {}
-      const placement =
-        pm?.fromEdge && pm?.sourceNodeId
-          ? { anchorNodeId: pm.sourceNodeId }
-          : { anchorNodeId: selectedNodeId || null }
+
+      const shouldLinkFromEdge = Boolean(
+        (pm?.fromEdge && edgeSourceId)
+        || (pendingEdge?.sourceNodeId && edgeSourceId)
+      )
+
+      if (shouldLinkFromEdge && edgeSourceId) {
+        const sourceNode = nodes.find((n) => n.id === edgeSourceId)
+        extra = {
+          ...extra,
+          ...buildIncomingEdgeDataPatch(sourceNode, type, extra),
+        }
+      }
+
+      const placement = shouldLinkFromEdge && edgeSourceId
+        ? { anchorNodeId: edgeSourceId }
+        : { anchorNodeId: selectedNodeId || null }
       const newId = createNode(type, screenPos, extra, placement)
-      if (pm?.fromEdge && pm?.sourceNodeId && newId) {
-        const sourceNode = nodes.find((n) => n.id === pm.sourceNodeId)
+      if (shouldLinkFromEdge && edgeSourceId && newId) {
         setEdges((es) =>
           addEdge(
-            { id: `e-${pm.sourceNodeId}-${newId}-${Date.now()}`, source: pm.sourceNodeId, target: newId, sourceHandle: 'src-right', targetHandle: 'tgt', type: "ghost", animated: false },
+            {
+              id: `e-${edgeSourceId}-${newId}-${Date.now()}`,
+              source: edgeSourceId,
+              target: newId,
+              sourceHandle: edgeSourceHandle,
+              targetHandle: "tgt",
+              type: "ghost",
+              animated: false,
+            },
             es
           )
         )
-        setNodes((ns) =>
-          ns.map((n) => {
-            if (n.id !== newId) return n
-            return { ...n, data: { ...n.data, linkedSourceId: pm.sourceNodeId, linkedSourceType: sourceNode?.type || null } }
-          })
-        )
       }
+      if (newId) {
+        setSelectedNodeId(newId)
+        raiseNodeToFront(newId)
+      }
+      pendingEdgeCreateRef.current = null
       setPickerMenu(null)
     },
-    [createNode, nodes, setEdges, setNodes, buildData, pickerMenuRef, setPickerMenu, pushHistory, selectedNodeId]
+    [createNode, nodes, setEdges, setNodes, buildData, pickerMenuRef, setPickerMenu, pushHistory, selectedNodeId, setSelectedNodeId, raiseNodeToFront]
   )
 
   const handlePaneDblClick = useCallback((e) => {
@@ -245,7 +276,10 @@ export function useCanvasInteraction({
     }
     if (commentMode) return
     window.dispatchEvent(new Event("canvas-close-param-panels"))
-    setPickerMenu(null)
+    if (!isPaneMenuSuppressed()) {
+      setPickerMenu(null)
+      pendingEdgeCreateRef.current = null
+    }
     setContextMenu(null)
     if (refSelectMode.active) {
       exitRefSelectMode()
@@ -255,24 +289,34 @@ export function useCanvasInteraction({
   }, [commentMode, refSelectMode.active, exitRefSelectMode, setPickerMenu, setContextMenu, setSelectedNodeId])
 
   const handleUploadImage = useCallback(() => {
+    if (readOnly) {
+      message.warning("当前为只读模式，无法上传图片")
+      return
+    }
     const input = document.createElement("input")
     input.type = "file"
     input.accept = "image/*"
     input.onchange = async (e) => {
       const file = e.target.files?.[0]
       if (!file) return
+      const hideRef = { current: null }
+      const showPhase = (text) => {
+        hideRef.current?.()
+        hideRef.current = message.loading(text, 0)
+      }
+      showPhase("正在上传…")
       try {
-        const { uploadImageFile } = await import("../../services/uploadImage")
-        const url = await uploadImageFile(file)
+        const meta = await uploadImageFileWithMeta(file, {
+          onPhase: (phase) => {
+            if (phase === "upload") showPhase("正在上传…")
+          },
+        })
+        const patch = buildUploadedImageNodePatch(meta)
         const selected = selectedNodeId ? getNode(selectedNodeId) : null
         if (isEmptyImageGenNode(selected) && selected.data?.onUpdate) {
           pushHistory?.()
-          selected.data.onUpdate(selectedNodeId, {
-            uploadedImage: url,
-            imageSource: "upload",
-            status: "input",
-            error: null,
-          })
+          selected.data.onUpdate(selectedNodeId, patch)
+          message.success("图片已上传")
           return
         }
         const screenPos = { x: window.innerWidth / 2, y: window.innerHeight / 2 }
@@ -280,23 +324,25 @@ export function useCanvasInteraction({
         const id = createNode(
           "image-gen",
           screenPos,
-          {
-            uploadedImage: url,
-            imageSource: "upload",
-            status: "input",
-          },
+          patch,
           { anchorNodeId: selectedNodeId || null },
         )
         if (id) {
           setSelectedNodeId(id)
           raiseNodeToFront(id)
+          message.success("图片已上传")
+        } else {
+          message.error("无法创建图片节点，请确认您有画布编辑权限")
         }
       } catch (err) {
         console.error("上传失败", err)
+        message.error(err.message || err.response?.data?.detail || "图片上传失败，请重试")
+      } finally {
+        hideRef.current?.()
       }
     }
     input.click()
-  }, [createNode, getNode, pushHistory, raiseNodeToFront, selectedNodeId, setSelectedNodeId])
+  }, [createNode, getNode, pushHistory, raiseNodeToFront, readOnly, selectedNodeId, setSelectedNodeId])
 
   const handleAddNodeOfType = useCallback(
     (type) => {
@@ -400,6 +446,11 @@ export function useCanvasInteraction({
     [createNode, setSelectedNodeId, raiseNodeToFront, pushHistory]
   )
 
+  const dismissPickerMenu = useCallback(() => {
+    pendingEdgeCreateRef.current = null
+    setPickerMenu(null)
+  }, [setPickerMenu])
+
   return {
     handlePaneDblClick,
     handlePaneContextMenu,
@@ -408,6 +459,7 @@ export function useCanvasInteraction({
     handleNodeDragStop,
     handleNodeClick,
     handleCreateNode,
+    dismissPickerMenu,
     handleAddNodeOfType,
     handleQuickCreate,
     handleUploadImage,

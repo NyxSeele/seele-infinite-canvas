@@ -2,11 +2,11 @@
 
 > 扫描时间：2026-07-13 · 实例数据盘 `/root/autodl-tmp`  
 > 对照：`backend/model_registry.py` 中 `COMFYUI_LOCAL_PROVIDERS` 的 `enabled=True` 条目及伴随文件  
-> 热模型合计：**约 182.1G**（按 10MB/s 估算下载约 **5.2 小时 / 311 分钟**）
+> 热模型合计：**约 176G**（HunyuanVideo 1.5 套件约 **27.0G** 替换原版 13B；按 10MB/s ≈ **4.9 小时**）
 
 ## 热模型（常驻数据盘，每次必须有）
 
-对应 registry `enabled=True`：`flux-dev` / `hidream` / `wan-2.6` / `wan-i2v` / `wan-fun-inpaint` / `hunyuan-video` / `video-enhance-seedvr2`。
+对应 registry `enabled=True`：`flux-dev` / `hidream` / `wan-2.6` / `wan-i2v` / `wan-fun-inpaint` / `hunyuan-video-1.5` / `video-enhance-seedvr2`。
 
 | 模型名 | 文件路径 | 大小 | 来源/下载命令 |
 |--------|---------|------|-------------|
@@ -29,13 +29,24 @@
 | wan_2.1_vae | `/root/autodl-tmp/ComfyUI/models/vae/wan_2.1_vae.safetensors` | 242M | 同上 |
 | wan t2v lightx2v LoRA ×2 | `/root/autodl-tmp/ComfyUI/models/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_{high,low}_noise.safetensors` | 1.1G×2 | 同上 |
 | wan i2v lightx2v LoRA ×2 | `/root/autodl-tmp/ComfyUI/models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_{high,low}_noise.safetensors` | 1.1G×2 | 同上（fun_inpaint 亦用） |
-| hunyuan_video_t2v_720p_bf16 | `/root/autodl-tmp/ComfyUI/models/diffusion_models/hunyuan_video_t2v_720p_bf16.safetensors` | 23.9G | hf-mirror `Comfy-Org/HunyuanVideo_repackaged` |
-| hunyuan_video_vae_bf16 | `/root/autodl-tmp/ComfyUI/models/vae/hunyuan_video_vae_bf16.safetensors` | 470M | 同上 |
-| llava_llama3_fp8_scaled | `/root/autodl-tmp/ComfyUI/models/text_encoders/llava_llama3_fp8_scaled.safetensors` | 8.5G | 同上（Hunyuan DualCLIP） |
+| hunyuanvideo1.5_720p_t2v_fp16（UNET） | `/root/autodl-tmp/ComfyUI/models/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors` | 15.5G | hf-mirror `Comfy-Org/HunyuanVideo_1.5_repackaged` `split_files/diffusion_models/` |
+| hunyuanvideo15_vae_fp16（VAE） | `/root/autodl-tmp/ComfyUI/models/vae/hunyuanvideo15_vae_fp16.safetensors` | 2.35G | 同上 `split_files/vae/` |
+| qwen_2.5_vl_7b_fp8_scaled（TE） | `/root/autodl-tmp/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors` | 8.74G | 同上 `split_files/text_encoders/` |
+| byt5_small_glyphxl_fp16（TE） | `/root/autodl-tmp/ComfyUI/models/text_encoders/byt5_small_glyphxl_fp16.safetensors` | 419M | 同上（DualCLIP `hunyuan_video_15`） |
 | seedvr2_ema_3b_fp8 | `/root/autodl-tmp/ComfyUI/models/SEEDVR2/seedvr2_ema_3b_fp8_e4m3fn.safetensors` | 3.2G | hf-mirror `numz/SeedVR2_comfyUI` |
 | ema_vae_fp16 | `/root/autodl-tmp/ComfyUI/models/SEEDVR2/ema_vae_fp16.safetensors` | 478M | 同上 |
 
 **路径核对（enabled=True）**：上表文件均已在本机落盘；`ae.safetensors` 为指向 `flux-vae-bf16.safetensors` 的软链。
+
+## 冷模型（默认不拉；`model_pull.sh` 末尾注释块）
+
+| 模型名 | 文件路径 | 大小 | 来源/下载命令 |
+|--------|---------|------|-------------|
+| hunyuan_video_t2v_720p_bf16（原版 13B） | `.../diffusion_models/hunyuan_video_t2v_720p_bf16.safetensors` | 23.9G | hf-mirror `Comfy-Org/HunyuanVideo_repackaged`；registry `hunyuan-video` `enabled=False` |
+| hunyuan_video_vae_bf16 | `.../vae/hunyuan_video_vae_bf16.safetensors` | 470M | 同上 |
+| llava_llama3_fp8_scaled | `.../text_encoders/llava_llama3_fp8_scaled.safetensors` | 8.5G | 同上（DualCLIP `hunyuan_video`） |
+| FastHunyuan（旧 13B 蒸馏） | 见仓库目录结构 | ~多文件 | [FastVideo/FastHunyuan](https://huggingface.co/FastVideo/FastHunyuan) / hf-mirror；**非** 1.5 |
+| 1.5 CFG/step 蒸馏 | `tencent/HunyuanVideo-1.5/transformer/*_distilled*` | 视变体 | 720p T2V cfg-distill 官方 Coming soon；480p I2V step-distill 推荐 8–12 步；Comfy 重打包另有 `hunyuanvideo1.5_1080p_sr_distilled_fp16`（SR） |
 
 ## 温模型（偶尔使用，换实例时按需下载）
 

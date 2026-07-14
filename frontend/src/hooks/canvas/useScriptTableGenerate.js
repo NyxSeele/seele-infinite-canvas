@@ -37,7 +37,7 @@ import {
   shotPromptText,
   syncRowFromKeyframes,
 } from "../../utils/canvas/scriptTableKeyframes"
-import { buildRefItem } from "../../components/canvas/videoReferenceHelpers"
+import { buildRefItem, buildClearGenerationTaskPatch } from "../../components/canvas/videoReferenceHelpers"
 import { buildShotPromptPackage } from "../../utils/canvas/scriptPromptPackage"
 import { appendStyleReferenceToDescription } from "../../utils/canvas/styleReferenceFormat"
 import {
@@ -68,9 +68,56 @@ function resolveBeatCard(nodes, row) {
   return nodes.find((n) => n.id === row.beatCardNodeId && n.type === BEAT_CARD_NODE_TYPE) || null
 }
 
+/** 分镜出视频：复用已有视频节点的比例/清晰度/音频，否则默认 16:9 / 720P / 关闭 */
+function resolveScriptVideoParams(...sourceNodes) {
+  for (const node of sourceNodes) {
+    const d = node?.data
+    if (!d) continue
+    if (d.vidRatio || d.vidQuality || d.vidAudio) {
+      return {
+        vidRatio: d.vidRatio || "16:9",
+        vidQuality: d.vidQuality || "720P",
+        vidAudio: d.vidAudio || "关闭",
+      }
+    }
+  }
+  return { vidRatio: "16:9", vidQuality: "720P", vidAudio: "关闭" }
+}
+
+/** 分镜复用视频节点时清空旧成片/LUT/增强，避免 pendingTrigger 前展示旧结果 */
+function clearScriptVideoOutputFields() {
+  return {
+    videoUrl: null,
+    lutVideoUrl: null,
+    lutStatus: "idle",
+    lutTaskId: null,
+    lutError: null,
+    enhancedVideoUrl: null,
+    enhanceStatus: "idle",
+    enhanceTaskId: null,
+    enhanceError: null,
+    completedAt: null,
+  }
+}
+
+/** 分镜复用 image-gen 时清空旧完成态，避免 pendingTrigger 前同步回分镜行 */
+function clearScriptImageOutputFields() {
+  return {
+    ...buildClearGenerationTaskPatch({ status: "input" }),
+    results: null,
+    imageUrl: null,
+    resultUrl: null,
+    completedAt: null,
+  }
+}
+
 function beatCardKeyframes(nodes, row) {
   const card = resolveBeatCard(nodes, row)
   return asKeyframeArray(card?.data?.keyframes)
+}
+
+function isVideoNodeTerminalFailure(status) {
+  return status === "failed" || status === "error" || status === "timeout"
 }
 
 export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nodesRef, edgesRef, buildData, bumpZIndex }) {
@@ -320,7 +367,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         const label = getT()("canvas.script.shotImage", {
           n: row.shotNumber ?? rowIndex + 1,
         })
+        const triggerAt = Date.now()
         const imageGenPayload = {
+          ...clearScriptImageOutputFields(),
           prompt: uiPrompt,
           generationPrompt: prompt,
           displayPrompt: uiPrompt,
@@ -349,7 +398,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             rowId,
             lane: "direct",
           },
-          pendingTrigger: Date.now(),
+          pendingTrigger: triggerAt,
         }
 
         if (visualReferenceNote) {
@@ -396,7 +445,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             apiDescription: rowPromptBase,
           },
         })
-        return true
+        return { ok: true, triggerAt }
       } catch (err) {
         const detail = err.response?.data?.detail
         patchScriptTableRow(scriptTableNodeId, rowId, {
@@ -621,6 +670,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         const label = `${row.shotNumber ?? rowIndex + 1}-${keyframe.label || getT()("canvas.script.cellN", { n: kfIndex + 1 })}`
         const anchorNode = beatCard || scriptNode
         const imageGenPayload = {
+          ...clearScriptImageOutputFields(),
           prompt: uiPrompt,
           generationPrompt: prompt,
           displayPrompt: uiPrompt,
@@ -759,7 +809,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
   )
 
   const waitForScriptTableDirectImage = useCallback(
-    (scriptTableNodeId, rowId, timeoutMs = 300000) => {
+    (scriptTableNodeId, rowId, timeoutMs = 300000, triggerAt = 0) => {
       return new Promise((resolve, reject) => {
         const start = Date.now()
         const tick = () => {
@@ -769,7 +819,25 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             reject(new Error(getT()("canvas.script.cellNotFound")))
             return
           }
-          if (row.directStatus === "completed" || row.directStatus === "failed") {
+          const imgId = row.directImageGenNodeId
+          const imgNode = imgId
+            ? nodesRef.current.find((n) => n.id === imgId)
+            : null
+          const imgStatus = imgNode?.data?.status
+          if (row.directStatus === "completed" || imgStatus === "completed") {
+            const completedAt = Number(imgNode?.data?.completedAt) || 0
+            if (triggerAt > 0 && (!completedAt || completedAt <= triggerAt)) {
+              if (Date.now() - start > timeoutMs) {
+                reject(new Error(getT()("canvas.gen.timeout")))
+                return
+              }
+              setTimeout(tick, 1500)
+              return
+            }
+            resolve(row)
+            return
+          }
+          if (row.directStatus === "failed" || imgStatus === "failed" || imgStatus === "error") {
             resolve(row)
             return
           }
@@ -786,7 +854,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
   )
 
   const waitForScriptTableDirectVideo = useCallback(
-    (scriptTableNodeId, rowId, timeoutMs = 600000) => {
+    (scriptTableNodeId, rowId, timeoutMs = 600000, triggerAt = 0) => {
       return new Promise((resolve, reject) => {
         const start = Date.now()
         const tick = () => {
@@ -803,7 +871,20 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           }
           const videoNode = nodesRef.current.find((n) => n.id === vid)
           const status = videoNode?.data?.status
-          if (status === "completed" || status === "failed") {
+          if (status === "completed") {
+            const completedAt = Number(videoNode?.data?.completedAt) || 0
+            if (triggerAt > 0 && (!completedAt || completedAt <= triggerAt)) {
+              if (Date.now() - start > timeoutMs) {
+                reject(new Error(getT()("canvas.gen.timeout")))
+                return
+              }
+              setTimeout(tick, 2000)
+              return
+            }
+            resolve({ row, videoNode })
+            return
+          }
+          if (isVideoNodeTerminalFailure(status)) {
             resolve({ row, videoNode })
             return
           }
@@ -956,7 +1037,10 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
       const existingVideo = priorVideo
 
       const label = getT()("canvas.script.shotVideo", { n: row.shotNumber ?? rowIndex + 1 })
+      const triggerAt = Date.now()
       const videoPayload = {
+        ...buildClearGenerationTaskPatch({ status: "input" }),
+        ...clearScriptVideoOutputFields(),
         label,
         prompt: videoPrompt,
         modelId: videoModelId,
@@ -968,11 +1052,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         keyframes: { first: firstRef, last: firstRef },
         referenceMode: "keyframe",
         vidDuration: `${durationSec}s`,
-        vidRatio: "16:9",
-        vidQuality: "1080P",
-        vidAudio: "开启",
+        ...resolveScriptVideoParams(priorVideo, existingVideo),
         scriptTableRef: { nodeId: scriptTableNodeId, rowId, lane: "direct" },
-        pendingTrigger: Date.now(),
+        pendingTrigger: triggerAt,
       }
 
       const baseY = computeScriptTableShotY(scriptNode, rowIndex) + VIDEO_NODE_EXTRA_Y
@@ -1016,7 +1098,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         directVideoGenNodeId: videoGenId,
         error: null,
       })
-      return true
+      return { ok: true, videoGenId, triggerAt }
     },
     [getNode, patchScriptTableRow, bumpZIndex, buildData, setNodes, setEdges, nodesRef, edgesRef]
   )
@@ -1097,6 +1179,8 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
       let videoGenId = beatCard?.data?.videoGenNodeId
       const label = getT()("canvas.script.shotVideo", { n: row.shotNumber ?? rowIndex + 1 })
       const videoPayload = {
+        ...buildClearGenerationTaskPatch({ status: "input" }),
+        ...clearScriptVideoOutputFields(),
         label,
         prompt: videoPrompt,
         modelId: videoModelId,
@@ -1107,9 +1191,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         keyframes: { first: firstRef, last: lastRef },
         referenceMode: "keyframe",
         vidDuration: `${durationSec}s`,
-        vidRatio: "16:9",
-        vidQuality: "1080P",
-        vidAudio: "开启",
+        ...resolveScriptVideoParams(existingVideo),
         scriptTableRef: {
           nodeId: scriptTableNodeId,
           rowId,
@@ -1164,7 +1246,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
       } else {
         patchScriptTableRow(scriptTableNodeId, rowId, { videoGenNodeId: videoGenId, error: null })
       }
-      return true
+      return { ok: true, videoGenId }
     },
     [
       getNode,
@@ -1206,10 +1288,16 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         const started = await runScriptTableDirectImageGenerate(scriptTableNodeId, row.id, {
           modelId,
         })
-        if (!started) continue
+        if (!started?.ok) continue
         if (shouldWait) {
           try {
-            const finished = await waitForScriptTableDirectImage(scriptTableNodeId, row.id)
+            const triggerAt = Number(started.triggerAt) || Date.now()
+            const finished = await waitForScriptTableDirectImage(
+              scriptTableNodeId,
+              row.id,
+              300000,
+              triggerAt
+            )
             if (finished.directStatus === "failed") break
           } catch {
             break
@@ -1246,10 +1334,16 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         const started = await runScriptTableDirectVideoGenerate(scriptTableNodeId, row.id, {
           videoModelId,
         })
-        if (!started) continue
+        if (!started?.ok) continue
         try {
-          const finished = await waitForScriptTableDirectVideo(scriptTableNodeId, row.id)
-          if (finished.videoNode?.data?.status === "failed") break
+          const triggerAt = Number(started.triggerAt) || Date.now()
+          const finished = await waitForScriptTableDirectVideo(
+            scriptTableNodeId,
+            row.id,
+            600000,
+            triggerAt
+          )
+          if (isVideoNodeTerminalFailure(finished.videoNode?.data?.status)) break
         } catch {
           break
         }

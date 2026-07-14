@@ -352,15 +352,29 @@ nginx -t && nginx -s reload
 
 ## §10 Supervisor 常驻进程
 
-仓库已提供模板 [`deploy/supervisor-autodl.conf`](../../deploy/supervisor-autodl.conf)。ComfyUI 与 backend **共用 backend venv** 的 Python（单一真相来源，勿在 Runbook 内再写另一套路径）：
+仓库已提供模板 [`deploy/supervisor-autodl.conf`](../../deploy/supervisor-autodl.conf)。ComfyUI 与 backend **共用 backend venv** 的 Python（单一真相来源，勿在 Runbook 内再写另一套路径）。
+
+### ⚠️ Cursor / 运维硬约束（必读）
+
+模板**必须始终包含 5 个 `[program:]` 段**，缺一不可：
+
+1. `comfyui0` · `comfyui1`（双卡，或单机可只保留 `comfyui0` 但勿删下面两项）
+2. `aistudio-backend`
+3. **`nginx`**（`:6006` 反代）
+4. **`cloudflared`**（公网 Tunnel；删掉 → **Cloudflare Error 1033**，本地仍可能 200）
+
+**禁止**为改环境变量 / GPU 配置而**整文件覆盖**后 `cp` 到 `/etc/supervisor/conf.d/aistudio.conf`。只允许在现有文件上改需要的行，并用 `diff` 确认 `nginx` + `cloudflared` 段仍在。
 
 ```bash
 mkdir -p /root/autodl-tmp/logs
+# 改仓库内 deploy/supervisor-autodl.conf 后：
+diff -u /etc/supervisor/conf.d/aistudio.conf /root/autodl-tmp/AIStudio/deploy/supervisor-autodl.conf
 cp /root/autodl-tmp/AIStudio/deploy/supervisor-autodl.conf /etc/supervisor/conf.d/aistudio.conf
-# 若代码路径非 /root/autodl-tmp/AIStudio 或 comfyui 不在 /root/autodl-tmp/comfyui，编辑 command/directory 三处路径
-supervisorctl reread
-supervisorctl update
-supervisorctl status
+# 若代码路径非 /root/autodl-tmp/AIStudio 或 ComfyUI 不在 /root/autodl-tmp/ComfyUI，只编辑 command/directory 对应行，勿删段
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf reread
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf update
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf status
+curl -s -o /dev/null -w "%{http_code}\n" https://velora.seele0420.cloud/api/health   # 有 Tunnel 时期望 200
 ```
 
 Redis 使用系统服务：`systemctl enable redis-server`。
@@ -402,6 +416,7 @@ python scripts/_real_media_pipeline_probe.py   # mock 开启时 SKIP
 
 | 现象 | 排查 |
 |------|------|
+| **Cloudflare Error 1033**（公网不可达，本地 `:6006` 可能仍 200） | `supervisorctl status cloudflared`；`/root/autodl-tmp/logs/cloudflared.err.log`；是否误删 supervisor 配置中的 `[program:cloudflared]` / `[program:nginx]`（见 §10 硬约束） |
 | 自定义服务 502 | `supervisorctl status`；backend 是否监听 7788 |
 | WebSocket 断连 | Nginx `/ws` 是否配置 `Upgrade`；自定义服务是否支持 WS |
 | `redis: false` | `redis-cli ping`；`REDIS_URL` |

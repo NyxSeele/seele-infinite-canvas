@@ -150,6 +150,12 @@ export function serializeCanvasForAgent(nodes, edges, selectedNodeIds = []) {
           beats_split_at: beatCard?.data?.beatsSplitAt || r.beatsSplitAt || null,
           storyboard_ready: rowDirectImageReady(r) || beatCardStoryboardReady(beatCard?.data),
           has_video: rowDirectVideoReady(r, nodes) || rowVideoReady(r, nodes),
+          image_generating: Boolean(
+            r.directStatus === "generating"
+            || r.status === "generating"
+            || beatKfs.some((kf) => kf.status === "generating")
+            || asKeyframeArray(r.keyframes).some((kf) => kf.status === "generating")
+          ),
           video_generating: Boolean(
             (r.directVideoGenNodeId || r.videoGenNodeId)
             && !rowDirectVideoReady(r, nodes)

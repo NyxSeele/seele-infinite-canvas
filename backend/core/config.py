@@ -71,6 +71,11 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8000",
         validation_alias=AliasChoices("COMFYUI_URL", "COMFYUI_BASE"),
     )
+    comfyui_nodes: str = Field(
+        default="",
+        validation_alias=AliasChoices("COMFYUI_NODES"),
+        description="逗号分隔的 ComfyUI 节点 URL；空则回退 comfyui_url",
+    )
     comfyui_ws_url: str = Field(
         default="",
         validation_alias=AliasChoices("COMFYUI_WS_URL"),
@@ -107,6 +112,11 @@ class Settings(BaseSettings):
     )
 
     app_env: str = Field(default="development", validation_alias="APP_ENV")
+    registration_invite_code: str = Field(
+        default="",
+        validation_alias=AliasChoices("REGISTRATION_INVITE_CODE"),
+        description="非空时注册必须提交匹配的邀请码",
+    )
     cors_origins: str = Field(default="", validation_alias="CORS_ORIGINS")
 
     rate_limit_per_minute: int = Field(default=120)
@@ -142,6 +152,16 @@ class Settings(BaseSettings):
     generation_max_concurrent: int = Field(default=3)
     generation_max_concurrent_team: int = Field(default=10)
     media_token_ttl_seconds: int = Field(default=14400)
+
+    r2_account_id: str = Field(default="", validation_alias="R2_ACCOUNT_ID")
+    r2_access_key_id: str = Field(default="", validation_alias="R2_ACCESS_KEY_ID")
+    r2_secret_access_key: str = Field(
+        default="", validation_alias="R2_SECRET_ACCESS_KEY"
+    )
+    r2_bucket_name: str = Field(
+        default="seele", validation_alias="R2_BUCKET_NAME"
+    )
+    r2_public_url: str = Field(default="", validation_alias="R2_PUBLIC_URL")
 
     canvas_lock_ttl_seconds: int = Field(default=90)
     canvas_heartbeat_seconds: int = Field(default=25)

@@ -12,6 +12,8 @@ from pathlib import Path
 
 from db.base import SessionLocal
 from models.task import Task
+from services.task_state import task_is_writable
+from services.video_postprocess import schedule_video_postprocess
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,8 @@ async def run_mock_image_task(
         task = db.get(Task, task_id)
         if not task:
             return
+        if not task_is_writable(task):
+            return
         _record_reference_images(task, reference_images)
         if random.random() < max(0.0, min(1.0, failure_rate)):
             task.status = "failed"
@@ -113,7 +117,7 @@ async def run_mock_image_task(
         db.rollback()
         logger.exception("mock image task error task_id=%s", task_id)
         task = db.get(Task, task_id)
-        if task and task.status not in ("completed", "failed"):
+        if task and task_is_writable(task):
             task.status = "failed"
             task.error = "Mock 图像生成内部错误"
             _release_task_slots(task)
@@ -129,6 +133,8 @@ async def run_mock_video_task(task_id: str, failure_rate: float) -> None:
     try:
         task = db.get(Task, task_id)
         if not task:
+            return
+        if not task_is_writable(task):
             return
         if random.random() < max(0.0, min(1.0, failure_rate)):
             task.status = "failed"
@@ -147,22 +153,12 @@ async def run_mock_video_task(task_id: str, failure_rate: float) -> None:
         _release_task_slots(task)
         db.commit()
         logger.info("mock video task completed task_id=%s src=%s", task_id, src.name)
-        if bool(getattr(task, "use_reactor", False)):
-            from services.reactor_video import maybe_apply_reactor_video
-
-            asyncio.create_task(maybe_apply_reactor_video(task_id))
-        elif (
-            (task.sound_note or "").strip()
-            and (task.video_backend or "").strip().lower() != "ltx2"
-        ):
-            from services.audiogen_postprocess import maybe_apply_sound_note_mix
-
-            asyncio.create_task(maybe_apply_sound_note_mix(task_id))
+        schedule_video_postprocess(task)
     except Exception:
         db.rollback()
         logger.exception("mock video task error task_id=%s", task_id)
         task = db.get(Task, task_id)
-        if task and task.status not in ("completed", "failed"):
+        if task and task_is_writable(task):
             task.status = "failed"
             task.error = "Mock 视频生成内部错误"
             _release_task_slots(task)
@@ -182,6 +178,8 @@ async def run_mock_video_enhance_task(
     try:
         task = db.get(Task, task_id)
         if not task:
+            return
+        if not task_is_writable(task):
             return
         if random.random() < max(0.0, min(1.0, failure_rate)):
             task.status = "failed"
@@ -220,7 +218,7 @@ async def run_mock_video_enhance_task(
         db.rollback()
         logger.exception("mock video enhance task error task_id=%s", task_id)
         task = db.get(Task, task_id)
-        if task and task.status not in ("completed", "failed"):
+        if task and task_is_writable(task):
             task.status = "failed"
             task.error = "Mock 视频画质增强内部错误"
             _release_task_slots(task)
@@ -243,6 +241,8 @@ async def run_mock_video_lut_task(
     try:
         task = db.get(Task, task_id)
         if not task:
+            return
+        if not task_is_writable(task):
             return
         if random.random() < max(0.0, min(1.0, failure_rate)):
             task.status = "failed"
@@ -281,6 +281,10 @@ async def run_mock_video_lut_task(
         else:
             shutil.copy(src, dst)
 
+        task = db.get(Task, task_id)
+        if not task_is_writable(task):
+            return
+
         task.status = "completed"
         task.result = f"/api/uploads/videos/{dst_name}"
         task.error = None
@@ -293,7 +297,7 @@ async def run_mock_video_lut_task(
         db.rollback()
         logger.exception("mock video_lut task error task_id=%s", task_id)
         task = db.get(Task, task_id)
-        if task and task.status not in ("completed", "failed"):
+        if task and task_is_writable(task):
             task.status = "failed"
             task.error = "Mock LUT 处理内部错误"
             _release_task_slots(task)

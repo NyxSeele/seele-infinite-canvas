@@ -31,11 +31,11 @@ export async function refreshMediaTicket(api) {
 
 export function appendMediaTicket(url) {
   if (!url || typeof url !== "string") return url
-  if (url.includes("mt=")) return url
   const ticket = getMediaTicket()
-  if (!ticket) return url
-  const sep = url.includes("?") ? "&" : "?"
-  return `${url}${sep}mt=${encodeURIComponent(ticket)}`
+  if (!ticket) return stripMediaTicket(url)
+  const stripped = stripMediaTicket(url)
+  const sep = stripped.includes("?") ? "&" : "?"
+  return `${stripped}${sep}mt=${encodeURIComponent(ticket)}`
 }
 
 export function stripMediaTicket(url) {
@@ -43,15 +43,14 @@ export function stripMediaTicket(url) {
   const s = url.trim()
   if (s.startsWith("data:") || s.startsWith("blob:")) return s
   try {
-    const absolute = url.startsWith("http")
-      ? url
-      : `${API_BASE}${url.startsWith("/") ? url : `/${url}`}`
+    const absolute = s.startsWith("http")
+      ? s
+      : `${API_BASE || (typeof window !== "undefined" ? window.location.origin : "")}${s.startsWith("/") ? s : `/${s}`}`
     const parsed = new URL(absolute)
     parsed.searchParams.delete("mt")
-    if (url.startsWith("http")) return parsed.toString()
     return `${parsed.pathname}${parsed.search}`
   } catch {
-    return url.replace(/([?&])mt=[^&]*(?=&|$)/g, "$1").replace(/[?&]$/, "")
+    return s.replace(/([?&])mt=[^&]*(?=&|$)/g, "$1").replace(/[?&]$/, "")
   }
 }
 
@@ -72,6 +71,16 @@ export function toRelativeMediaUrl(url) {
   return stripped.startsWith("/") ? stripped : `/${stripped}`
 }
 
+function shouldUseRelativeMediaDisplay() {
+  if (!API_BASE) return true
+  if (typeof window === "undefined") return false
+  try {
+    return new URL(API_BASE, window.location.origin).origin !== window.location.origin
+  } catch {
+    return true
+  }
+}
+
 export function ensureMediaUrl(url) {
   if (!url) return url
   if (typeof url !== "string") return url
@@ -80,10 +89,12 @@ export function ensureMediaUrl(url) {
   // base64 或 blob URL 不走媒体代理，避免被拼成相对路径触发错误 GET
   if (s.startsWith("data:") || s.startsWith("blob:")) return s
   if (!s.includes("/api/view") && !s.includes("/api/uploads")) return s
-  const absolute = s.startsWith("http")
-    ? stripMediaTicket(s)
-    : `${API_BASE}${stripMediaTicket(s.startsWith("/") ? s : `/${s}`)}`
-  return appendMediaTicket(absolute)
+  const relative = toRelativeMediaUrl(s)
+  const base = shouldUseRelativeMediaDisplay() ? "" : API_BASE
+  const target = base
+    ? `${base}${relative.startsWith("/") ? relative : `/${relative}`}`
+    : relative
+  return appendMediaTicket(target)
 }
 
 export function clearMediaTicket() {

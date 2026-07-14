@@ -230,7 +230,10 @@ class PromptResult:
 
 WAN_VIDEO_NEGATIVE = (
     "worst quality, inconsistent motion, blurry, jittery, distorted, "
-    "static, text, watermark"
+    "static, text, watermark, bad anatomy, extra hands, extra fingers, "
+    "extra limbs, deformed hands, malformed arms, "
+    "missing fingers, mutated hands, fused fingers, "
+    "too many fingers, malformed limbs"
 )
 
 WAN_MODEL_PARAMS: dict[str, dict] = {
@@ -239,6 +242,82 @@ WAN_MODEL_PARAMS: dict[str, dict] = {
 }
 
 FLUX_MODEL_PARAMS = {"steps": 20, "cfg": 1.0, "width": 1344, "height": 768}
+
+FLUX_QUALITY_SUFFIX = (
+    "sharp focus, high detail, professional photography, "
+    "cinematic lighting, 8k resolution, photorealistic"
+)
+
+FLUX_PERSON_SUFFIX = (
+    "anatomically correct, natural pose, proper hand anatomy, "
+    "five fingers, realistic human proportions"
+)
+
+_FLUX_PERSON_RE = re.compile(
+    r"(girl|boy|woman|man|person|people|人|女|男|她|他)",
+    re.IGNORECASE,
+)
+
+
+def apply_flux_positive_suffixes(positive: str) -> str:
+    """Flux 正向 suffix：画质 + 人物场景专项（不做截断）。"""
+    cleaned = (positive or "").strip()
+    if not cleaned:
+        return positive
+    parts = [cleaned]
+    if FLUX_QUALITY_SUFFIX.lower() not in cleaned.lower():
+        parts.append(FLUX_QUALITY_SUFFIX)
+    if _FLUX_PERSON_RE.search(cleaned):
+        if FLUX_PERSON_SUFFIX.lower() not in cleaned.lower():
+            parts.append(FLUX_PERSON_SUFFIX)
+    return ", ".join(parts)
+
+
+HUNYUAN_VIDEO_POSITIVE_SUFFIX = (
+    "cinematic quality, smooth motion, realistic lighting, "
+    "high detail, anatomically correct, natural movement"
+)
+
+HUNYUAN_PERSON_SUFFIX = (
+    "proper hand anatomy, five fingers, natural body proportions"
+)
+
+
+def _append_suffix_if_missing(text: str, suffix: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return suffix
+    if suffix.lower() in cleaned.lower():
+        return cleaned
+    return f"{cleaned}, {suffix}"
+
+
+def build_hunyuan_prompt(prompt: str, scene: str = "") -> str:
+    """Hunyuan 视频正向专项：画质 suffix + 人物场景约束。"""
+    parts: list[str] = []
+    base = (prompt or "").strip()
+    if base:
+        parts.append(base)
+    scene_clean = (scene or "").strip()
+    if scene_clean and scene_clean.lower() not in base.lower():
+        parts.append(scene_clean)
+    merged = ", ".join(parts) if parts else ""
+    merged = _append_suffix_if_missing(merged, HUNYUAN_VIDEO_POSITIVE_SUFFIX)
+    if _FLUX_PERSON_RE.search(merged):
+        merged = _append_suffix_if_missing(merged, HUNYUAN_PERSON_SUFFIX)
+    return merged
+
+
+def is_flux_workflow_type(workflow_type: str | None) -> bool:
+    wt = (workflow_type or "").strip().lower()
+    return wt in ("flux", "flux_pulid")
+
+
+def is_flux_model_hint(model_hint: str | None) -> bool:
+    hint = (model_hint or "").strip().lower()
+    if not hint:
+        return False
+    return hint.startswith("flux") or hint in ("flux-dev", "flux-schnell", "flux-pulid")
 
 
 def normalize_workflow_type(value: str | None) -> str:
@@ -644,6 +723,7 @@ def build_prompt(
         if style_tag and style_tag not in scene:
             parts.append(style_tag)
         positive = ", ".join(p for p in parts if p)
+        positive = apply_flux_positive_suffixes(positive)
         positive, _ = _truncate_positive(positive, MAX_POSITIVE_LENGTH["flux"])
         return PromptResult(
             positive_prompt=positive,

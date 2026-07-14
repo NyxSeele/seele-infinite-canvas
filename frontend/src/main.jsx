@@ -8,6 +8,7 @@ import "./styles/motion.css"
 import "./styles/themeTransition.css"
 
 document.documentElement.lang = readLocale() === "en" ? "en" : "zh-CN"
+document.title = "Velora"
 import { AuthProvider } from "./contexts/AuthContext.jsx"
 import ProductNoticeModal from "./components/common/ProductNoticeModal.jsx"
 import AppRouter from "./router.jsx"

@@ -37,8 +37,8 @@ REGRESSION_ASSERTIONS: dict[str, dict] = {
         "label": "ask_user 待配图时说「继续」",
     },
     "cat1_continue_after_storyboard": {
-        "expect_pipeline_step": "split_shot_beats",
-        "label": "镜1 分镜图完成后说「继续」",
+        "expect_pipeline_step": "generate_video",
+        "label": "镜1 分镜图完成后说「继续」→ 生成镜1视频",
     },
     "cat3_regenerate_this_shot_video": {
         "expect_type": "ask_user",

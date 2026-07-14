@@ -15,27 +15,38 @@ import { getCanvasTeamId, teamIdPayload } from "../../utils/teamContext"
 import MediaFullscreenViewer from "./MediaFullscreenViewer"
 import GenerationStopButton from "./GenerationStopButton"
 import GenerationBrandLoader from "./GenerationBrandLoader"
+import TaskRatingBar from "./TaskRatingBar"
 import { cancelCanvasTask } from "../../services/cancelTask"
 import {
   buildClearGenerationTaskPatch,
   buildRefItem,
   getConnectedVideoNodesFromEdges,
+  buildIncomingEdgeDataPatch,
   getReferenceImagesList,
   getResolvedReferenceImagesList,
 } from "./videoReferenceHelpers"
 import { mergeMentionRefsIntoReferenceImages } from "./promptMentions"
 import useModelCapabilities from "../../hooks/useModelCapabilities"
-import { createStaleProgressGuard, isTerminalTaskStatus } from "./taskPollTimeout"
+import { createStaleProgressGuard } from "./taskPollTimeout"
 import { MENU_SUBMENU_CLOSE_MS } from "../../utils/menuFlyoutTiming"
-import { parseGenerationError } from "./taskNetworkError"
+import { parseGenerationError, isNetworkError } from "./taskNetworkError"
 import { getRetryPolicy } from "../../utils/canvas/generationRetryPolicy"
 import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
 import { findScriptTableNode, resolveImageQualityPresetId } from "../../utils/canvas/scriptTableNode"
+import { BEAT_CARD_NODE_TYPE } from "../../utils/canvas/scriptBeatCard"
 import { collectConnectedCharacterFaceUrl } from "../../utils/canvas/entityRefs"
-import { uploadImageFile } from "../../services/uploadImage"
+import { uploadImageFileWithMeta, buildUploadedImageNodePatch } from "../../services/uploadImage"
 import { ensureMediaUrl, stripMediaTicket } from "../../utils/mediaTicket"
 import { useLocale } from "../../utils/locale"
 import { useCanvasNodeWheel } from "./canvasScrollHelpers"
+import {
+  cssAspectRatio,
+  sizeForAspectRatio,
+  normalizeClarityLabel,
+  cardDisplayRatio,
+  ratioStringFromDimensions,
+} from "../../utils/canvas/aspectRatioLayout"
+import { isRealProjectId } from "../../utils/canvas/projectId"
 import "./CanvasShared.css"
 import "./GenerationCardNode.css"
 
@@ -143,12 +154,31 @@ const CELL_MENU_EST_HEIGHT = 200
 const CELL_SUBMENU_WIDTH = 140
 const REF_MENU_ITEM_OFFSET_Y = 36
 
-function computeGridLayout(slotCount) {
-  const cols = slotCount <= 1 ? 1 : slotCount <= 2 ? 2 : 3
+function computeGridLayout(slotCount, ratioStr = "1:1") {
+  const { width: cellW, height: cellH } = sizeForAspectRatio(ratioStr, CELL)
+  if (slotCount <= 1) {
+    return {
+      cols: 1,
+      rows: 1,
+      gridWidth: cellW,
+      gridHeight: cellH,
+      cellW,
+      cellH,
+    }
+  }
+  // 3 图：首格 span-full 占满第一行，下方两格 → 2×2 网格高度
+  if (slotCount === 3) {
+    const cols = 2
+    const rows = 2
+    const gridWidth = cols * cellW + (cols - 1) * GAP
+    const gridHeight = rows * cellH + (rows - 1) * GAP
+    return { cols, rows, gridWidth, gridHeight, cellW, cellH }
+  }
+  const cols = slotCount <= 2 ? 2 : 3
   const rows = Math.ceil(slotCount / cols)
-  const gridWidth = cols * CELL + (cols - 1) * GAP
-  const gridHeight = rows * CELL + (rows - 1) * GAP
-  return { cols, rows, gridWidth, gridHeight }
+  const gridWidth = cols * cellW + (cols - 1) * GAP
+  const gridHeight = rows * cellH + (rows - 1) * GAP
+  return { cols, rows, gridWidth, gridHeight, cellW, cellH }
 }
 
 const ImagePlaceholderIcon = () => (
@@ -191,7 +221,7 @@ function normalizeInitialImageStatus(raw) {
 
 export default function GenerationCardNode({ id, data, selected, isConnectable }) {
   const { t } = useLocale()
-  const { getNodes, getEdges } = useReactFlow()
+  const { getNodes, getEdges, setNodes } = useReactFlow()
   const progressHints = useProgressHints()
   const [status, setStatus] = useState(() => normalizeInitialImageStatus(data.status))
   const [prompt, setPrompt] = useState(data.prompt || "")
@@ -233,6 +263,38 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     if (!modelCapabilities || !data.onUpdate) return
     data.onUpdate(id, { capabilities: modelCapabilities })
   }, [modelCapabilities, id, data.onUpdate])
+
+  // 换模型后裁剪不兼容的比例 / 清晰度
+  useEffect(() => {
+    if (!modelCapabilities || !data.onUpdate) return
+    const patch = {}
+    const ar = modelCapabilities.aspect_ratios
+    const currentRatio = data.imgRatio || "1:1"
+    if (ar?.length && !ar.includes(currentRatio)) {
+      patch.imgRatio = ar[0]
+    }
+    const qualities = (modelCapabilities.resolutions?.length
+      ? modelCapabilities.resolutions
+      : ["480P", "720P", "1080P"]
+    ).map((q) => normalizeClarityLabel(q))
+    const rawClarity = data.imgResolution || data.imgQuality || "720P"
+    const clarity = normalizeClarityLabel(rawClarity, qualities[0] || "720P")
+    if (qualities.length && !qualities.includes(clarity)) {
+      patch.imgResolution = qualities[0]
+      patch.imgQuality = qualities[0]
+    } else if (clarity !== rawClarity) {
+      patch.imgResolution = clarity
+      patch.imgQuality = clarity
+    }
+    if (Object.keys(patch).length) data.onUpdate(id, patch)
+  }, [
+    modelCapabilities,
+    id,
+    data.onUpdate,
+    data.imgRatio,
+    data.imgResolution,
+    data.imgQuality,
+  ])
 
   useEffect(() => {
     if (data.prompt !== undefined && data.prompt !== prompt) {
@@ -288,18 +350,33 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     setSlotPhases([...phasesRef.current])
     setSlotProgress([...progressRef.current])
     let finished = 0
-    let hasFailed = false
+    let lastFailureMsg = null
+    const doneSlots = new Set()
 
     const syncSlotUi = () => {
       setSlotPhases([...phasesRef.current])
       setSlotProgress([...progressRef.current])
     }
 
-    const finalizeSuccess = () => {
+    const finalizeBatch = () => {
       const snapshot = [...slotsRef.current]
       const filled = snapshot.filter(Boolean)
       const isSingleOutput = snapshot.length <= 1
       const completedAt = Date.now()
+      if (filled.length === 0) {
+        const msg = lastFailureMsg || t("canvas.gen.failed")
+        setStatus("failed")
+        setErrorMessage(msg)
+        setSending(false)
+        phasesRef.current = snapshot.map(() => SLOT_PHASE.FAILED)
+        progressRef.current = snapshot.map(() => 0)
+        syncSlotUi()
+        patchNodeData(
+          { status: "failed", error: msg, taskIds: activeTaskIds, results: snapshot },
+          "finalizeBatch-allFailed"
+        )
+        return
+      }
       const patch = {
         status: "completed",
         results: snapshot,
@@ -309,8 +386,10 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
         taskId: activeTaskIds[0],
         prompt,
         completedAt,
+        cardDisplayRatio: data.imgRatio || "1:1",
+        error: filled.length < snapshot.length ? (lastFailureMsg || null) : null,
       }
-      logImageGen("回填完成 finalizeSuccess", {
+      logImageGen("回填完成 finalizeBatch", {
         snapshot,
         patch,
         filledCount: filled.length,
@@ -319,12 +398,15 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       setStatus("completed")
       setSending(false)
       setPollProgress(100)
+      if (lastFailureMsg && filled.length < snapshot.length) {
+        setErrorMessage(lastFailureMsg)
+      }
       phasesRef.current = snapshot.map((url) =>
         url ? SLOT_PHASE.DONE : SLOT_PHASE.FAILED
       )
       progressRef.current = snapshot.map((url) => (url ? 100 : 0))
       syncSlotUi()
-      patchNodeData(patch, "finalizeSuccess")
+      patchNodeData(patch, "finalizeBatch")
       const firstUrl = filled[0]
       if (firstUrl) {
         const cardLabel =
@@ -346,23 +428,26 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       }
     }
 
-    const finalizeFailed = (msg) => {
-      if (hasFailed) return
-      hasFailed = true
-      stopPolling()
-      setStatus("failed")
-      setErrorMessage(msg)
-      setSending(false)
-      setSlotPhases((prev) =>
-        prev.length ? prev.map(() => SLOT_PHASE.FAILED) : []
-      )
-      patchNodeData({ status: "failed", error: msg, taskIds: activeTaskIds }, "finalizeFailed")
+    const markSlotDone = () => {
+      finished += 1
+      if (finished === activeTaskIds.length) {
+        stopPolling()
+        finalizeBatch()
+      }
     }
 
     const terminalRef = { current: false }
     const staleGuard = createStaleProgressGuard(() => {
       if (terminalRef.current) return
-      finalizeFailed(t("canvas.gen.timeout"))
+      // 超时：未完成的格子记为失败，已完成的保留
+      activeTaskIds.forEach((_, index) => {
+        if (doneSlots.has(index)) return
+        doneSlots.add(index)
+        phasesRef.current[index] = SLOT_PHASE.FAILED
+        lastFailureMsg = t("canvas.gen.timeout")
+        markSlotDone()
+      })
+      syncSlotUi()
     })
     staleGuard.start()
     staleGuardRef.current = staleGuard
@@ -370,17 +455,13 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     activeTaskIds.forEach((activeTaskId, index) => {
       let timerId = null
       const pollOnce = async () => {
-        if (hasFailed) return
+        if (doneSlots.has(index)) return
         const pollUrl = `${API_BASE}/api/tasks/${activeTaskId}`
         try {
           logImageGen(`轮询 #${index} 请求`, { url: pollUrl, taskId: activeTaskId })
           const res = await api.get(`/api/tasks/${activeTaskId}`)
           const task = res.data
           staleGuardRef.current?.touch?.()
-          if (isTerminalTaskStatus(task.status)) {
-            terminalRef.current = true
-            staleGuardRef.current?.stop()
-          }
           logImageGen(`轮询 #${index} 响应`, {
             httpStatus: res.status,
             taskId: activeTaskId,
@@ -407,6 +488,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
 
           if (task.status === "completed") {
             if (timerId) clearInterval(timerId)
+            doneSlots.add(index)
             const raw = task.result || ""
             const imageUrl = resolveTaskResultUrl(raw)
             slotsRef.current[index] = imageUrl
@@ -415,16 +497,22 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
             logImageGen(`轮询 #${index} 单格完成`, { imageUrl })
             setResults([...slotsRef.current])
             syncSlotUi()
-            finished += 1
-            if (finished === activeTaskIds.length) {
-              stopPolling()
-              finalizeSuccess()
+            if (doneSlots.size === activeTaskIds.length) {
+              terminalRef.current = true
+              staleGuardRef.current?.stop()
             }
+            markSlotDone()
           } else if (task.status === "failed") {
             if (timerId) clearInterval(timerId)
+            doneSlots.add(index)
             phasesRef.current[index] = SLOT_PHASE.FAILED
+            lastFailureMsg = parseGenerationError(null, task)
             syncSlotUi()
-            finalizeFailed(parseGenerationError(null, task))
+            if (doneSlots.size === activeTaskIds.length) {
+              terminalRef.current = true
+              staleGuardRef.current?.stop()
+            }
+            markSlotDone()
           }
         } catch (err) {
           console.error("[image-gen] poll error:", err)
@@ -433,7 +521,13 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
             status: err.response?.status,
             detail: err.response?.data,
           })
-          finalizeFailed(parseGenerationError(err, null))
+          if (isNetworkError(err)) return
+          if (timerId) clearInterval(timerId)
+          doneSlots.add(index)
+          phasesRef.current[index] = SLOT_PHASE.FAILED
+          lastFailureMsg = parseGenerationError(err, null)
+          syncSlotUi()
+          markSlotDone()
         }
       }
       pollOnce()
@@ -507,7 +601,8 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     }
 
     const ids = data.taskIds || (data.taskId ? [data.taskId] : [])
-    if (ids.length && st === "pending" && !pollTimersRef.current && !sending) {
+    const stRecoverable = st === "pending" || st === "generating" || st === "queued"
+    if (ids.length && stRecoverable && !pollTimersRef.current && !sending) {
       setTaskIds(ids)
       setTaskId(ids[0])
       setStatus("pending")
@@ -615,7 +710,17 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       _inlineReferenceUrls: refs
         .map((r) => r.imageUrl)
         .filter((url) => url && isInlineImageUrl(url)),
-      quality: data.imgQuality || "2K",
+      quality: (() => {
+        const raw = data.imgResolution || data.imgQuality || "720P"
+        const s = String(raw).trim().toUpperCase().replace("×", "x")
+        if (s === "480" || s === "720" || s === "1080") return `${s}P`
+        if (s === "480P" || s === "720P" || s === "1080P") return s
+        if (s === "2K") return "720P"
+        if (s === "3K") return "1080P"
+        // 旧像素标签交给后端按 ratio+720 解析
+        if (/^\d+x\d+$/i.test(s)) return "720P"
+        return "720P"
+      })(),
       ratio: data.imgRatio || "1:1",
       count: data.count || 1,
       node_id: id,
@@ -627,12 +732,20 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     }
     const negative = (data.negativePrompt || "").trim()
     if (negative) payload.negative_prompt = negative
-    const scriptTable = findScriptTableNode(getNodes())
+    const scriptTable = (() => {
+      const ref = data.scriptTableRef
+      if (ref?.nodeId) {
+        return getNodes().find((n) => n.id === ref.nodeId) || null
+      }
+      return findScriptTableNode(getNodes())
+    })()
     const qualityPresetId = resolveImageQualityPresetId(data, scriptTable?.data || null)
     if (qualityPresetId && qualityPresetId !== "auto") {
       payload.quality_preset_id = qualityPresetId
     }
     if (data.traceId) payload.trace_id = data.traceId
+    const { canvasId } = useCanvasStore.getState()
+    if (isRealProjectId(canvasId)) payload.project_id = canvasId
     return payload
   }, [data, modelId, prompt, id, getNodes, getEdges])
 
@@ -663,7 +776,11 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     logImageGen("POST 即将发送", { url: submitUrl, payload: requestBody })
 
     try {
-      const res = await api.post("/api/tasks/image", { ...requestBody, ...teamIdPayload() })
+      const res = await api.post(
+        "/api/tasks/image",
+        { ...requestBody, ...teamIdPayload() },
+        { timeout: 30000 },
+      )
       logImageGen("POST 收到响应", {
         httpStatus: res.status,
         statusText: res.statusText,
@@ -827,6 +944,32 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     }, [id])
   )
 
+  const incomingLink = useStore(
+    useCallback((s) => {
+      const inEdge = s.edges.find((e) => e.target === id)
+      if (!inEdge) return null
+      const srcNode = s.nodeInternals.get(inEdge.source)
+      if (!srcNode) return null
+      return { inEdge, srcNode }
+    }, [id])
+  )
+
+  const lastIncomingKeyRef = useRef(null)
+
+  useEffect(() => {
+    if (!incomingLink?.srcNode || !data.onUpdate) return
+    const incomingKey = `${incomingLink.inEdge.source}:${incomingLink.inEdge.id}`
+    if (lastIncomingKeyRef.current === incomingKey) return
+
+    const patch = buildIncomingEdgeDataPatch(incomingLink.srcNode, "image-gen", data)
+    const hasNewRef = Array.isArray(patch.referenceImages) && patch.referenceImages.length > 0
+    const hasNewPrompt = patch.prompt && !String(data.prompt || "").trim()
+    if (!hasNewRef && !hasNewPrompt) return
+
+    lastIncomingKeyRef.current = incomingKey
+    data.onUpdate(id, patch)
+  }, [incomingLink, data, id])
+
   const [cellMenu, setCellMenu] = useState(null)
   const [subMenu, setSubMenu] = useState(null)
   const cellMenuPortalRef = useRef(null)
@@ -888,14 +1031,15 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       const file = e.target.files?.[0]
       if (!file) return
       try {
-        const url = await uploadImageFile(file)
-        if (data.onUpdate) data.onUpdate(id, { uploadedImage: url })
+        const meta = await uploadImageFileWithMeta(file)
+        if (data.onUpdate) data.onUpdate(id, buildUploadedImageNodePatch(meta))
       } catch (err) {
         console.error("重新上传失败", err)
+        showToast(err.message || t("common.uploadFail"))
       }
     }
     input.click()
-  }, [id, data])
+  }, [id, data, showToast, t])
 
   const submitImageTaskRef = useRef(submitImageTask)
   const buildSubmitPayloadRef = useRef(buildSubmitPayload)
@@ -915,18 +1059,66 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       const payload = buildSubmitPayloadRef.current?.()
       if (!payload?.prompt) {
         console.error("[image-gen] pendingTrigger 跳过：提示词为空", { payload, dataPrompt: data.prompt })
-        setStatus("input")
+        setStatus("failed")
         setErrorMessage(t("canvas.gen.noPrompt"))
+        data.onUpdate?.(id, { status: "failed", error: t("canvas.gen.noPrompt") })
+        const ref = data.scriptTableRef
+        if (ref?.nodeId && ref?.rowId) {
+          const errMsg = t("canvas.gen.noPrompt")
+          setNodes((ns) =>
+            ns.map((n) => {
+              if (ref.beatCardNodeId && n.id === ref.beatCardNodeId && n.type === BEAT_CARD_NODE_TYPE) {
+                return {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    keyframes: (n.data.keyframes || []).map((kf) =>
+                      ref.keyframeId && kf.id === ref.keyframeId
+                        ? { ...kf, status: "failed", error: errMsg }
+                        : kf
+                    ),
+                  },
+                }
+              }
+              if (n.id !== ref.nodeId || n.type !== "script-table") return n
+              return {
+                ...n,
+                data: {
+                  ...n.data,
+                  rows: (n.data.rows || []).map((r) => {
+                    if (r.id !== ref.rowId) return r
+                    if (ref.keyframeId && !ref.beatCardNodeId) {
+                      return {
+                        ...r,
+                        keyframes: (r.keyframes || []).map((kf) =>
+                          kf.id === ref.keyframeId
+                            ? { ...kf, status: "failed", error: errMsg }
+                            : kf
+                        ),
+                      }
+                    }
+                    return {
+                      ...r,
+                      directStatus: "failed",
+                      error: errMsg,
+                    }
+                  }),
+                },
+              }
+            })
+          )
+        }
         return
       }
       logImageGen("pendingTrigger → submitImageTask", payload)
       submitImageTaskRef.current?.(payload)
     }, 30)
-  }, [data.pendingTrigger, data.count, data.prompt, id, data])
+  }, [data.pendingTrigger, data.count, data.prompt, id, data, setNodes, t])
 
   const isIdle = status === "input"
   const isPending = status === "pending" || status === "generating"
   const isDone = status === "completed" && results.some(Boolean)
+  const ratingTaskId = data.taskId || data.taskIds?.[0] || taskId || null
   const isFailed =
     (status === "failed" || status === "error") && !isPending && !sending
   const retryPolicy = useMemo(
@@ -950,24 +1142,49 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     const file = e.target.files?.[0]
     if (!file) return
     try {
-      const url = await uploadImageFile(file)
+      const meta = await uploadImageFileWithMeta(file)
       if (isIdle && !isRefSource) {
         if (data.onUpdate) {
-          data.onUpdate(id, { uploadedImage: url, referenceImage: null })
+          data.onUpdate(id, { ...buildUploadedImageNodePatch(meta), referenceImage: null })
         }
       } else {
-        setReferenceImage(url)
-        if (data.onUpdate) data.onUpdate(id, { referenceImage: url })
+        setReferenceImage(meta.url)
+        if (data.onUpdate) data.onUpdate(id, { referenceImage: meta.url })
         if (isRefSelectActive) refSelect?.exit()
       }
     } catch (err) {
       console.error("上传失败", err)
+      showToast(err.message || t("common.uploadFail"))
     }
     e.target.value = ""
-  }, [id, data, isIdle, isRefSource, isRefSelectActive, refSelect])
+  }, [id, data, isIdle, isRefSource, isRefSelectActive, refSelect, showToast, t])
 
-  const gridLayout = useMemo(() => computeGridLayout(gridSlotCount), [gridSlotCount])
+  const handleUploadedImageLoad = useCallback((e) => {
+    if (!data.onUpdate || !data.uploadedImage) return
+    if (data.results?.some(Boolean) || data.imageUrl) return
+    const img = e.currentTarget
+    const w = img.naturalWidth
+    const h = img.naturalHeight
+    if (!w || !h) return
+    const ratio = ratioStringFromDimensions(w, h)
+    if (ratio === data.uploadAspectRatio && ratio === data.cardDisplayRatio) return
+    const size = sizeForAspectRatio(ratio)
+    data.onUpdate(id, {
+      uploadAspectRatio: ratio,
+      cardDisplayRatio: ratio,
+      cardWidth: size.width,
+      cardHeight: size.height,
+    })
+  }, [id, data])
+
+  const displayRatio = cardDisplayRatio(data, "image")
+
+  const gridLayout = useMemo(
+    () => computeGridLayout(gridSlotCount, displayRatio),
+    [gridSlotCount, displayRatio]
+  )
   const isMultiGrid = showResultsGrid && gridSlotCount > 1
+  const previewAspect = cssAspectRatio(displayRatio)
   const isCanvasPickerActive = useCanvasRefPick || isRefImagePicker
   const isRefTarget = isCanvasPickerActive && !isRefSource && hasDisplayImage && !isMultiGrid
 
@@ -1121,11 +1338,17 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
 
   const lastCardWidthRef = useRef(null)
   useEffect(() => {
-    if (!showResultsGrid || !data.onUpdate) return
-    if (lastCardWidthRef.current === gridLayout.gridWidth) return
-    lastCardWidthRef.current = gridLayout.gridWidth
-    data.onUpdate(id, { cardWidth: gridLayout.gridWidth })
-  }, [showResultsGrid, gridLayout.gridWidth, id, data])
+    if (!data.onUpdate) return
+    const nextW = showResultsGrid
+      ? gridLayout.gridWidth
+      : sizeForAspectRatio(displayRatio).width
+    const nextH = showResultsGrid
+      ? gridLayout.gridHeight
+      : sizeForAspectRatio(displayRatio).height
+    if (lastCardWidthRef.current === `${nextW}x${nextH}`) return
+    lastCardWidthRef.current = `${nextW}x${nextH}`
+    data.onUpdate(id, { cardWidth: nextW, cardHeight: nextH })
+  }, [showResultsGrid, gridLayout.gridWidth, gridLayout.gridHeight, displayRatio, id, data])
 
   useEffect(() => {
     if (!isPending) return undefined
@@ -1144,10 +1367,17 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
   const [rightVisible, setRightVisible] = useState(false)
   const plusPinned = selected
 
-  const rootWidth = showResultsGrid ? gridLayout.gridWidth : undefined
+  const rootWidth = showResultsGrid ? gridLayout.gridWidth : sizeForAspectRatio(displayRatio).width
   const previewSizeStyle = showResultsGrid
-    ? { width: gridLayout.gridWidth, height: gridLayout.gridHeight, aspectRatio: "unset" }
-    : undefined
+    ? {
+        width: gridLayout.gridWidth,
+        height: gridLayout.gridHeight,
+        aspectRatio: "unset",
+      }
+    : {
+        width: "100%",
+        aspectRatio: previewAspect,
+      }
 
   const handleCellDownload = useCallback((url) => {
     if (!url) return
@@ -1229,7 +1459,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
         onClick={isRefTarget ? handleRefTargetClick : undefined}
         data-ref-hint={isRefTarget ? t("canvas.image.clickPickRef") : undefined}
         style={{
-          ...(rootWidth != null ? { width: rootWidth } : null),
+          width: rootWidth,
           ...(isRefTarget ? { cursor: "pointer" } : null),
         }}
       >
@@ -1243,22 +1473,30 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
 
         {/* Left zone: hover container + sliding visual button */}
         <div
-          className={`gn2-plus-left-zone nodrag${leftVisible || plusPinned ? ' gn2-plus-zone--visible' : ''}`}
+          className={`gn2-plus-left-zone${leftVisible || plusPinned ? ' gn2-plus-zone--visible' : ''}`}
           onMouseEnter={() => setLeftVisible(true)}
           onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }}
-          onClick={(e) => { e.stopPropagation(); canvasActions?.openPickerAt(e.clientX - 20, e.clientY, { toLeft: true, targetNodeId: id }) }}
         >
-          <div className="gn2-plus-btn-visual">+</div>
+          <div
+            className="gn2-plus-btn-visual nodrag nopan"
+            onClick={(e) => { e.stopPropagation(); canvasActions?.openPickerAt(e.clientX - 20, e.clientY, { toLeft: true, targetNodeId: id }) }}
+          >
+            +
+          </div>
         </div>
 
         {/* Right zone: hover container + sliding visual button */}
         <div
-          className={`gn2-plus-right-zone nodrag${rightVisible || plusPinned ? ' gn2-plus-zone--visible' : ''}`}
+          className={`gn2-plus-right-zone${rightVisible || plusPinned ? ' gn2-plus-zone--visible' : ''}`}
           onMouseEnter={() => setRightVisible(true)}
           onMouseLeave={() => { if (!plusPinned) setRightVisible(false) }}
-          onClick={(e) => { e.stopPropagation(); canvasActions?.openPickerAt(e.clientX + 20, e.clientY, { fromEdge: true, sourceNodeId: id, sourceNodeType: 'image-gen' }) }}
         >
-          <div className="gn2-plus-btn-visual">+</div>
+          <div
+            className="gn2-plus-btn-visual nodrag nopan"
+            onClick={(e) => { e.stopPropagation(); canvasActions?.openPickerAt(e.clientX + 20, e.clientY, { fromEdge: true, sourceNodeId: id, sourceNodeType: 'image-gen' }) }}
+          >
+            +
+          </div>
         </div>
 
         {/* 预览区：容器可传递拖动；媒体元素 pointer-events:none 穿透到节点 */}
@@ -1266,11 +1504,12 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
           {/* 上传的图片直接显示 */}
           {data.uploadedImage && !isRefSource && (
             <img
-              className="gn2-result-img"
+              className="gn2-result-img gn2-result-img--uploaded"
               src={mediaUrlForDisplay(data.uploadedImage)}
               alt="Uploaded"
               draggable={false}
               onDragStart={(e) => e.preventDefault()}
+              onLoad={handleUploadedImageLoad}
               style={{ pointerEvents: "none" }}
             />
           )}
@@ -1289,8 +1528,8 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
               style={{
                 width: gridLayout.gridWidth,
                 height: gridLayout.gridHeight,
-                gridTemplateColumns: `repeat(${gridLayout.cols}, ${CELL}px)`,
-                gridTemplateRows: `repeat(${gridLayout.rows}, ${CELL}px)`,
+                gridTemplateColumns: `repeat(${gridLayout.cols}, ${gridLayout.cellW || CELL}px)`,
+                gridTemplateRows: `repeat(${gridLayout.rows}, ${gridLayout.cellH || CELL}px)`,
               }}
             >
               {gridImages.map((img, i) => {
@@ -1412,6 +1651,18 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
             </div>
           )}
         </div>
+
+        {isDone && ratingTaskId ? (
+          <TaskRatingBar
+            taskId={ratingTaskId}
+            taskType="image"
+            userRating={data.userRating ?? null}
+            ratingTags={data.ratingTags ?? []}
+            ratingComment={data.ratingComment ?? ""}
+            defaultExpanded={data.userRating == null}
+            onRated={(patch) => patchNodeData(patch, "taskRating")}
+          />
+        ) : null}
 
         <MediaFullscreenViewer src={lightboxSrc} kind="image" onClose={() => setLightboxSrc(null)} />
 

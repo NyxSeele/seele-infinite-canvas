@@ -22,6 +22,7 @@ export default function useModelCapabilities(modelId) {
     let cancelled = false
     setLoading(true)
     setError(null)
+    setCapabilities(null)
 
     api
       .get(`/api/models/${encodeURIComponent(modelId)}/capabilities`)

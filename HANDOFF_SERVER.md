@@ -4,21 +4,55 @@
 > **与仓库 HANDOFF 的关系**：本文件记录「这台机器上做了什么」；**产品功能、Phase 进度、探针清单、GPU 验收标准**仍以仓库根目录 [**`HANDOFF.md`**](HANDOFF.md) 为**后续开发主指南**（尤其 **§六 部署**、**§八 B 真实 GPU 验收**）。  
 > **部署操作细节**：[`backend/docs/AUTODL_DEPLOY_RUNBOOK.md`](backend/docs/AUTODL_DEPLOY_RUNBOOK.md) · 本机实操备忘 [`/root/autodl-tmp/AUTODL_ACTUAL_RUNBOOK.md`](/root/autodl-tmp/AUTODL_ACTUAL_RUNBOOK.md)
 
-最后更新：**2026-07-10 (UTC+8)**（清理债项四件套 ✅ · G45 · pytest **114** · 数据盘 **~270G/300G** · 剩余约 **31G**）
+最后更新：**2026-07-14 (UTC+8)**（Supervisor 五段硬约束 · 双 GPU comfyui0/1 · Tunnel 1033 事故备忘）
 
 ---
 
-## 0. 当前进度摘要（2026-07-10）
+## 0. 当前进度摘要（2026-07-13）
 
 | 维度 | 状态 |
 |------|------|
-| **产品能力** | G31–G45 闭环；清理债项（SD / media_access / api_key / Portal）✅；Hunyuan / AudioGen 上线；Phase4–7 完成 |
-| **pytest** | **114 passed**（含 media_access / secret_store / G45；2026-07-10） |
-| **磁盘** | `/root/autodl-tmp` **300G** · 已用 **~270G** · 可用 **~31G**（含 AudioGen ~3.7G） |
-| **服务** | ComfyUI `:8000` · 后端 `:7788` · Nginx `:6006`（Supervisor；开机自启已修） |
-| **下轮优先** | ① 主观质量表（G47） ② Seedance **最后再说**；~~清理债项~~ / ~~G45~~ / ~~G44~~ ✅ |
+| **产品能力** | G31–G45 闭环 + **视频审阅公开站** + **R2 团队文件/审阅媒资**；Hunyuan / AudioGen 上线；Phase4–7 完成 |
+| **公网** | **`https://velora.seele0420.cloud`** → Cloudflare Tunnel（`cloudflared`）→ Nginx `:6006` |
+| **pytest** | **121 passed**（2026-07-13） |
+| **迁移** | Alembic head **026**（025 R2 · 026 review） |
+| **磁盘** | `/root/autodl-tmp` **350G** · 已用 **~182G** · 可用 **~169G** |
+| **服务** | ComfyUI `:8000` · 后端 `:7788` · Nginx `:6006` · **cloudflared**（Supervisor；开机自启已修） |
+| **下轮优先** | ① 主观质量表（G47） ② 审阅加固（可选） ③ Seedance **最后再说** |
 
 产品细节与待排期清单以 [`HANDOFF.md`](HANDOFF.md) 文首为准。
+
+---
+
+## 0a. 2026-07-13 运维增量（视频审阅 / R2 / Tunnel）
+
+| 步骤 | 状态 | 说明 |
+|------|------|------|
+| 数据盘扩容 | ✅ | **300G → 350G**；可用约 **169G** |
+| 迁移 025 / 026 | ✅ | `r2_files` + `review_videos` / `review_comments`；`alembic upgrade head` → **026** |
+| R2 | ✅ | bucket `seele`；`.env` 配 `R2_*` / `R2_PUBLIC_URL`；浏览器 **presign PUT**；CORS 在 CF 控制台配置 |
+| Cloudflare Tunnel | ✅ | Supervisor 进程 **`cloudflared`**；域名 `velora.seele0420.cloud` → `localhost:6006` |
+| Nginx | ✅ | `client_max_body_size 2048m`；`/api` `proxy_read_timeout 3600s`（大文件上传） |
+| 前端 dist | ✅ | 生产须 **`VITE_API_BASE_URL=`**（空）再 `npm run build`；同域 `/api` |
+| 健康 | ✅ | 公网首页 **200**；本地 7788/8000/6006 正常 |
+
+**生产管理员账号（2026-07-14）**：**`seele`**（`role=admin`，由原 `admin` 更名；探针团队 A owner、无限配额等不变）· 密码 **`dfy042005`** · `SEED_ADMIN_PASSWORD` 已同步至 `backend/.env`。探针种子 **`testuser` / `testuser2`** 见 `.env`（勿写入 git）。临时注册测试号 `testinv2` / `testinv3` 已删除。
+
+**硬约束 · Admin 文本模型**：未经负责人明确同意，**禁止**修改 Admin 后台「模型管理」中的文本模型配置，也**勿重跑** `scripts/_enable_text_models.py`（会覆盖 DB 里已配默认/启用项）。详见 [`HANDOFF.md`](HANDOFF.md) 文首同条约束。
+
+**硬约束 · Supervisor / Tunnel（Cursor 改代码必读）**：`deploy/supervisor-autodl.conf` → `/etc/supervisor/conf.d/aistudio.conf` 必须**始终含 5 个 `[program:]` 段**：
+
+| 段名 | 作用 | 删掉后果 |
+|------|------|----------|
+| `comfyui0` / `comfyui1` | 双卡 ComfyUI `:8000` / `:8001` | GPU 推理不可用 |
+| `aistudio-backend` | FastAPI `:7788` | API 不可用 |
+| **`nginx`** | 反代前端 + `/api` → `:6006` | Tunnel 回源失败 |
+| **`cloudflared`** | Cloudflare Tunnel → 公网域名 | **Error 1033**（本地 `:6006` 可能仍 200） |
+
+- **禁止**为改 `COMFYUI_NODES` / `--database-url` 等而**整文件覆盖** supervisor 配置（2026-07-14 事故根因）。
+- **正确做法**：在仓库 `deploy/supervisor-autodl.conf` 上**只改需要的行** → `diff` 确认五段都在 → `cp` → `/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf update`。
+- **验收**：`curl -s -o /dev/null -w "%{http_code}\n" https://velora.seele0420.cloud/api/health` → **200**；`supervisorctl status` 中 `cloudflared` 为 RUNNING。
+- `supervisorctl` 用 **`/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf`**（勿用 miniconda 默认路径）。
 
 ---
 
@@ -48,12 +82,12 @@
 | 对外端口 | Nginx **6006**（控制台「自定义服务」查公网 URL） |
 | 主机名 | `autodl-container-2db141bceb-853ff7b9` |
 
-### 磁盘（2026-07-10 复核）
+### 磁盘（2026-07-13 复核）
 
 | 挂载点 | 容量 | 已用 | 可用 | 说明 |
 |--------|------|------|------|------|
-| `/` 系统盘 | 30G | ~5G | ~25G | ComfyUI 已迁出，空间充裕 |
-| `/root/autodl-tmp` | **300G** | **~270G** | **~31G** | 含 Flux/Wan/HiDream/SeedVR2 + **PuLID** + **LTX2-fp4** + **HunyuanVideo** + **AudioGen** |
+| `/` 系统盘 | 30G | ~19G | ~12G | ComfyUI 已迁出 |
+| `/root/autodl-tmp` | **350G** | **~182G** | **~169G** | 含 Flux/Wan/HiDream/SeedVR2 + PuLID + LTX2-fp4 + HunyuanVideo + AudioGen（已从 300G 扩容） |
 
 ### 关键路径（增补）
 
@@ -197,7 +231,7 @@
 | Nginx `:6006` | ✅ | `sites-enabled/aistudio` |
 | Redis 自启 | ✅ | `update-rc.d redis-server enable` |
 | `python-multipart` | ✅ | 已装 + 写入 `requirements.txt` |
-| text 模型 DB | ✅ | `scripts/_enable_text_models.py`；默认 **qwen-plus** |
+| text 模型 DB | ✅ | `scripts/_enable_text_models.py`（**勿随意重跑**；仅首次或负责人明确要求）；默认 **qwen-plus** |
 | `model_checker` | ✅ | 扫描 `diffusion_models`（Flux/Wan 在盘可检出） |
 | `stable-diffusion` | ⏸ | DB **disabled**（`checkpoints/` 无 v1-5 权重） |
 | 全量探针 | ⚠️ | 22 探针批跑；15 PASS / 部分超时或环境限制；日志 `all_probes_20260708_1439.log` |
@@ -216,21 +250,36 @@
 
 > **注意**：AutoDL 平台另有 init supervisord（`unix:///tmp/supervisor.sock`，管 jupyter/sshd/tensorboard 等），**不**管理 ComfyUI/Backend/Nginx。勿混用默认 `supervisorctl`（会连错 socket 或报 refused）。
 
+> **硬约束（2026-07-14）**：勿整文件覆盖 `aistudio.conf`。五段缺一不可，尤其 **`nginx` + `cloudflared`**（公网 Tunnel）。见 §0a 上表。
+
 | 进程 | 命令要点 | 端口 | 典型状态 |
 |------|----------|------|----------|
-| `comfyui` | `.venv/bin/python .../ComfyUI/main.py --listen 127.0.0.1 --port 8000` | **8000** | RUNNING |
-| `aistudio-backend` | `.venv/bin/uvicorn main:app --host 127.0.0.1 --port 7788` | **7788** | RUNNING |
+| `comfyui0` | `ComfyUI/main.py --port 8000 --database-url ...8000.db` · `CUDA_VISIBLE_DEVICES=0` | **8000** | RUNNING |
+| `comfyui1` | `ComfyUI/main.py --port 8001 --database-url ...8001.db` · `CUDA_VISIBLE_DEVICES=1` | **8001** | RUNNING |
+| `aistudio-backend` | `uvicorn main:app --host 127.0.0.1 --port 7788` · `COMFYUI_NODES=8000,8001` | **7788** | RUNNING |
 | `nginx` | `/usr/sbin/nginx -g "daemon off;"` | **6006** | RUNNING |
+| `cloudflared` | `/usr/local/bin/cloudflared tunnel run --token …` → `velora.seele0420.cloud` | — | RUNNING |
 
-配置文件：**`/etc/supervisor/conf.d/aistudio.conf`**（含 comfyui / aistudio-backend / **nginx**；ComfyUI 路径为 `/root/autodl-tmp/ComfyUI`）
+配置文件：**仓库** [`deploy/supervisor-autodl.conf`](deploy/supervisor-autodl.conf)（单一真相来源）→ **`/etc/supervisor/conf.d/aistudio.conf`**
 
 ```bash
+# 改配置的安全流程（勿跳过 diff）
+diff -u /etc/supervisor/conf.d/aistudio.conf /root/autodl-tmp/AIStudio/deploy/supervisor-autodl.conf
+cp /root/autodl-tmp/AIStudio/deploy/supervisor-autodl.conf /etc/supervisor/conf.d/aistudio.conf
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf reread
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf update
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf status
+
+# 公网 Tunnel 验收
+curl -s -o /dev/null -w "%{http_code}\n" https://velora.seele0420.cloud/api/health   # 期望 200
+
 # 若 status 报 refused connection，先启动守护进程（须 -d：本机为 Go supervisord）：
 /usr/bin/supervisord -d -c /etc/supervisor/supervisord.conf
 # 或：bash /root/autodl-tmp/start.sh
-/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf status
-/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf restart comfyui aistudio-backend nginx
+/usr/bin/supervisorctl -c /etc/supervisor/supervisord.conf restart comfyui0 comfyui1 aistudio-backend nginx cloudflared
 ```
+
+**Cloudflare Error 1033 排错**：本地 `curl http://127.0.0.1:6006/` 为 200 但公网 1033 → 几乎总是 **`cloudflared` 未 RUNNING**；查 `tail /root/autodl-tmp/logs/cloudflared.err.log` 与 `ps aux | grep cloudflared`。
 
 ### 3.2 健康检查与 GPU Smoke Test（2026-07-07 更新）
 
@@ -258,7 +307,7 @@ Smoke 脚本与日志：`backend/scripts/_phase2_smoke_tests.py` · `/root/autod
 
 | 用户 | 密码来源 |
 |------|----------|
-| `admin` | `SEED_ADMIN_PASSWORD` in `backend/.env` |
+| `seele`（**admin**） | `SEED_ADMIN_PASSWORD` in `backend/.env`（2026-07-14 自 `admin` 更名） |
 | `testuser` | `SEED_TESTUSER_PASSWORD` |
 | `testuser2` | `SEED_TESTUSER2_PASSWORD` |
 
@@ -482,11 +531,13 @@ Backend：`providers/comfyui.py` → `_build_hidream_workflow`（UNETLoader + Qu
 | Supervisor 双实例 | AutoDL 平台 init supervisord（jupyter/sshd）**≠** AI Studio `/etc/supervisor` |
 | ~~关机后 Supervisor 未自启~~ | ✅ **2026-07-09 已修**：方案 B + AutoDL 钩子。PID1=`/init/boot/boot.sh`（**非 systemd**，方案 C 不可用）。开机链：`/init/bin/customer.cmd.sh` → **`/etc/autodl.sh`** → **`/root/autodl-tmp/start.sh`** → `/usr/bin/supervisord -d -c /etc/supervisor/supervisord.conf`。本机 `/usr/bin/supervisord` 为 AutoDL **Go 版**（须 `-d` daemon；勿与 Python `supervisorctl` 混用路径）。模拟重启：stop all → 杀 pidfile → `bash /root/autodl-tmp/start.sh` → 三进程 RUNNING；7788/8000/6006 **200** |
 | AI Studio supervisord 未起（排错） | 若钩子异常：`bash /root/autodl-tmp/start.sh`；`refused connection` 时确认 `/var/run/supervisor.sock` 与 `ps` 中 `-c /etc/supervisor/supervisord.conf` |
-| **text 模型** | ✅ `_enable_text_models.py`；默认 qwen-plus；A2 须 DB 有 `api_key` |
+| **text 模型** | ✅ `_enable_text_models.py`（**勿随意重跑**）；默认 qwen-plus；A2 须 DB 有 `api_key`；Admin 后台配置见 HANDOFF 硬约束 |
 | **百炼免费额度** | qwen-max/turbo 403；仅 plus 可用直至控制台开通付费 |
 | **SD1.5 checkpoint** | 本机 `checkpoints/` 空；`stable-diffusion` DB disabled；探针改用 `flux-dev` |
 | **探针 429** | 批跑前 `UPDATE tasks SET status='failed' WHERE status IN ('pending','running')` |
 | Supervisor 模板路径 | 仓库 `deploy/supervisor-autodl.conf` 写 `comfyui` 小写；本机实际 `ComfyUI` |
+| **Supervisor 整文件覆盖** | **2026-07-14 事故**：改双 GPU 时 `cp` 删减版配置 → 丢 `nginx`/`cloudflared` → 公网 **1033**。**禁止**整文件覆盖；改前改后 `diff` 五段齐全。见 §0a / §3.1 |
+| **Cloudflare 1033** | 本地 `:6006` 200 但公网 1033 → `cloudflared` 未跑；`supervisorctl status cloudflared`；恢复见 §3.1 |
 | Cursor shell 的 `node` | 可能指向 Cursor 内置 Node；构建请用 `/usr/bin/npm` |
 | FLUX VAE 非官方 | `ae.safetensors` → Kijai `flux-vae-bf16` 软链 |
 | 聊天中暴露 API Key | 建议在阿里云控制台**轮换** `DASHSCOPE_API_KEY` |
@@ -503,7 +554,7 @@ Backend：`providers/comfyui.py` → `_build_hidream_workflow`（UNETLoader + Qu
 | `wan_2.1_vae.safetensors` 与 Wan2.2 | wan-i2v smoke test 出视频 **PASS** → 视为兼容 |
 | HiDream T5 与 Flux T5 | **无冲突**：`t5xxl_fp8_e4m3fn.safetensors`（Flux）与 `t5xxl_fp8_e4m3fn_scaled.safetensors`（HiDream）为**独立文件** |
 | `fun_inpaint` 首尾帧工作流 | ✅ FLF2V（i2v）+ ✅ G34 Fun Inpaint（专用 UNET，2026-07-09） |
-| 磁盘水位 | **~31G 可用**（`/root/autodl-tmp` ~270G/300G）；G30 PuLID + LTX2 fp4 + HunyuanVideo + **AudioGen medium** 权重已落盘 |
+| 磁盘水位 | **~169G 可用**（`/root/autodl-tmp` ~182G/350G）；G30 + Hunyuan + AudioGen + 审阅媒资走 R2（不占本地大盘） |
 | ComfyUI 输出作 i2v 参考图 | ✅ **已修复**（2026-07-07）：`/api/view?filename=…` 经 `resolve_image_reference_path` 解析；仍支持 `/api/uploads/…` |
 
 ---
@@ -529,9 +580,9 @@ curl -s http://127.0.0.1:8000/system_stats | head -c 500
 df -h / /root/autodl-tmp
 du -sh /root/autodl-tmp/ComfyUI/models/* | sort -hr | head
 
-# text 模型（新机首次或重置后）
+# text 模型（仅新机首次初始化或负责人明确要求；会覆盖 Admin 后台配置）
 cd /root/autodl-tmp/AIStudio/backend && set -a && source .env && set +a
-.venv/bin/python scripts/_enable_text_models.py
+# .venv/bin/python scripts/_enable_text_models.py   # 勿随意执行
 
 # 探针前清理并发槽位
 sqlite3 aistudio.db "UPDATE tasks SET status='failed', error='probe-cleanup' WHERE status IN ('pending','running');"
@@ -551,6 +602,9 @@ export AGENT_MOCK_GENERATION=false SEED_ADMIN_PASSWORD='Admin@2026!'
 |------|------|
 | [`HANDOFF.md`](HANDOFF.md) | **仓库主 HANDOFF**（产品开发指南） |
 | [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) | **本文件**（服务器部署交接） |
+| `backend/routers/review.py` | 视频审阅 API（JWT 发布 + 匿名公开） |
+| `backend/services/r2.py` | Cloudflare R2 上传/presign/删对象 |
+| `frontend/src/pages/Review*.jsx` | 审阅公开站 / 发布页 |
 | [`DEPLOY.md`](DEPLOY.md) | 通用 Docker/部署 |
 | [`backend/docs/AUTODL_DEPLOY_RUNBOOK.md`](backend/docs/AUTODL_DEPLOY_RUNBOOK.md) | AutoDL 模板 Runbook |
 | `/root/autodl-tmp/AUTODL_ACTUAL_RUNBOOK.md` | 本实例实操 Runbook |
@@ -569,7 +623,7 @@ export AGENT_MOCK_GENERATION=false SEED_ADMIN_PASSWORD='Admin@2026!'
 | `PROMPT_DEBUG_PHASE{1..7}.md` | Prompt 调试交接文档（仓库根目录） |
 | `/root/autodl-tmp/logs/agent_trace_baseline.json` | Agent Trace 基线探针输出 |
 | `/root/autodl-tmp/logs/all_probes_20260708_1439.log` | 2026-07-08 全量探针批跑日志 |
-| `backend/scripts/_enable_text_models.py` | text 模型写入 registered_models |
+| `backend/scripts/_enable_text_models.py` | text 模型写入 registered_models（**勿随意重跑**；会覆盖 Admin 配置） |
 | `AGENT_TRACE_BASELINE.md` | Agent Trace 诊断报告 |
 | `ROUTE_B_RESULT.md` | 路线 A/B 验收结果 |
 | `G30_RESUME.md` | G30 PuLID + LTX2 完成状态与运维注意 |
@@ -580,6 +634,8 @@ export AGENT_MOCK_GENERATION=false SEED_ADMIN_PASSWORD='Admin@2026!'
 ---
 
 ## 10. 交接摘要（一句话）
+
+**2026-07-13 视频审阅 + R2 + Tunnel（269 机）**：迁移 **025/026**；公网 **`https://velora.seele0420.cloud`**（`cloudflared`）；Nginx 大上传 `2048m`；pytest **121**；数据盘 **350G / ~169G 可用**。产品细节见 [`HANDOFF.md`](HANDOFF.md)。
 
 **2026-07-10 G40 buffalo_l + Phase7 换脸复测（269 机）**：经 hf-mirror 预置 `buffalo_l`（`_download_g40_buffalo_l.sh`）；Phase7 复跑 T2/T3 **`use_reactor=True` completed**（`ComfyUI_00066_`/`00067_.png`）；T1/T4 仍为预期失败。
 

@@ -7,8 +7,7 @@ import websockets
 from websockets.exceptions import InvalidURI, WebSocketException
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from comfyui import client as comfyui
-from core.comfyui_settings import comfyui_ws_url
+from core.comfyui_settings import comfyui_nodes_list, comfyui_ws_url_for_node
 from db.session import SessionLocal
 
 router = APIRouter(tags=["websocket"])
@@ -36,6 +35,37 @@ def _extract_ws_token(websocket: WebSocket) -> str:
     return ""
 
 
+async def _relay_comfy_to_client(comfy_ws, websocket: WebSocket, client_id: str) -> None:
+    from services import comfyui_progress
+
+    async for message in comfy_ws:
+        if isinstance(message, bytes):
+            await websocket.send_bytes(message)
+            continue
+        try:
+            payload = json.loads(message)
+            msg_type = payload.get("type")
+            d = payload.get("data") or {}
+
+            if msg_type in ("execution_start", "executing"):
+                pid = d.get("prompt_id")
+                if pid:
+                    comfyui_progress.set_active_prompt(client_id, str(pid))
+
+            if msg_type == "progress" and "value" in d and "max" in d:
+                pid = comfyui_progress.resolve_prompt_id(client_id, d)
+                if pid:
+                    comfyui_progress.record_progress(
+                        pid,
+                        d.get("value", 0),
+                        d.get("max", 0),
+                        node=d.get("node"),
+                    )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        await websocket.send_text(message)
+
+
 @router.websocket("/ws")
 async def websocket_proxy(websocket: WebSocket):
     token = _extract_ws_token(websocket)
@@ -52,78 +82,55 @@ async def websocket_proxy(websocket: WebSocket):
 
     await websocket.accept()
     client_id = websocket.query_params.get("clientId") or str(uuid.uuid4())
-    comfy_uri = f"{comfyui_ws_url()}?clientId={client_id}"
+    node_urls = comfyui_nodes_list()
 
+    comfy_connections: list = []
     try:
-        async with websockets.connect(
-            comfy_uri,
-            ping_interval=20,
-            ping_timeout=10,
-            close_timeout=5,
-        ) as comfy_ws:
+        for node_url in node_urls:
+            comfy_uri = f"{comfyui_ws_url_for_node(node_url)}?clientId={client_id}"
+            try:
+                comfy_ws = await websockets.connect(
+                    comfy_uri,
+                    ping_interval=20,
+                    ping_timeout=10,
+                    close_timeout=5,
+                )
+                comfy_connections.append(comfy_ws)
+            except _COMFY_NOT_RUNNING_ERRORS as exc:
+                print(f"ComfyUI WS 连接失败 node={node_url} user={user.id}: {exc}")
 
-            async def recv_from_comfy():
-                try:
-                    from services import comfyui_progress
+        if not comfy_connections:
+            raise ConnectionRefusedError("所有 ComfyUI 节点均无法连接")
 
-                    async for message in comfy_ws:
-                        if isinstance(message, bytes):
-                            await websocket.send_bytes(message)
-                        else:
-                            try:
-                                payload = json.loads(message)
-                                msg_type = payload.get("type")
-                                d = payload.get("data") or {}
-
-                                if msg_type in ("execution_start", "executing"):
-                                    pid = d.get("prompt_id")
-                                    if pid:
-                                        comfyui_progress.set_active_prompt(
-                                            client_id, str(pid)
-                                        )
-
-                                if msg_type == "progress" and "value" in d and "max" in d:
-                                    pid = comfyui_progress.resolve_prompt_id(
-                                        client_id, d
-                                    )
-                                    if pid:
-                                        comfyui_progress.record_progress(
-                                            pid,
-                                            d.get("value", 0),
-                                            d.get("max", 0),
-                                            node=d.get("node"),
-                                        )
-                            except (json.JSONDecodeError, TypeError, ValueError):
-                                pass
-                            await websocket.send_text(message)
-                except Exception:
-                    pass
-
-            async def recv_from_client():
-                try:
-                    if hasattr(websocket, "iter_text"):
-                        async for message in websocket.iter_text():
+        async def recv_from_client():
+            try:
+                if hasattr(websocket, "iter_text"):
+                    async for message in websocket.iter_text():
+                        for comfy_ws in comfy_connections:
                             await comfy_ws.send(message)
-                    else:
-                        while True:
-                            message = await websocket.receive_text()
+                else:
+                    while True:
+                        message = await websocket.receive_text()
+                        for comfy_ws in comfy_connections:
                             await comfy_ws.send(message)
-                except (WebSocketDisconnect, Exception):
-                    pass
+            except (WebSocketDisconnect, Exception):
+                pass
 
-            done, pending = await asyncio.wait(
-                [
-                    asyncio.create_task(recv_from_comfy()),
-                    asyncio.create_task(recv_from_client()),
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        relay_tasks = [
+            asyncio.create_task(_relay_comfy_to_client(ws, websocket, client_id))
+            for ws in comfy_connections
+        ]
+        client_task = asyncio.create_task(recv_from_client())
+        done, pending = await asyncio.wait(
+            [*relay_tasks, client_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     except _COMFY_NOT_RUNNING_ERRORS as e:
         print(f"ComfyUI 未启动或连接失败 (user={user.id}): {e}")
@@ -136,6 +143,11 @@ async def websocket_proxy(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket 代理异常 (user={user.id}): {e}")
     finally:
+        for comfy_ws in comfy_connections:
+            try:
+                await comfy_ws.close()
+            except Exception:
+                pass
         try:
             await websocket.close()
         except Exception:

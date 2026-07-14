@@ -19,6 +19,10 @@ from trace_bus import push_trace
 
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+CONFIGURED_LLM_ERROR = (
+    "请先在管理后台「模型管理」配置并启用文本 LLM（category=text, type=api）"
+)
+
 logger = logging.getLogger(__name__)
 
 SINGLE_VERSION_PREFIX = (
@@ -183,19 +187,12 @@ async def _call_llm(
     system_prompt: str, user_prompt: str, *, max_tokens: int = 4000
 ) -> tuple[str, str | None]:
     row = _resolve_text_model()
-    if row:
-        try:
-            content, finish_reason = await _call_registered_model(
-                row.id, system_prompt, user_prompt, max_tokens
-            )
-            _log_finish_reason(finish_reason, context="registered")
-            return content, finish_reason
-        except Exception:
-            pass
-    content, finish_reason = await _call_dashscope(
-        system_prompt, user_prompt, max_tokens
+    if not row:
+        raise ValueError(CONFIGURED_LLM_ERROR)
+    content, finish_reason = await _call_registered_model(
+        row.id, system_prompt, user_prompt, max_tokens
     )
-    _log_finish_reason(finish_reason, context="dashscope")
+    _log_finish_reason(finish_reason, context="registered")
     return content, finish_reason
 
 
@@ -204,20 +201,135 @@ async def _call_llm_with_usage(
 ) -> tuple[str, str | None, dict]:
     """与 _call_llm 相同，额外返回 token usage 字典。"""
     row = _resolve_text_model()
-    if row:
-        try:
-            content, finish_reason, usage = await _call_registered_model(
-                row.id, system_prompt, user_prompt, max_tokens, return_usage=True
-            )
-            _log_finish_reason(finish_reason, context="registered")
-            return content, finish_reason, usage
-        except Exception:
-            pass
-    content, finish_reason, usage = await _call_dashscope(
-        system_prompt, user_prompt, max_tokens, return_usage=True
+    if not row:
+        raise ValueError(CONFIGURED_LLM_ERROR)
+    content, finish_reason, usage = await _call_registered_model(
+        row.id, system_prompt, user_prompt, max_tokens, return_usage=True
     )
-    _log_finish_reason(finish_reason, context="dashscope")
+    _log_finish_reason(finish_reason, context="registered")
     return content, finish_reason, usage
+
+
+async def invoke_configured_text_llm(
+    system_prompt: str,
+    user_content: str | list,
+    *,
+    max_tokens: int = 500,
+    temperature: float = 0.7,
+    db=None,
+) -> tuple[str, str | None, str]:
+    """仅走 Admin 已注册文本模型（llm_router），禁止 DashScope 直连 fallback。"""
+    from services.llm_router import record_usage, resolve_text_model
+
+    row = resolve_text_model(db)
+    if not row:
+        raise ValueError(CONFIGURED_LLM_ERROR)
+
+    api_key = get_registered_model_api_key(row)
+    base_url = (row.api_base or "").strip()
+    model = (row.model_string or row.id).strip()
+    if not api_key or not base_url or not model:
+        raise ValueError(f"模型 {row.id} 未配置 API Key 或 API Base")
+
+    content, finish, usage = await _invoke_chat_completion(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        system_prompt=system_prompt,
+        user_content=user_content,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    total = int(usage.get("total_tokens") or 0)
+    if total > 0:
+        record_usage(row.id, total)
+    if not content:
+        raise ValueError("LLM 返回空内容")
+    return content, finish, row.id
+
+
+async def _invoke_chat_completion(
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    system_prompt: str,
+    user_content: str | list,
+    max_tokens: int,
+    temperature: float = 0.7,
+) -> tuple[str, str | None, dict]:
+    llm_timeout = float(settings.llm_http_timeout)
+    async with httpx.AsyncClient(trust_env=False, timeout=llm_timeout) as http:
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url.strip(),
+            timeout=llm_timeout,
+            http_client=http,
+        )
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=False,
+        )
+    choice = response.choices[0]
+    usage = getattr(response, "usage", None)
+    content = (choice.message.content or "").strip()
+    finish = getattr(choice, "finish_reason", None)
+    return content, finish, _usage_dict(usage)
+
+
+def _vision_blocks_to_openai_parts(blocks: list[dict]) -> list[dict]:
+    parts: list[dict] = []
+    for block in blocks:
+        btype = block.get("type")
+        if btype == "text":
+            text = (block.get("text") or "").strip()
+            if text:
+                parts.append({"type": "text", "text": text})
+        elif btype == "image":
+            src = block.get("source") or {}
+            if src.get("type") == "base64":
+                media_type = src.get("media_type") or "image/jpeg"
+                data = src.get("data") or ""
+                if data:
+                    parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{media_type};base64,{data}"},
+                        }
+                    )
+    return parts
+
+
+async def call_feedback_analysis_llm(
+    db,
+    system_prompt: str,
+    user_text: str,
+    vision_blocks: list[dict] | None = None,
+    *,
+    max_tokens: int = 8192,
+) -> tuple[str, str | None, str]:
+    """Admin 反馈分析：仅走已注册 LLM（llm_router），支持图文 multimodal。"""
+    if vision_blocks:
+        user_content: str | list = [
+            {"type": "text", "text": user_text},
+            *_vision_blocks_to_openai_parts(vision_blocks),
+        ]
+    else:
+        user_content = user_text
+
+    content, finish, model_id = await invoke_configured_text_llm(
+        system_prompt,
+        user_content,
+        max_tokens=max_tokens,
+        db=db,
+    )
+    return content, finish, model_id
 
 
 async def _call_registered_model(
@@ -276,40 +388,6 @@ async def _call_registered_model(
         return content, finish
     finally:
         db.close()
-
-
-async def _call_dashscope(
-    system_prompt: str, user_prompt: str, max_tokens: int, *, return_usage: bool = False
-) -> tuple[str, str | None] | tuple[str, str | None, dict]:
-    api_key = settings.dashscope_api_key or os.environ.get("DASHSCOPE_API_KEY")
-    if not api_key:
-        raise ValueError("未配置 DASHSCOPE_API_KEY，且无可用的已注册文本模型")
-
-    llm_timeout = float(settings.llm_http_timeout)
-    async with httpx.AsyncClient(trust_env=False, timeout=llm_timeout) as http:
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=DASHSCOPE_BASE_URL,
-            timeout=llm_timeout,
-            http_client=http,
-        )
-        response = await client.chat.completions.create(
-            model="qwen-plus",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.7,
-            max_tokens=max_tokens,
-            stream=False,
-        )
-    choice = response.choices[0]
-    usage = getattr(response, "usage", None)
-    content = (choice.message.content or "").strip()
-    finish = getattr(choice, "finish_reason", None)
-    if return_usage:
-        return content, finish, _usage_dict(usage)
-    return content, finish
 
 
 def _validate_scenes(scenes: list, *, label: str = "scenes") -> list:
@@ -602,15 +680,37 @@ async def generate_shots(outline: str, *, target_duration_sec: int | None = None
 
     llm_input, parsed_target = _outline_payload_for_shots(text)
     target = target_duration_sec if target_duration_sec is not None else parsed_target
+
+    from services.segment_duration import (
+        clamp_segments_to_shot_count,
+        parse_shots_target_from_text,
+    )
+
+    explicit_shots = parse_shots_target_from_text(text) or parse_shots_target_from_text(
+        llm_input
+    )
+    duration_based = max(2, int(target) // 8) if target is not None else 0
+    shots_target = int(explicit_shots or duration_based or 0)
+
+    constraint_parts: list[str] = []
     if target is not None:
-        llm_input = (
+        constraint_parts.append(
             f"【硬性约束】整片目标总时长 = {int(target)} 秒。"
             f"所有镜头的 duration 之和必须等于 {int(target)} 秒（误差≤2）。"
-            f"单镜 4-15 秒，镜头数建议 {max(2, int(target) // 8)} 镜左右，勿过度切镜。\n\n"
-            + llm_input
+            f"单镜 4-15 秒。"
         )
+    if shots_target > 0:
+        constraint_parts.append(
+            f"【硬性约束】镜头总数必须恰好等于 {shots_target}（与「{shots_target}个镜头」一致；"
+            f"segments 合计 shots 数 = {shots_target}，禁止每 scene 再拆出超额 shot）。"
+        )
+    elif target is not None:
+        constraint_parts.append(
+            f"镜头数建议 {max(2, int(target) // 8)} 镜左右，勿过度切镜。"
+        )
+    if constraint_parts:
+        llm_input = "\n".join(constraint_parts) + "\n\n" + llm_input
 
-    shots_target = max(2, int(target) // 8) if target is not None else 0
     studio_print(
         "trace",
         f"A4 SHOTS_INPUT outline_len={len(llm_input)} shots_target={shots_target}",
@@ -623,6 +723,7 @@ async def generate_shots(outline: str, *, target_duration_sec: int | None = None
             "user_preview": llm_input[:300],
             "outline_len": len(llm_input),
             "shots_target": shots_target or None,
+            "shots_target_explicit": explicit_shots,
         },
     )
 
@@ -633,6 +734,12 @@ async def generate_shots(outline: str, *, target_duration_sec: int | None = None
         raise ValueError("模型未返回内容")
     parsed = _parse_shots_json(raw)
     duration_warning = None
+    shot_count_warning = None
+    if shots_target > 0:
+        segments, shot_count_warning = clamp_segments_to_shot_count(
+            parsed.get("segments") or [], shots_target
+        )
+        parsed["segments"] = segments
     if target is not None:
         from services.segment_duration import normalize_segments_to_target
 
@@ -641,6 +748,10 @@ async def generate_shots(outline: str, *, target_duration_sec: int | None = None
         )
         parsed["segments"] = segments
         parsed["target_video_duration_sec"] = int(target)
+
+    warning_parts = [w for w in (shot_count_warning, duration_warning) if w]
+    if warning_parts:
+        parsed["duration_warning"] = "；".join(warning_parts)
 
     segments = parsed.get("segments") or []
     segments_count = len(segments)
@@ -659,8 +770,11 @@ async def generate_shots(outline: str, *, target_duration_sec: int | None = None
         {
             "segments_count": segments_count,
             "total_shots": total_shots,
-            "segments_summary": segments_summary,
+            "shots_target": shots_target or None,
+            "finish_reason": finish_reason,
             "tokens": token_total,
+            "segments_summary": segments_summary,
+            "duration_warning": parsed.get("duration_warning"),
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
         },
@@ -670,6 +784,6 @@ async def generate_shots(outline: str, *, target_duration_sec: int | None = None
     if truncated:
         logger.warning("generate_shots: 输出可能被截断 (finish_reason=length)")
     out = {**parsed, "truncated": truncated}
-    if duration_warning:
-        out["duration_warning"] = duration_warning
+    if parsed.get("duration_warning"):
+        out["duration_warning"] = parsed["duration_warning"]
     return out

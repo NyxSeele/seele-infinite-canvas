@@ -3,6 +3,7 @@ from comfyui.client import (
     LTX2_CKPT,
     LTX2_GEMMA_ENCODER,
     VIDEO_FPS,
+    build_ltx2_fp4_i2v_workflow,
     build_ltx2_fp4_t2v_workflow,
     ltx_video_length,
 )
@@ -70,4 +71,40 @@ def test_build_ltx2_fp4_audio_false_strips_av_nodes():
     assert wf["113"]["inputs"]["latent_image"] == ["108", 0]
     assert wf["98"]["inputs"]["latent"] == ["108", 0]
     assert wf["119"]["inputs"]["latent_image"] == ["118", 0]
+    assert wf["126"]["inputs"]["samples"] == ["119", 1]
+
+
+def test_build_ltx2_fp4_i2v_workflow_nodes():
+    wf = build_ltx2_fp4_i2v_workflow(
+        "p",
+        "n",
+        "x.png",
+        width=848,
+        height=480,
+        duration_sec=5,
+        seed=7,
+        model_filename=LTX2_CKPT,
+    )
+    assert wf["200"]["inputs"]["image"] == "x.png"
+    assert wf["200"]["class_type"] == "LoadImage"
+    assert wf["201"]["class_type"] == "ResizeImagesByLongerEdge"
+    assert wf["202"]["class_type"] == "LTXVPreprocess"
+    assert wf["203"]["class_type"] == "LTXVImgToVideoInplace"
+    assert wf["204"]["class_type"] == "LTXVImgToVideoInplace"
+    assert wf["109"]["inputs"]["video_latent"] == ["203", 0]
+    assert wf["117"]["inputs"]["video_latent"] == ["204", 0]
+    assert wf["203"]["inputs"]["latent"] == ["108", 0]
+    assert wf["204"]["inputs"]["latent"] == ["118", 0]
+    assert wf["121"]["inputs"]["text"] == "p"
+    assert wf["115"]["inputs"]["noise_seed"] == 7
+
+
+def test_build_ltx2_fp4_i2v_audio_false_uses_inplace_latents():
+    wf = build_ltx2_fp4_i2v_workflow("p", "n", "x.png", audio=False)
+    types = {node["class_type"] for node in wf.values()}
+    assert not (AUDIO_TYPES & types)
+    assert "203" in wf and "204" in wf
+    assert wf["113"]["inputs"]["latent_image"] == ["203", 0]
+    assert wf["98"]["inputs"]["latent"] == ["203", 0]
+    assert wf["119"]["inputs"]["latent_image"] == ["204", 0]
     assert wf["126"]["inputs"]["samples"] == ["119", 1]

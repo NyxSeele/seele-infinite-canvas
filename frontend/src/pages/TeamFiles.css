@@ -1,0 +1,309 @@
+.tf-body {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.tf-denied {
+  margin-top: 48px;
+  text-align: center;
+  font-size: 16px;
+  color: var(--ws-text-muted, #6b7280);
+}
+
+.tf-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.tf-search {
+  flex: 1;
+  min-width: 180px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.12));
+  background: var(--ws-surface, #fff);
+  color: inherit;
+  font-size: 14px;
+}
+
+.tf-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.tf-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.1));
+  background: transparent;
+  color: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.tf-tab--active {
+  background: rgba(109, 40, 217, 0.12);
+  border-color: rgba(109, 40, 217, 0.35);
+  color: #6d28d9;
+  font-weight: 600;
+}
+
+.rf-page--dark .tf-tab--active {
+  background: rgba(167, 139, 250, 0.16);
+  border-color: rgba(167, 139, 250, 0.4);
+  color: #c4b5fd;
+}
+
+.tf-tab-count {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.tf-btn {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.12));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.tf-btn--primary {
+  background: var(--ws-accent, #2563eb);
+  border-color: transparent;
+  color: #fff;
+}
+
+.tf-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tf-empty {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--ws-text-muted, #6b7280);
+}
+
+.tf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.tf-card {
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.1));
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--ws-surface, #fff);
+  display: flex;
+  flex-direction: column;
+}
+
+.rf-page--dark .tf-card {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tf-preview {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+
+.rf-page--dark .tf-preview {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.tf-preview-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+
+.tf-preview-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.tf-preview-fallback--image { background: linear-gradient(135deg, #dbeafe, #eff6ff); color: #1d4ed8; }
+.tf-preview-fallback--video { background: linear-gradient(135deg, #ede9fe, #f5f3ff); color: #6d28d9; }
+.tf-preview-fallback--audio { background: linear-gradient(135deg, #d1fae5, #ecfdf5); color: #047857; }
+.tf-preview-fallback--document { background: linear-gradient(135deg, #ffedd5, #fff7ed); color: #c2410c; }
+.tf-preview-fallback--other { background: linear-gradient(135deg, #e5e7eb, #f9fafb); color: #4b5563; }
+
+.rf-page--dark .tf-preview-fallback--image { background: rgba(37, 99, 235, 0.2); color: #93c5fd; }
+.rf-page--dark .tf-preview-fallback--video { background: rgba(109, 40, 217, 0.22); color: #c4b5fd; }
+.rf-page--dark .tf-preview-fallback--audio { background: rgba(4, 120, 87, 0.22); color: #6ee7b7; }
+.rf-page--dark .tf-preview-fallback--document { background: rgba(194, 65, 12, 0.22); color: #fdba74; }
+.rf-page--dark .tf-preview-fallback--other { background: rgba(255, 255, 255, 0.06); color: #d1d5db; }
+
+.tf-badge {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+
+.tf-card-body {
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 96px;
+}
+
+.tf-card-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tf-card-meta {
+  font-size: 12px;
+  color: var(--ws-text-muted, #6b7280);
+}
+
+.tf-card-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.tf-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--ws-accent, #2563eb);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.tf-link--danger {
+  color: #dc2626;
+}
+
+.tf-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 16px;
+}
+
+.tf-modal {
+  width: min(440px, 100%);
+  background: var(--ws-surface, #fff);
+  color: inherit;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+}
+
+.rf-page--dark .tf-modal {
+  background: #1a1d24;
+}
+
+.tf-modal h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.tf-modal-meta {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--ws-text-muted, #6b7280);
+  word-break: break-all;
+}
+
+.tf-hint {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--ws-text-muted, #6b7280);
+}
+
+.tf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.tf-field textarea {
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.12));
+  padding: 8px 10px;
+  font: inherit;
+  background: transparent;
+  color: inherit;
+}
+
+.tf-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.tf-progress-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.tf-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ws-accent, #2563eb);
+  transition: width 0.15s ease;
+}
+
+.tf-progress > span {
+  font-size: 12px;
+  min-width: 36px;
+  text-align: right;
+}
+
+.tf-modal-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}

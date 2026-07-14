@@ -39,12 +39,27 @@
 
 .tils-back,
 .tils-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
-  font-size: 20px;
+  font-size: 13px;
   cursor: pointer;
   color: var(--tl-text-secondary);
   padding: 2px 6px;
+  line-height: 1;
+  transition: color 0.15s ease;
+  font-family: inherit;
+}
+
+.tils-close {
+  font-size: 20px;
+}
+
+.tils-back:hover,
+.tils-close:hover {
+  color: var(--tl-text-primary);
 }
 
 .tils-row {

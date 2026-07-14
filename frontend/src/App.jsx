@@ -8,12 +8,6 @@ import { wsManager } from "./services/ws"
 import ModelSelectBanner from "./components/ModelSelectBanner.jsx"
 import "./App.css"
 
-const PAGE_TITLES = {
-  submit: "图像生成",
-  video: "视频生成",
-  tasks: "任务管理",
-}
-
 const DEFAULT_STEPS = 20
 const POLL_INTERVAL = 5000
 const DEFAULT_UNWANTED = "模糊, 低质量, 水印, 文字"
@@ -505,8 +499,8 @@ export default function App() {
   )
 
   useEffect(() => {
-    document.title = `Velora - ${PAGE_TITLES[activeTab] || "工作台"}`
-  }, [activeTab])
+    document.title = "Velora"
+  }, [])
 
   const handleContextMenu = (e, taskId) => {
     e.preventDefault()
@@ -933,6 +927,8 @@ function VideoSubmitForm({ clientId, prefill, onPrefillConsumed, onSuccess, gene
             <select value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
               <option value={3}>3 秒</option>
               <option value={5}>5 秒</option>
+              <option value={10}>10 秒</option>
+              <option value={15}>15 秒</option>
             </select>
           </div>
           <div className="form-group">

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Any
@@ -12,23 +11,51 @@ MENTION_TOKEN_RE = re.compile(r"@([^\s@]+)\s*")
 
 from sqlalchemy.orm import Session
 
-from models.canvas import CanvasState
+from models import User
 from models.user_asset import UserAsset
 from schemas.tasks import CanvasMention
 
 logger = logging.getLogger(__name__)
 
 
-def _load_canvas_nodes(db: Session, user_id: int) -> list[dict[str, Any]]:
-    row = db.query(CanvasState).filter(CanvasState.user_id == user_id).first()
-    if not row or not row.data:
-        return []
+def _load_canvas_nodes(
+    db: Session,
+    user: User,
+    project_id: str | None = None,
+    team_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """从 CanvasProject 加载节点（不再使用已废弃的 CanvasState）。"""
     try:
-        data = json.loads(row.data)
+        from services.canvas_access import get_accessible_project
+        from services.canvas_style_ref import load_canvas_data
+
+        project = None
+        if project_id:
+            try:
+                project = get_accessible_project(db, user, project_id)
+            except Exception:
+                logger.warning(
+                    "mention_context: project %s not accessible for user %s",
+                    project_id,
+                    getattr(user, "id", None),
+                )
+                return []
+            if project is None:
+                return []
+        else:
+            # 未传 project_id：fail-closed，禁止回退到用户其它项目
+            return []
+        if not project:
+            return []
+        data = load_canvas_data(project)
         nodes = data.get("nodes")
         return nodes if isinstance(nodes, list) else []
     except Exception:
-        logger.warning("mention_context: failed to parse canvas for user %s", user_id)
+        logger.warning(
+            "mention_context: failed to load canvas project for user %s",
+            getattr(user, "id", None),
+            exc_info=True,
+        )
         return []
 
 
@@ -70,10 +97,16 @@ def _video_url_from_node(node: dict[str, Any]) -> str | None:
 
 def resolve_mentions(
     db: Session,
-    user_id: int,
+    user_id: int | User,
     mentions: list[CanvasMention] | None,
+    *,
+    project_id: str | None = None,
+    team_id: str | None = None,
 ) -> dict[str, Any]:
-    """解析 mentions，返回 reference_image_urls 与 context_parts。"""
+    """解析 mentions，返回 reference_image_urls 与 context_parts。
+
+    user_id 可为 User 实例或 int（兼容旧调用）；推荐传 User。
+    """
     result: dict[str, Any] = {
         "reference_image_urls": [],
         "context_parts": [],
@@ -81,7 +114,16 @@ def resolve_mentions(
     if not mentions:
         return result
 
-    nodes = _load_canvas_nodes(db, user_id)
+    if isinstance(user_id, User):
+        user = user_id
+        uid = user.id
+    else:
+        uid = int(user_id)
+        user = db.get(User, uid)
+        if not user:
+            return result
+
+    nodes = _load_canvas_nodes(db, user, project_id=project_id, team_id=team_id)
     seen_urls: set[str] = set()
 
     for mention in mentions:
@@ -91,7 +133,7 @@ def resolve_mentions(
         if node_type == "asset":
             row = (
                 db.query(UserAsset)
-                .filter(UserAsset.id == mention.id, UserAsset.user_id == user_id)
+                .filter(UserAsset.id == mention.id, UserAsset.user_id == uid)
                 .first()
             )
             if row and row.image_url and row.image_url not in seen_urls:
@@ -104,7 +146,12 @@ def resolve_mentions(
 
         node = _node_by_id(nodes, mention.id)
         if not node:
-            logger.debug("mention_context: node not found %s", mention.id)
+            logger.warning(
+                "mention_context: node not found id=%s user=%s project_id=%s",
+                mention.id,
+                uid,
+                project_id,
+            )
             continue
 
         node_type = (mention.type or node.get("type") or "").lower()
@@ -119,16 +166,22 @@ def resolve_mentions(
 
         if node_type in ("video", "video-gen"):
             url = _video_url_from_node(node)
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                result["reference_image_urls"].append(url)
+            if url:
+                result["context_parts"].append(
+                    f"[视频·{label}]: 参考该视频的镜头节奏与氛围"
+                )
             continue
 
-        if node_type in ("text", "text-note"):
+        if node_type in ("text", "text-note", "text-response", "outline"):
             text = _text_from_node(node)
             if text:
                 result["context_parts"].append(f"[{label}]: {text}")
             continue
+
+        # 其他节点：尽量提取文本上下文
+        text = _text_from_node(node)
+        if text:
+            result["context_parts"].append(f"[{label}]: {text[:500]}")
 
     return result
 
@@ -143,7 +196,7 @@ def strip_mention_tokens(prompt: str) -> str:
     return cleaned.strip()
 
 
-def enrich_prompt(prompt: str, context_parts: list[str]) -> str:
+def enrich_prompt(prompt: str, context_parts: list[str] | None) -> str:
     if not context_parts:
         return prompt
     block = "\n".join(context_parts)

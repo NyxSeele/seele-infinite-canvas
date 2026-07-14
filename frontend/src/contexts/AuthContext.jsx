@@ -21,17 +21,17 @@ export function AuthProvider({ children }) {
     try {
       const res = await api.get("/api/auth/me")
       let profile = res.data
+      try {
+        await refreshMediaTicket(api)
+      } catch {
+        clearMediaTicket()
+      }
       if (!skipMigration) {
         profile = await migrateLocalProfileIfNeeded(profile)
       } else {
         applyServerProfileToCache(profile)
       }
       setUser(profile)
-      try {
-        await refreshMediaTicket(api)
-      } catch {
-        clearMediaTicket()
-      }
       void useTeamStore.getState().ensureTeamsLoaded()
       return profile
     } catch {
@@ -63,8 +63,13 @@ export function AuthProvider({ children }) {
     return res.data
   }, [fetchMe])
 
-  const register = useCallback(async (username, email, password) => {
-    const res = await api.post("/api/auth/register", { username, email, password })
+  const register = useCallback(async (username, email, password, inviteCode) => {
+    const res = await api.post("/api/auth/register", {
+      username,
+      email,
+      password,
+      invite_code: inviteCode,
+    })
     localStorage.setItem("access_token", res.data.access_token)
     localStorage.setItem("refresh_token", res.data.refresh_token)
     await fetchMe()

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useLocation } from "react-router-dom"
 import { useAuth } from "../../contexts/AuthContext"
 import { useCanvasStore, useTeamStore } from "../../stores"
 import { LineIcon } from "../icons/LineIcons"
@@ -8,6 +8,8 @@ import CreateTeamModal from "./CreateTeamModal"
 import MenuFlyoutPortal from "./MenuFlyoutPortal"
 import { showDevNotice } from "../common/ProductNoticeModal"
 import { useLocale } from "../../utils/locale"
+import { navigateWithReturn } from "../../utils/navReturn"
+import { restartOnboarding } from "../Onboarding/tourSteps"
 import {
   MENU_FLYOUT_CLOSE_MS,
   MENU_FLYOUT_OPEN_MS,
@@ -21,7 +23,7 @@ const LANG_OPTIONS = [
 
 const HELP_LINKS = [
   { id: "feedback", label: "问题反馈", icon: "feedback" },
-  { id: "updates", label: "最近更新", icon: "doc", chevron: true },
+  { id: "updates", label: "最近更新", icon: "doc" },
   { id: "changelog", label: "更新日志", icon: "doc", external: true },
   { id: "manual", label: "产品使用手册", icon: "book", external: true },
 ]
@@ -31,14 +33,6 @@ const HELP_LEGAL = [
   { id: "privacy", label: "隐私政策" },
   { id: "ai-rules", label: "AI功能使用规范" },
 ]
-
-function ChevronRight() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-      <path d="M5 3.5 8.5 7 5 10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
 
 function CheckIcon() {
   return (
@@ -54,6 +48,7 @@ export default function WorkspaceUserMenu({
   anchorRef,
   displayName,
   avatarUrl,
+  onAvatarError,
   notifyUnread = 0,
   onOpenNotify,
   onOpenJoinTeam,
@@ -62,6 +57,7 @@ export default function WorkspaceUserMenu({
   onSubmenuLatch,
 }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user, logout } = useAuth()
   const { locale, t, setLanguage } = useLocale()
   const openProfileModal = useCanvasStore((s) => s.openProfileModal)
@@ -268,7 +264,7 @@ export default function WorkspaceUserMenu({
           <div className="wum-head wum-head--top">
             <div className="wum-avatar wum-avatar--lg">
               {avatarUrl ? (
-                <img src={avatarUrl} alt="" draggable={false} />
+                <img src={avatarUrl} alt="" draggable={false} onError={onAvatarError} />
               ) : (
                 (displayName[0] || "U").toUpperCase()
               )}
@@ -298,7 +294,6 @@ export default function WorkspaceUserMenu({
                   {activeTeam ? t("menu.spaceTeam") : t("menu.spacePersonal")}
                 </span>
               </span>
-              <ChevronRight />
             </button>
           </div>
 
@@ -351,6 +346,26 @@ export default function WorkspaceUserMenu({
             <span className="wum-item-label">{t("menu.personalHome")}</span>
           </button>
 
+          <button
+            type="button"
+            className="wum-item"
+            {...plainItemHover}
+            onClick={() => { onClose?.(); navigateWithReturn(navigate, location, "/team-files") }}
+          >
+            <LineIcon name="doc" size={18} />
+            <span className="wum-item-label">团队文件</span>
+          </button>
+
+          <button
+            type="button"
+            className="wum-item"
+            {...plainItemHover}
+            onClick={() => { onClose?.(); navigateWithReturn(navigate, location, "/review-publish") }}
+          >
+            <LineIcon name="video" size={18} />
+            <span className="wum-item-label">视频审阅</span>
+          </button>
+
           <div
             ref={langAnchorRef}
             className="wum-flyout-block"
@@ -362,7 +377,6 @@ export default function WorkspaceUserMenu({
             >
               <LineIcon name="book" size={18} />
               <span className="wum-item-label">{langLabel}</span>
-              <ChevronRight />
             </button>
           </div>
 
@@ -398,7 +412,6 @@ export default function WorkspaceUserMenu({
             >
               <LineIcon name="help" size={18} />
               <span className="wum-item-label">{t("menu.help")}</span>
-              <ChevronRight />
             </button>
           </div>
 
@@ -495,6 +508,18 @@ export default function WorkspaceUserMenu({
         ))}
         {activeFlyout === "help" && (
           <>
+            <button
+              type="button"
+              className="wum-help-item"
+              onClick={() => {
+                onClose?.()
+                restartOnboarding("ws")
+              }}
+            >
+              <span className="wum-help-icon"><LineIcon name="help" size={16} /></span>
+              <span className="wum-help-text">新手引导</span>
+            </button>
+            <div className="wum-help-divider" />
             {HELP_LINKS.map((item) => (
               <button
                 key={item.id}
@@ -504,8 +529,6 @@ export default function WorkspaceUserMenu({
               >
                 <span className="wum-help-icon"><LineIcon name={item.icon} size={16} /></span>
                 <span className="wum-help-text">{item.label}</span>
-                {item.chevron && <ChevronRight />}
-                {item.external && <span className="wum-ext">↗</span>}
               </button>
             ))}
             <div className="wum-help-divider" />

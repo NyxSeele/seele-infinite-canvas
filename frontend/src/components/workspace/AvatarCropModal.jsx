@@ -4,6 +4,7 @@ import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
 import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
+import { Z_AVATAR_CROP } from "../../utils/zIndexLayers"
 import "../../pages/Canvas.css"
 import "./AvatarCropModal.css"
 
@@ -249,6 +250,7 @@ export default function AvatarCropModal({ open, imageSrc, onConfirm, onCancel })
   return createPortal(
     <div
       className={overlayClasses}
+      style={{ zIndex: Z_AVATAR_CROP }}
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onCancel?.()
       }}

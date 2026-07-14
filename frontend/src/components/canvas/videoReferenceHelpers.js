@@ -37,6 +37,7 @@ export function buildClearGenerationTaskPatch(overrides = {}) {
     error: null,
     progress: 0,
     pendingTrigger: null,
+    completedAt: null,
     ...overrides,
   }
 }
@@ -60,6 +61,7 @@ export function resetStaleGenerationState(data, nodeType) {
   if (nodeType === "script-table" && Array.isArray(next.rows)) {
     next.rows = next.rows.map((row) => {
       const stuckRow = row?.status === "generating" || row?.status === "building"
+      const stuckDirect = row?.directStatus === "generating"
       const keyframes = (row.keyframes || []).map((kf) => {
         if (kf?.status !== "generating" && kf?.status !== "building") return kf
         return {
@@ -68,11 +70,13 @@ export function resetStaleGenerationState(data, nodeType) {
           error: kf.error || interruptedError(),
         }
       })
-      if (!stuckRow && keyframes.every((kf, i) => kf === row.keyframes?.[i])) return row
+      if (!stuckRow && !stuckDirect && keyframes.every((kf, i) => kf === row.keyframes?.[i])) return row
       return {
         ...row,
         status: stuckRow ? "idle" : row.status,
         error: stuckRow ? row.error || interruptedError() : row.error,
+        directStatus: stuckDirect ? "idle" : row.directStatus,
+        directResultUrl: stuckDirect ? null : row.directResultUrl,
         keyframes,
       }
     })
@@ -83,8 +87,13 @@ export function resetStaleGenerationState(data, nodeType) {
   if (!stuck) return next
 
   if (nodeType === "video-gen" && next.videoUrl) {
-    next.status = "completed"
-    next.error = null
+    if (next.taskId) {
+      next.status = "pending"
+      next.pendingTrigger = null
+      return next
+    }
+    next.status = "error"
+    next.error = next.error || interruptedError()
     next.pendingTrigger = null
     return next
   }
@@ -275,27 +284,29 @@ export function getImageNodeImages(node) {
   if (!node) return []
   const d = node.data || {}
   const label = d.label && String(d.label).trim() ? String(d.label).trim() : "Image"
-  let rawResults = Array.isArray(d.results) ? d.results.filter(Boolean) : []
-  if (rawResults.length === 0 && d.resultUrl) {
-    rawResults = [d.resultUrl]
-  }
+  const rawResults = Array.isArray(d.results) ? d.results : []
+  const filledCount = rawResults.filter(Boolean).length
 
-  if (rawResults.length > 0) {
-    const multi = rawResults.length > 1
+  if (filledCount > 0) {
+    const multi = filledCount > 1
     return rawResults
       .map((url, index) => {
         const safe = normalizePersistentImageUrl(url)
-        return safe ? buildRefItem({
-          nodeId: node.id,
-          imageIndex: index,
-          imageUrl: safe,
-          label: multi ? `${label} #${index + 1}` : label,
-        }) : null
+        return safe
+          ? buildRefItem({
+            nodeId: node.id,
+            imageIndex: index,
+            imageUrl: safe,
+            label: multi ? `${label} #${index + 1}` : label,
+          })
+          : null
       })
       .filter(Boolean)
   }
 
-  const imageUrl = normalizePersistentImageUrl(d.uploadedImage || d.imageUrl || null)
+  const imageUrl = normalizePersistentImageUrl(
+    d.resultUrl || d.uploadedImage || d.imageUrl || d.generatedImage || null,
+  )
   if (!imageUrl) return []
   return [buildRefItem({ nodeId: node.id, imageIndex: 0, imageUrl, label })]
 }
@@ -330,6 +341,69 @@ export function getImageNodeOutgoingRef(node) {
     imageUrl,
     label,
   })
+}
+
+/** 文本节点连线时可下传的提示词 */
+export function getTextNodeOutgoingPrompt(node) {
+  if (!node) return null
+  const d = node.data || {}
+  if (node.type === "text-note" || node.type === "text-response") {
+    const text = String(d.prompt || d.content || d.displayPrompt || "").trim()
+    return text || null
+  }
+  return null
+}
+
+/**
+ * 连线进入目标卡片时写入的数据补丁（参考图 / 首帧 / 提示词 / linkedSource）。
+ * 用于 onConnect、拖线创建节点等所有入边路径。
+ */
+export function buildIncomingEdgeDataPatch(sourceNode, targetType, targetData = {}) {
+  if (!sourceNode?.id || !targetType) return {}
+
+  const patch = {
+    linkedSourceId: sourceNode.id,
+    linkedSourceType: sourceNode.type || null,
+  }
+
+  const imageRef = getImageNodeOutgoingRef(sourceNode)
+
+  if (targetType === "image-gen" && imageRef) {
+    const existing = getReferenceImagesList(targetData)
+    if (existing.length === 0) {
+      patch.referenceImages = [imageRef]
+      patch.referenceImage = imageRef.imageUrl
+      patch.referenceImageUrl = imageRef.imageUrl
+      patch.referenceRef = imageRef
+    }
+  }
+
+  if (targetType === "video-gen" && imageRef) {
+    const mode = targetData.referenceMode || "keyframe"
+    const keyframes = targetData.keyframes || DEFAULT_KEYFRAMES
+    const freeRefs = targetData.freeRefs || []
+    if (mode === "keyframe" && !keyframes.first) {
+      patch.keyframes = { ...keyframes, first: imageRef }
+      patch.referenceMode = "keyframe"
+    } else if (
+      mode !== "keyframe"
+      && !freeRefs.some((r) => r.imageId === imageRef.imageId)
+      && freeRefs.length < MAX_REFERENCE_IMAGES
+    ) {
+      patch.freeRefs = [...freeRefs, imageRef]
+      patch.referenceMode = "freeref"
+    }
+  }
+
+  if (targetType === "image-gen" || targetType === "video-gen") {
+    const textPrompt = getTextNodeOutgoingPrompt(sourceNode)
+    if (textPrompt && !String(targetData.prompt || "").trim() && !String(targetData.displayPrompt || "").trim()) {
+      patch.prompt = textPrompt
+      patch.displayPrompt = textPrompt
+    }
+  }
+
+  return patch
 }
 
 /** 从画布边查询：图片节点 → 已连接的视频节点 */

@@ -1,6 +1,8 @@
 import api from "./api"
+import { pollTaskUntilDone } from "../utils/canvas/outlineStructureApi"
 
-const STYLE_REF_TIMEOUT_MS = 120000
+/** 上传入队应很快；分析走轮询 */
+const STYLE_REF_UPLOAD_TIMEOUT_MS = 30000
 
 function shotQuery({ projectId, scriptTableNodeId }) {
   return {
@@ -43,6 +45,16 @@ export async function fetchStyleReference(target) {
   return res.data?.style_reference ?? null
 }
 
+async function waitStyleRefResult(submitData) {
+  if (submitData?.style_reference) return submitData.style_reference
+  const taskId = submitData?.task_id
+  if (!taskId) throw new Error("未返回 task_id")
+  const task = await pollTaskUntilDone(taskId, {
+    timeoutMessage: "风格分析超时，请稍后重试",
+  })
+  return task.result || null
+}
+
 export async function uploadStyleReference(target, file) {
   const form = new FormData()
   form.append("file", file)
@@ -52,22 +64,22 @@ export async function uploadStyleReference(target, file) {
       form,
       {
         ...shotQuery(target),
-        timeout: STYLE_REF_TIMEOUT_MS,
+        timeout: STYLE_REF_UPLOAD_TIMEOUT_MS,
         headers: { "Content-Type": "multipart/form-data" },
       }
     )
-    return res.data?.style_reference ?? null
+    return waitStyleRefResult(res.data)
   }
   const res = await api.post(
     `/api/video-nodes/${target.nodeId}/style-reference`,
     form,
     {
       ...nodeParams(target.projectId),
-      timeout: STYLE_REF_TIMEOUT_MS,
+      timeout: STYLE_REF_UPLOAD_TIMEOUT_MS,
       headers: { "Content-Type": "multipart/form-data" },
     }
   )
-  return res.data?.style_reference ?? null
+  return waitStyleRefResult(res.data)
 }
 
 export async function updateStyleReference(target, body) {

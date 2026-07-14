@@ -1,0 +1,264 @@
+.rp-body {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.rp-toolbar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.rp-link {
+  font-size: 14px;
+  color: var(--ws-accent, #2563eb);
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+
+.rp-btn {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.12));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.rp-btn--primary {
+  background: var(--ws-accent, #2563eb);
+  border-color: transparent;
+  color: #fff;
+}
+
+.rp-btn--danger {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.rp-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.rp-empty {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--ws-text-muted, #6b7280);
+}
+
+.rp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rp-card {
+  display: flex;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.1));
+  border-radius: 12px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.rp-card--off {
+  opacity: 0.65;
+}
+
+.rp-thumb {
+  width: 140px;
+  height: 80px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #888;
+}
+
+.rp-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rp-main {
+  flex: 1;
+  min-width: 200px;
+}
+
+.rp-title {
+  font-weight: 600;
+  font-size: 15px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.rp-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.rp-meta,
+.rp-stats {
+  font-size: 13px;
+  color: var(--ws-text-muted, #6b7280);
+  margin-top: 4px;
+}
+
+.rp-url {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 480px;
+}
+
+.rp-actions {
+  display: flex;
+  align-items: center;
+}
+
+.rp-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 16px;
+}
+
+.rp-modal {
+  width: min(560px, 100%);
+  background: var(--ws-surface, #fff);
+  color: inherit;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+}
+
+.rp-modal h3 {
+  margin: 0 0 14px;
+}
+
+.rp-source-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rp-source-tab {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.12));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.rp-source-tab--active {
+  background: rgba(109, 40, 217, 0.12);
+  border-color: rgba(109, 40, 217, 0.35);
+  color: #6d28d9;
+  font-weight: 600;
+}
+
+.rf-page--dark .rp-source-tab--active {
+  background: rgba(167, 139, 250, 0.16);
+  border-color: rgba(167, 139, 250, 0.4);
+  color: #c4b5fd;
+}
+
+.rp-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--ws-text-muted, #6b7280);
+}
+
+.rp-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.rp-progress-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.rp-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ws-accent, #2563eb);
+  transition: width 0.15s ease;
+}
+
+.rp-progress > span {
+  font-size: 12px;
+  min-width: 36px;
+  text-align: right;
+}
+
+.rp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.rp-field input,
+.rp-field textarea {
+  border-radius: 8px;
+  border: 1px solid var(--ws-border, rgba(0, 0, 0, 0.12));
+  padding: 8px 10px;
+  font: inherit;
+  background: transparent;
+  color: inherit;
+}
+
+.rp-thumb-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.rp-thumb-ok {
+  font-size: 12px;
+  color: #16a34a;
+}
+
+.rp-modal-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../../contexts/AuthContext"
 import { useCanvasStore } from "../../stores"
-import { readUserAvatar } from "../../utils/canvas/userAvatar"
+import { readUserAvatar, reloadUserAvatarMedia } from "../../utils/canvas/userAvatar"
 import { LineIcon } from "../icons/LineIcons"
 import WorkspaceUserMenu from "./WorkspaceUserMenu"
 import WorkspaceNotifyPanel from "./WorkspaceNotifyPanel"
@@ -75,6 +75,11 @@ export default function WorkspaceTopbar({
     return () => window.removeEventListener("canvas-avatar-changed", onAvatar)
   }, [])
 
+  const handleAvatarError = useCallback(async () => {
+    const next = await reloadUserAvatarMedia()
+    if (next) setAvatarUrl(next)
+  }, [])
+
   useEffect(() => () => {
     clearTimeout(menuOpenTimerRef.current)
     clearTimeout(menuCloseTimerRef.current)
@@ -102,8 +107,7 @@ export default function WorkspaceTopbar({
           )}
           {onBack && (
             <button type="button" className="ws-back-btn" onClick={onBack} aria-label="返回">
-              <span className="ws-back-arrow">←</span>
-              {backLabel && <span className="ws-back-label">{backLabel}</span>}
+              {backLabel || "返回"}
             </button>
           )}
           {title && <h1 className="ws-header-title">{title}</h1>}
@@ -139,7 +143,7 @@ export default function WorkspaceTopbar({
               title="账户菜单"
             >
               {avatarUrl ? (
-                <img src={avatarUrl} alt="" draggable={false} />
+                <img src={avatarUrl} alt="" draggable={false} onError={handleAvatarError} />
               ) : (
                 (displayName[0] || "U").toUpperCase()
               )}
@@ -150,6 +154,7 @@ export default function WorkspaceTopbar({
               anchorRef={avatarWrapRef}
               displayName={displayName}
               avatarUrl={avatarUrl}
+              onAvatarError={handleAvatarError}
               notifyUnread={notifyUnread}
               onOpenNotify={() => setNotifyOpen(true)}
               onOpenJoinTeam={() => {

@@ -1,6 +1,7 @@
 from datetime import date
+import json
 
-from sqlalchemy import update
+from sqlalchemy import case, update
 from sqlalchemy.orm import Session
 
 from models import QuotaPlan, Task, UserQuota
@@ -134,6 +135,52 @@ def check_and_consume(db: Session, user_id: int, task_type: str) -> UserQuota:
     return quota
 
 
+def refund_quota(
+    db: Session, user_id: int, task_type: str, n: int = 1
+) -> UserQuota | None:
+    """退还未实际执行的配额；无限配额（limit < 0）跳过。"""
+    if task_type not in ("image", "video"):
+        raise ValueError("task_type 必须为 image 或 video")
+    n = int(n or 0)
+    if n <= 0:
+        return None
+
+    quota = get_or_create_user_quota(db, user_id)
+    _maybe_reset_period(quota, db)
+
+    if task_type == "image":
+        if quota.image_limit < 0:
+            return quota
+        stmt = (
+            update(UserQuota)
+            .where(UserQuota.id == quota.id)
+            .values(
+                image_used=case(
+                    (UserQuota.image_used >= n, UserQuota.image_used - n),
+                    else_=0,
+                )
+            )
+        )
+    else:
+        if quota.video_limit < 0:
+            return quota
+        stmt = (
+            update(UserQuota)
+            .where(UserQuota.id == quota.id)
+            .values(
+                video_used=case(
+                    (UserQuota.video_used >= n, UserQuota.video_used - n),
+                    else_=0,
+                )
+            )
+        )
+
+    db.execute(stmt)
+    db.flush()
+    db.refresh(quota)
+    return quota
+
+
 def create_task_record(
     db: Session,
     task_id: str,
@@ -143,11 +190,16 @@ def create_task_record(
     team_id: str | None = None,
     prompt_text: str | None = None,
     comfyui_prompt_id: str | None = None,
+    comfyui_node_url: str | None = None,
     node_id: str | None = None,
     sound_note: str | None = None,
     video_backend: str | None = None,
     use_reactor: bool = False,
     reactor_face_image: str | None = None,
+    original_input: str | None = None,
+    compiled_prompt: str | None = None,
+    model_id: str | None = None,
+    generation_params: dict | None = None,
 ) -> Task:
     existing = db.get(Task, task_id)
     if existing:
@@ -163,6 +215,16 @@ def create_task_record(
             existing.use_reactor = True
         if reactor_face_image and not existing.reactor_face_image:
             existing.reactor_face_image = reactor_face_image
+        if comfyui_node_url and not existing.comfyui_node_url:
+            existing.comfyui_node_url = comfyui_node_url.rstrip("/")
+        if original_input and not existing.original_input:
+            existing.original_input = original_input
+        if compiled_prompt and not existing.compiled_prompt:
+            existing.compiled_prompt = compiled_prompt
+        if model_id and not existing.model_id:
+            existing.model_id = model_id.strip() or None
+        if generation_params and not existing.generation_params:
+            existing.generation_params = json.dumps(generation_params, ensure_ascii=False)
         db.flush()
         return existing
     task = Task(
@@ -173,11 +235,18 @@ def create_task_record(
         status=status,
         prompt_text=prompt_text,
         comfyui_prompt_id=comfyui_prompt_id,
+        comfyui_node_url=(comfyui_node_url or "").strip().rstrip("/") or None,
         node_id=node_id,
         sound_note=sound_note,
         video_backend=video_backend,
         use_reactor=bool(use_reactor),
         reactor_face_image=(reactor_face_image or "").strip() or None,
+        original_input=(original_input or "").strip() or None,
+        compiled_prompt=(compiled_prompt or "").strip() or None,
+        model_id=(model_id or "").strip() or None,
+        generation_params=(
+            json.dumps(generation_params, ensure_ascii=False) if generation_params else None
+        ),
     )
     db.add(task)
     db.flush()

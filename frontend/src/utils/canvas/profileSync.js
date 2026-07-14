@@ -1,7 +1,13 @@
 import { updateProfile } from "../../services/profileApi"
 import { uploadImageFile, dataUrlToFile } from "../../services/uploadImage"
-import { stripMediaTicket } from "../mediaTicket"
-import { writeUserAvatar, AVATAR_CHANGED_EVENT } from "./userAvatar"
+import { ensureMediaUrl, toRelativeMediaUrl } from "../mediaTicket"
+import { writeUserAvatar } from "./userAvatar"
+
+export function resolveProfileAvatarUrl(raw) {
+  if (!raw) return ""
+  if (raw.startsWith("data:") || raw.startsWith("blob:")) return raw
+  return ensureMediaUrl(raw)
+}
 
 const PREFS_KEY = "canvas-user-profile-prefs"
 const LEGACY_AVATAR_KEY = "canvas-user-avatar-url"
@@ -34,7 +40,7 @@ function migrationKey(userId) {
   return `${MIGRATION_PREFIX}${userId}`
 }
 
-export function applyServerProfileToCache(user) {
+export function applyServerProfileToCache(user, { notify = true } = {}) {
   if (!user) return
   const prefs = readPrefs()
   if (user.display_name) {
@@ -44,13 +50,16 @@ export function applyServerProfileToCache(user) {
     prefs.bio = user.bio
   }
   writePrefs(prefs)
-  const storedAvatar = user.avatar_url ? stripMediaTicket(user.avatar_url) : ""
-  try {
-    if (storedAvatar) localStorage.setItem(LEGACY_AVATAR_KEY, storedAvatar)
-    else localStorage.removeItem(LEGACY_AVATAR_KEY)
-    window.dispatchEvent(new CustomEvent(AVATAR_CHANGED_EVENT, { detail: storedAvatar }))
-  } catch {
-    /* ignore */
+  const storedAvatar = user.avatar_url ? toRelativeMediaUrl(user.avatar_url) : ""
+  if (notify) {
+    writeUserAvatar(storedAvatar)
+  } else {
+    try {
+      if (storedAvatar) localStorage.setItem(LEGACY_AVATAR_KEY, storedAvatar)
+      else localStorage.removeItem(LEGACY_AVATAR_KEY)
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -61,12 +70,12 @@ export async function persistAvatarForProfile(avatarUrl) {
   if (trimmed.startsWith("data:") || trimmed.startsWith("blob:")) {
     const file = await dataUrlToFile(trimmed)
     const uploaded = await uploadImageFile(file)
-    return stripMediaTicket(uploaded)
+    return toRelativeMediaUrl(uploaded)
   }
   if (trimmed.startsWith("http")) {
-    return stripMediaTicket(trimmed)
+    return toRelativeMediaUrl(trimmed)
   }
-  return stripMediaTicket(trimmed)
+  return toRelativeMediaUrl(trimmed)
 }
 
 export async function saveProfileToServer({ displayName, bio, avatarUrl, removeAvatar = false }) {
@@ -84,7 +93,6 @@ export async function saveProfileToServer({ displayName, bio, avatarUrl, removeA
     if (path) payload.avatar_url = path
   }
   const updated = await updateProfile(payload)
-  applyServerProfileToCache(updated)
   return updated
 }
 
@@ -108,7 +116,7 @@ export async function migrateLocalProfileIfNeeded(user) {
     if (legacyAvatar.startsWith("data:") || legacyAvatar.startsWith("blob:")) {
       needsUpload = true
     } else if (legacyAvatar.includes("/api/uploads/")) {
-      payload.avatar_url = stripMediaTicket(legacyAvatar)
+      payload.avatar_url = toRelativeMediaUrl(legacyAvatar)
     }
   }
 

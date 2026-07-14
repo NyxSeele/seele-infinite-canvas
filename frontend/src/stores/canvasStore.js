@@ -99,8 +99,8 @@ export const useCanvasStore = create((set, get) => ({
   syncPromptBar: (nodeId, text) =>
     set({ promptBarSync: { nodeId, text: text ?? "" } }),
 
-  canvasId: "default",
-  setCanvasId: (id) => set({ canvasId: id || "default" }),
+  canvasId: null,
+  setCanvasId: (id) => set({ canvasId: id || null }),
 
   projectVersion: 1,
   setProjectVersion: (v) => set({ projectVersion: Number(v) || 1 }),

@@ -498,7 +498,7 @@
   width: 36px;
   height: 60px;
   z-index: 21;
-  pointer-events: all;
+  pointer-events: none;
   cursor: crosshair;
   display: flex;
   align-items: center;
@@ -517,7 +517,7 @@
   width: 36px;
   height: 60px;
   z-index: 21;
-  pointer-events: all;
+  pointer-events: none;
   cursor: crosshair;
   display: flex;
   align-items: center;
@@ -531,7 +531,19 @@
 .gn2-root--selected .gn2-plus-left-zone,
 .gn2-root--selected .gn2-plus-right-zone,
 .tn-wrapper--selected .gn2-plus-left-zone,
-.tn-wrapper--selected .gn2-plus-right-zone {
+.tn-wrapper--selected .gn2-plus-right-zone,
+.st-wrapper--selected .gn2-plus-left-zone,
+.st-wrapper--selected .gn2-plus-right-zone,
+.tr-wrapper--selected .gn2-plus-left-zone,
+.tr-wrapper--selected .gn2-plus-right-zone,
+.ss-wrapper--selected .gn2-plus-left-zone,
+.ss-wrapper--selected .gn2-plus-right-zone,
+.sbc-root--selected .gn2-plus-left-zone,
+.sbc-root--selected .gn2-plus-right-zone,
+.ccn-root.selected .gn2-plus-left-zone,
+.ccn-root.selected .gn2-plus-right-zone,
+.outline-card--selected .gn2-plus-left-zone,
+.outline-card--selected .gn2-plus-right-zone {
   opacity: 1;
 }
 
@@ -543,6 +555,47 @@
 .gn2-root--selected .gn2-plus-right-zone.gn2-plus-zone--visible,
 .tn-wrapper--selected .gn2-plus-right-zone.gn2-plus-zone--visible {
   transform: translateY(-50%) translateX(18px);
+}
+
+/* 选中/悬停时 + 区滑出，扩大 Handle 命中区以支持从加号拖连线 */
+.gn2-root:hover .react-flow__handle.gn2-edge-handle--right,
+.gn2-root--selected .react-flow__handle.gn2-edge-handle--right,
+.tn-wrapper:hover .react-flow__handle.gn2-edge-handle--right,
+.tn-wrapper--selected .react-flow__handle.gn2-edge-handle--right,
+.st-wrapper:hover .react-flow__handle.gn2-edge-handle--right,
+.st-wrapper--selected .react-flow__handle.gn2-edge-handle--right,
+.outline-card:hover .react-flow__handle.gn2-edge-handle--right,
+.outline-card--selected .react-flow__handle.gn2-edge-handle--right,
+.tr-wrapper:hover .react-flow__handle.gn2-edge-handle--right,
+.tr-wrapper--selected .react-flow__handle.gn2-edge-handle--right,
+.ss-wrapper:hover .react-flow__handle.gn2-edge-handle--right,
+.ss-wrapper--selected .react-flow__handle.gn2-edge-handle--right,
+.sbc-root:hover .react-flow__handle.gn2-edge-handle--right,
+.sbc-root--selected .react-flow__handle.gn2-edge-handle--right,
+.ccn-root:hover .react-flow__handle.gn2-edge-handle--right,
+.ccn-root.selected .react-flow__handle.gn2-edge-handle--right {
+  width: 72px !important;
+  right: -54px !important;
+}
+
+.gn2-root:hover .react-flow__handle.gn2-edge-handle--left,
+.gn2-root--selected .react-flow__handle.gn2-edge-handle--left,
+.tn-wrapper:hover .react-flow__handle.gn2-edge-handle--left,
+.tn-wrapper--selected .react-flow__handle.gn2-edge-handle--left,
+.st-wrapper:hover .react-flow__handle.gn2-edge-handle--left,
+.st-wrapper--selected .react-flow__handle.gn2-edge-handle--left,
+.outline-card:hover .react-flow__handle.gn2-edge-handle--left,
+.outline-card--selected .react-flow__handle.gn2-edge-handle--left,
+.tr-wrapper:hover .react-flow__handle.gn2-edge-handle--left,
+.tr-wrapper--selected .react-flow__handle.gn2-edge-handle--left,
+.ss-wrapper:hover .react-flow__handle.gn2-edge-handle--left,
+.ss-wrapper--selected .react-flow__handle.gn2-edge-handle--left,
+.sbc-root:hover .react-flow__handle.gn2-edge-handle--left,
+.sbc-root--selected .react-flow__handle.gn2-edge-handle--left,
+.ccn-root:hover .react-flow__handle.gn2-edge-handle--left,
+.ccn-root.selected .react-flow__handle.gn2-edge-handle--left {
+  width: 72px !important;
+  left: -54px !important;
 }
 
 .gn2-plus-btn-visual {
@@ -567,6 +620,8 @@
 }
 .gn2-plus-zone--visible .gn2-plus-btn-visual {
   opacity: 1;
+  pointer-events: all;
+  cursor: pointer;
 }
 .gn2-plus-zone--visible:hover .gn2-plus-btn-visual {
   background: var(--gn2-plus-bg-hover, #3a3a3a);

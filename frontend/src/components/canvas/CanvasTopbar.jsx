@@ -215,6 +215,7 @@ export default function CanvasTopbar({
           <>
             <button
               type="button"
+              data-tour="ctb-agent"
               className={`ctb-capsule-btn ctb-capsule-btn--icon${agentOpen ? " ctb-capsule-btn--active" : ""}`}
               title={
                 agentReadOnly
@@ -232,7 +233,7 @@ export default function CanvasTopbar({
 
         {quotaText && (
           <>
-            <div className="ctb-credit-pill" title={t("canvas.topbar.quota")}>
+            <div className="ctb-credit-pill" data-tour="ctb-credit" title={t("canvas.topbar.quota")}>
               <IconCredit />
               <span className="ctb-credit-num">{quotaText}</span>
             </div>
@@ -243,6 +244,7 @@ export default function CanvasTopbar({
         <button
           ref={shareBtnRef}
           type="button"
+          data-tour="ctb-share"
           className={`ctb-capsule-btn ctb-capsule-btn--icon${shareMenuOpen ? " ctb-capsule-btn--active" : ""}`}
           title={readOnly ? t("canvas.topbar.readonlyShare") : t("canvas.topbar.share")}
           disabled={readOnly}
@@ -255,6 +257,7 @@ export default function CanvasTopbar({
 
         <button
           type="button"
+          data-tour="ctb-notify"
           className="ctb-capsule-btn ctb-capsule-btn--icon ctb-notify-btn"
           title={t("menu.notifications")}
           onClick={() => setNotifyOpen(true)}

@@ -165,21 +165,23 @@ def remux_frames_with_audio(
     return output_path
 
 
-async def _upload_local_image(path: Path) -> str:
+async def _upload_local_image(path: Path, *, node_url: str | None = None) -> str:
     from providers.comfyui import _upload_image_bytes
 
     data = path.read_bytes()
     suffix = path.suffix.lower() or ".png"
     mime = "image/png" if suffix == ".png" else "image/jpeg"
-    return await _upload_image_bytes(data, path.name, mime)
+    return await _upload_image_bytes(data, path.name, mime, base_url=node_url)
 
 
-async def _wait_image_filename(prompt_id: str, *, timeout_sec: float = 180.0) -> str:
+async def _wait_image_filename(
+    prompt_id: str, *, timeout_sec: float = 180.0, node_url: str | None = None
+) -> str:
     from providers.comfyui import get_image_result
 
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
-        result = await get_image_result(prompt_id)
+        result = await get_image_result(prompt_id, node_url=node_url)
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(str(result["error"]))
         if isinstance(result, str) and result:
@@ -188,21 +190,24 @@ async def _wait_image_filename(prompt_id: str, *, timeout_sec: float = 180.0) ->
     raise TimeoutError(f"ReActor 帧超时 prompt_id={prompt_id}")
 
 
-async def _download_comfy_image(filename: str, dest: Path) -> Path:
+async def _download_comfy_image(
+    filename: str, dest: Path, *, node_url: str | None = None
+) -> Path:
     """优先拷贝 ComfyUI/output；否则 /view 下载。"""
     dest.parent.mkdir(parents=True, exist_ok=True)
     local = COMFY_OUTPUT / filename
     if local.is_file():
         shutil.copy2(local, dest)
         return dest
-    # 子目录兜底
     matches = list(COMFY_OUTPUT.rglob(filename))
     if matches:
         shutil.copy2(matches[0], dest)
         return dest
-    from providers.comfyui import get_image_url
+    from comfyui.client import _resolve_comfyui_base
+    from urllib.parse import quote
 
-    url = get_image_url(filename)
+    base = _resolve_comfyui_base(node_url)
+    url = f"{base}/view?filename={quote(filename, safe='')}&type=output"
     async with httpx.AsyncClient(timeout=60.0) as client:
         res = await client.get(url)
         res.raise_for_status()
@@ -216,19 +221,21 @@ async def swap_single_frame(
     out_path: Path,
     *,
     prefix: str = "AIStudio_reactor_frame",
+    node_url: str | None = None,
 ) -> Path:
-    from comfyui.client import _post_workflow
+    from comfyui.client import _acquire_gpu_node_url, _post_workflow
     from providers.comfyui import build_reactor_frame_workflow
 
-    frame_name = await _upload_local_image(frame_path)
+    base = node_url or _acquire_gpu_node_url(required_vram=12)
+    frame_name = await _upload_local_image(frame_path, node_url=base)
     workflow = build_reactor_frame_workflow(
         frame_filename=frame_name,
         face_filename=face_comfy_name,
         filename_prefix=prefix,
     )
-    prompt_id, _ = await _post_workflow(workflow, None)
-    out_name = await _wait_image_filename(prompt_id)
-    return await _download_comfy_image(out_name, out_path)
+    prompt_id, _, posted_node = await _post_workflow(workflow, None, node_url=base)
+    out_name = await _wait_image_filename(prompt_id, node_url=posted_node)
+    return await _download_comfy_image(out_name, out_path, node_url=posted_node)
 
 
 async def swap_faces_in_video(
@@ -259,10 +266,19 @@ async def swap_faces_in_video(
         frames = extract_all_frames(video_path, frames_in, max_frames=max_frames)
         logger.info("G45 extracted %s frames fps=%.3f task_id=%s", len(frames), fps, task_id)
 
-        face_comfy = await _upload_local_image(face_image_path)
+        from comfyui.client import _acquire_gpu_node_url
+
+        reactor_node = _acquire_gpu_node_url(required_vram=12)
+        face_comfy = await _upload_local_image(face_image_path, node_url=reactor_node)
         for i, frame in enumerate(frames, start=1):
             out_frame = frames_out / f"swapped_{i:06d}.png"
-            await swap_single_frame(frame, face_comfy, out_frame, prefix=f"AIStudio_g45_{task_id[:8]}")
+            await swap_single_frame(
+                frame,
+                face_comfy,
+                out_frame,
+                prefix=f"AIStudio_g45_{task_id[:8]}",
+                node_url=reactor_node,
+            )
             if i % 10 == 0 or i == len(frames):
                 logger.info("G45 frame %s/%s task_id=%s", i, len(frames), task_id)
 
@@ -292,6 +308,9 @@ async def _apply_reactor_video(task_id: str) -> None:
     try:
         task = db.get(Task, task_id)
         if not task or task.status != "completed" or not task.result:
+            return
+        if "_swapped" in str(task.result or ""):
+            logger.info("G45 skip already swapped task_id=%s", task_id)
             return
         if not bool(getattr(task, "use_reactor", False)):
             return

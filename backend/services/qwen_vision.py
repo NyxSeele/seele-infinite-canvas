@@ -1,4 +1,4 @@
-"""DashScope Qwen-VL 多模态调用（风格参考抽帧分析）。"""
+"""多模态帧分析（风格参考抽帧），仅走 Admin 已注册文本模型。"""
 
 from __future__ import annotations
 
@@ -6,15 +6,9 @@ import base64
 import logging
 from pathlib import Path
 
-from openai import AsyncOpenAI
-import httpx
-
-from core.config import settings
+from services.qwen import CONFIGURED_LLM_ERROR, invoke_configured_text_llm
 
 logger = logging.getLogger(__name__)
-
-DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-VL_MODEL = "qwen-vl-max"
 
 _FRAME_PROMPT = (
     "Describe this film/video frame in concise English. Focus on: color tone, "
@@ -32,33 +26,24 @@ def _image_to_data_uri(path: Path) -> str:
 
 
 async def describe_frame_vl(image_path: Path) -> str:
-    api_key = (settings.dashscope_api_key or "").strip()
-    if not api_key:
-        raise RuntimeError("未配置 DASHSCOPE_API_KEY，无法分析视频风格")
-
     data_uri = _image_to_data_uri(image_path)
-    llm_timeout = float(settings.llm_http_timeout)
-    async with httpx.AsyncClient(trust_env=False, timeout=llm_timeout) as http:
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=DASHSCOPE_BASE_URL,
-            timeout=llm_timeout,
-            http_client=http,
-        )
-        response = await client.chat.completions.create(
-            model=VL_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": data_uri}},
-                        {"type": "text", "text": _FRAME_PROMPT},
-                    ],
-                }
-            ],
+    user_content = [
+        {"type": "image_url", "image_url": {"url": data_uri}},
+        {"type": "text", "text": _FRAME_PROMPT},
+    ]
+    try:
+        content, _, model_id = await invoke_configured_text_llm(
+            "",
+            user_content,
             max_tokens=512,
+            temperature=0.3,
         )
-    content = (response.choices[0].message.content or "").strip()
+    except Exception as exc:
+        logger.warning("视觉帧分析失败 model=%s err=%s", "unknown", exc)
+        if CONFIGURED_LLM_ERROR in str(exc):
+            raise RuntimeError(CONFIGURED_LLM_ERROR) from exc
+        raise RuntimeError(f"视觉模型分析失败: {exc}") from exc
+
     if not content:
-        raise RuntimeError("视觉模型未返回有效描述")
+        raise RuntimeError(f"视觉模型 {model_id} 未返回有效描述")
     return content

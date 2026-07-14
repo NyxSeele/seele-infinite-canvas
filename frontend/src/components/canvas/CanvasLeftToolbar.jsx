@@ -1,14 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { createPortal } from "react-dom"
 import { useAuth } from "../../contexts/AuthContext"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useLocation } from "react-router-dom"
 import { useCanvasStore } from "../../stores"
 import { CANVAS_NAV_MODE_OPTIONS } from "../../utils/canvas/canvasNavMode"
 
 import { pushGenHistory, readGenHistory } from "../../utils/canvas/genHistory"
-import { AVATAR_CHANGED_EVENT, readUserAvatar } from "../../utils/canvas/userAvatar"
+import { AVATAR_CHANGED_EVENT, readUserAvatar, reloadUserAvatarMedia, avatarBackgroundStyle } from "../../utils/canvas/userAvatar"
 import pkg from "../../../package.json"
 import { LineIcon } from "../icons/LineIcons"
+import { navigateWithReturn } from "../../utils/navReturn"
+import { restartOnboarding } from "../Onboarding/tourSteps"
 import { IconCredit } from "./CanvasTopbarIcons"
 import { useLocale } from "../../utils/locale"
 import { useThemeTransition } from "../../hooks/useThemeTransition"
@@ -203,6 +205,7 @@ export default function CanvasLeftToolbar({
 }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const { t } = useLocale()
   const canvasNavMode = useCanvasStore((s) => s.canvasNavMode)
   const setCanvasNavMode = useCanvasStore((s) => s.setCanvasNavMode)
@@ -363,6 +366,7 @@ export default function CanvasLeftToolbar({
           >
             <button
               className={`clt-btn${isItemActive ? " clt-btn--active" : ""}`}
+              data-tour={`clt-${id}`}
               onClick={() => handleAction(action)}
             >
               {id === "fullscreen" ? <Icon exit={isFullscreen} /> : <Icon />}
@@ -382,7 +386,7 @@ export default function CanvasLeftToolbar({
             onClick={toggleAvatarMenu}
           >
             {avatarUrl ? (
-              <span className="clt-avatar-img" style={{ backgroundImage: `url(${avatarUrl})` }} />
+              <span className="clt-avatar-img" style={avatarBackgroundStyle(avatarUrl)} />
             ) : avatarLetter}
           </button>
           {avatarMenuOpen && (
@@ -390,7 +394,7 @@ export default function CanvasLeftToolbar({
               <div className="clt-menu-profile">
                 <div
                   className="clt-menu-avatar-lg"
-                  style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}
+                  style={avatarBackgroundStyle(avatarUrl)}
                 >
                   {!avatarUrl && avatarLetter}
                 </div>
@@ -416,10 +420,43 @@ export default function CanvasLeftToolbar({
               <button
                 type="button"
                 className="clt-menu-item"
+                onClick={() => {
+                  setActivePanel(null)
+                  restartOnboarding("canvas")
+                }}
+              >
+                <span className="clt-menu-icon"><LineIcon name="help" size={16} /></span>
+                新手引导
+              </button>
+              <button
+                type="button"
+                className="clt-menu-item"
                 onClick={() => { setProfileModalOpen(true); setActivePanel(null) }}
               >
                 <span className="clt-menu-icon"><LineIcon name="user" size={16} /></span>
                 {t("canvas.toolbar.accountManage")}
+              </button>
+              <button
+                type="button"
+                className="clt-menu-item"
+                onClick={() => {
+                  navigateWithReturn(navigate, location, "/team-files")
+                  setActivePanel(null)
+                }}
+              >
+                <span className="clt-menu-icon"><LineIcon name="doc" size={16} /></span>
+                团队文件
+              </button>
+              <button
+                type="button"
+                className="clt-menu-item"
+                onClick={() => {
+                  navigateWithReturn(navigate, location, "/review-publish")
+                  setActivePanel(null)
+                }}
+              >
+                <span className="clt-menu-icon"><LineIcon name="video" size={16} /></span>
+                视频审阅
               </button>
               {isAdmin && (
                 <button

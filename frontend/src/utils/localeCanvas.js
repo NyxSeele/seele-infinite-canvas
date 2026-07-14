@@ -125,7 +125,7 @@ export const CANVAS_MESSAGES_ZH = {
 
   "prompt.t2v": "文生",
   "prompt.keyframe": "首尾帧",
-  "prompt.freeref": "参考",
+  "prompt.freeref": "全能参考",
   "prompt.clarity": "清晰度",
   "prompt.ratio": "比例",
   "prompt.loadingModels": "加载模型参数…",
@@ -183,7 +183,7 @@ export const CANVAS_MESSAGES_ZH = {
   "error.noBackend": "无法连接后端",
   "error.comfyDown": "ComfyUI 未启动或无法连接，请先启动 ComfyUI",
   "error.genRetry": "生成失败，请重试",
-  "error.oom": "显存不足。请改用 720P，或去掉首帧后重试",
+  "error.oom": "显存不足。此模型最高支持 720P，请降低清晰度后重试",
   "error.textGenFail": "文本生成失败",
   "error.canvasNotReady": "画布未就绪，请刷新后重试",
 
@@ -925,7 +925,7 @@ export const CANVAS_MESSAGES_EN = {
   "error.noBackend": "Cannot reach backend",
   "error.comfyDown": "ComfyUI is not running or unreachable",
   "error.genRetry": "Generation failed — please retry",
-  "error.oom": "Out of GPU memory. Switch to 720P, or remove the first frame and retry",
+  "error.oom": "Out of GPU memory. This model supports up to 720P — try a lower resolution",
   "error.textGenFail": "Text generation failed",
   "error.canvasNotReady": "Canvas not ready — please refresh",
 

@@ -38,6 +38,22 @@ export function makeId(type) {
   return `${type}-${_nodeIdSeq++}`
 }
 
+/** 画布恢复后对齐 ID 序列，避免 makeId 与已有节点 id 冲突 */
+export function syncNodeIdSeq(nodes) {
+  let maxSeq = 0
+  for (const node of nodes || []) {
+    const nodeId = node?.id
+    if (!nodeId || typeof nodeId !== "string") continue
+    const dash = nodeId.lastIndexOf("-")
+    if (dash <= 0) continue
+    const num = Number.parseInt(nodeId.slice(dash + 1), 10)
+    if (Number.isFinite(num) && num > maxSeq) maxSeq = num
+  }
+  if (maxSeq >= _nodeIdSeq) {
+    _nodeIdSeq = maxSeq + 1
+  }
+}
+
 export function sortScriptRows(rows) {
   return [...(rows || [])].sort(
     (a, b) => (a.shotNumber ?? 0) - (b.shotNumber ?? 0)
@@ -75,18 +91,52 @@ export function computeScriptTableGenPosition(scriptNode, rowIndex = 0, yExtra =
   }
 }
 
+/** 节点在画布上的占位尺寸（优先 cardWidth/cardHeight） */
+export function getNodeLayoutSize(node, typeFallback = null) {
+  const type = node?.type || typeFallback
+  const width =
+    node?.data?.cardWidth
+    || NODE_WIDTHS_MAP[type]
+    || DEFAULT_NODE_WIDTHS[type]
+    || 280
+  const height = node?.data?.cardHeight || DEFAULT_NODE_HEIGHT
+  return { width, height }
+}
+
+function nodesOverlapAt(pos, size, existingNodes, excludeIds = new Set()) {
+  const gap = 40
+  for (const node of existingNodes || []) {
+    if (excludeIds.has(node.id)) continue
+    const { width, height } = getNodeLayoutSize(node)
+    const nx = node.position?.x ?? 0
+    const ny = node.position?.y ?? 0
+    if (
+      pos.x < nx + width + gap
+      && pos.x + size.width + gap > nx
+      && pos.y < ny + height + gap
+      && pos.y + size.height + gap > ny
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 /** 新建节点落点：有选中节点时在其右侧；否则避开同位置已有节点 */
 export function resolveCreateNodePosition(flowPos, type, existingNodes, options = {}) {
   const { anchorNode } = options
   if (anchorNode) {
-    const anchorW =
-      NODE_WIDTHS_MAP[anchorNode.type]
-      || DEFAULT_NODE_WIDTHS[anchorNode.type]
-      || 280
-    return {
-      x: (anchorNode.position?.x ?? 0) + anchorW + 80,
-      y: anchorNode.position?.y ?? 0,
+    const anchorW = getNodeLayoutSize(anchorNode).width
+    const newSize = getNodeLayoutSize(null, type)
+    let x = (anchorNode.position?.x ?? 0) + anchorW + 80
+    const y = anchorNode.position?.y ?? 0
+    const exclude = new Set([anchorNode.id])
+    for (let i = 0; i < 24; i += 1) {
+      const pos = { x, y }
+      if (!nodesOverlapAt(pos, newSize, existingNodes, exclude)) return pos
+      x += newSize.width + 80
     }
+    return { x, y }
   }
 
   const base = {

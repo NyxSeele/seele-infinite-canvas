@@ -5,6 +5,7 @@ class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=20)
     email: EmailStr
     password: str = Field(..., min_length=8)
+    invite_code: str = Field(..., min_length=1)
 
 
 class LoginRequest(BaseModel):
@@ -30,6 +31,7 @@ class UserInfo(BaseModel):
     id: int
     username: str
     role: str
+    r2_access: bool = False
 
 
 class TokenResponse(BaseModel):
