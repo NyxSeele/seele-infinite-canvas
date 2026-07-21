@@ -226,7 +226,7 @@ export default function CanvasProfileModal() {
     mounted,
     closing,
     open,
-    base: "cps-modal-backdrop nodrag nopan",
+    base: "cps-modal-backdrop ws-overlay-root nodrag nopan",
     enterClass: open && !closing ? "motion-modal-overlay-in" : "",
     exitClass: closing ? "motion-modal-overlay-out" : "",
   })

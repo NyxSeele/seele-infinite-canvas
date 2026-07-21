@@ -8,7 +8,14 @@ from core.config import settings
 def comfyui_nodes_list() -> list[str]:
     raw = (settings.comfyui_nodes or "").strip()
     if raw:
-        return [u.strip().rstrip("/") for u in raw.split(",") if u.strip()]
+        from services.gpu_pool import parse_comfyui_node_spec
+
+        out: list[str] = []
+        for part in raw.split(","):
+            url, _, _ = parse_comfyui_node_spec(part.strip())
+            if url:
+                out.append(url)
+        return out
     return [(settings.comfyui_url or "http://127.0.0.1:8000").rstrip("/")]
 
 

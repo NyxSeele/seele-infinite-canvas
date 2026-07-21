@@ -22,7 +22,7 @@ export default function AnimatedModal({
     mounted,
     closing,
     open,
-    base: `${overlayClass} ${themeClass}`.trim(),
+    base: `${overlayClass} ws-overlay-root ${themeClass}`.trim(),
     enterClass: open && !closing ? "motion-modal-overlay-in" : "",
     exitClass: closing ? "motion-modal-overlay-out" : "",
   })
@@ -66,7 +66,7 @@ export function AnimatedDialog({
     mounted,
     closing,
     open,
-    base: `${overlayClassName}${resolvedTheme ? ` ${resolvedTheme}` : ""}`,
+    base: `${overlayClassName} ws-overlay-root${resolvedTheme ? ` ${resolvedTheme}` : ""}`,
     enterClass: open && !closing ? "motion-modal-overlay-in" : "",
     exitClass: closing ? "motion-modal-overlay-out" : "",
   })

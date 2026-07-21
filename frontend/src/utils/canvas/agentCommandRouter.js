@@ -29,6 +29,7 @@ function findNextRowForVideo(scriptNode, nodes = []) {
 }
 
 const STEP_LABELS = {
+  // Labels are local for now; future: GET /api/agent/pipeline/velora_canvas
   split_shot_beats: "正在拆分镜头节拍…",
   generate_storyboard: "正在生成分镜图…",
   generate_video: "正在生成镜头视频…",

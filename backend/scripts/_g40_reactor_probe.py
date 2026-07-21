@@ -53,7 +53,7 @@ def main() -> int:
     # Case 1: use_reactor=True
     wf_on = _build_flux_pulid_workflow(
         "a woman in the rain",
-        "svdq-int4_r32-flux.1-dev.safetensors",
+        "svdq-fp4_r32-flux.1-dev.safetensors",
         1024,
         1024,
         42,
@@ -87,7 +87,7 @@ def main() -> int:
     # Case 2: use_reactor=False — 与现网 PuLID 一致
     wf_off = _build_flux_pulid_workflow(
         "a woman in the rain",
-        "svdq-int4_r32-flux.1-dev.safetensors",
+        "svdq-fp4_r32-flux.1-dev.safetensors",
         1024,
         1024,
         42,

@@ -75,7 +75,7 @@ export default function WorkspaceNotifyPanel({ open, onClose, onUnreadChange }) 
   if (!open) return null
 
   return createPortal(
-    <div className="wnp-backdrop" style={{ zIndex: Z_WS_NOTIFY }} onClick={onClose} role="presentation">
+    <div className="wnp-backdrop ws-overlay-root" style={{ zIndex: Z_WS_NOTIFY }} onClick={onClose} role="presentation">
       <aside
         className="wnp-panel"
         onClick={(e) => e.stopPropagation()}

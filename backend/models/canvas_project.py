@@ -28,6 +28,9 @@ class CanvasProject(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     name: Mapped[str] = mapped_column(String(256), nullable=False, default="未命名画布")
     data: Mapped[str] = mapped_column(Text, nullable=False, default='{"nodes":[],"edges":[]}')
+    generation_memory: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cover_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    cover_media_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

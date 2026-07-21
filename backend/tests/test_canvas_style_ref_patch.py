@@ -84,6 +84,7 @@ def test_find_node_and_get_style_reference():
 def test_patch_only_target_node():
     project = _make_project(_two_video_nodes_canvas())
     patch_video_node_style_reference(project, "vid-a", SAMPLE_REF)
+    assert project.version == 2
     canvas = load_canvas_data(project)
     assert get_video_node_style_reference(canvas, "vid-a") == SAMPLE_REF
     assert get_video_node_style_reference(canvas, "vid-b") is None

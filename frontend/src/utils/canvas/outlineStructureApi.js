@@ -3,8 +3,15 @@ import api from "../../services/api"
 import { formatScreenplayParagraphs } from "./textFormat"
 import { normalizeOutlineScene } from "./outlineSceneMeta"
 import { TASK_POLL_TIMEOUT_MS } from "../../components/canvas/taskPollTimeout"
+import {
+  getRateLimitBackoffMs,
+  isRateLimitError,
+  sleep,
+} from "./rateLimitBackoff"
+import { isTransientPollError } from "../../components/canvas/taskNetworkError"
+import { GATEWAY_MAX_ATTEMPTS, getGatewayBackoffMs } from "./gatewayPollBackoff"
 
-const TASK_POLL_INTERVAL_MS = 2000
+const TASK_POLL_INTERVAL_MS = 5000
 
 /** 单次提交超时（入队应很快）；总等待走轮询超时 */
 export const OUTLINE_API_TIMEOUT_MS = TASK_POLL_TIMEOUT_MS
@@ -27,10 +34,6 @@ export function outlineLoadingPatch(extra = {}) {
   }
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
 /**
  * 轮询 GET /api/tasks/{id} 直至终态。
  * @returns {Promise<object>} completed task payload (result already parsed for JSON async jobs)
@@ -44,12 +47,34 @@ export async function pollTaskUntilDone(
   } = {}
 ) {
   const started = Date.now()
+  let rateLimitAttempt = 0
+  let transientAttempt = 0
   while (Date.now() - started < timeoutMs) {
-    const res = await api.get(`/api/tasks/${taskId}`, { timeout: 30000 })
-    const task = res.data
-    if (task?.status === "completed") return task
-    if (task?.status === "failed" || task?.status === "cancelled") {
-      throw new Error(task?.error || "任务失败")
+    try {
+      const res = await api.get(`/api/tasks/${taskId}`, { timeout: 30000 })
+      const task = res.data
+      rateLimitAttempt = 0
+      transientAttempt = 0
+      if (task?.status === "completed") return task
+      if (task?.status === "failed" || task?.status === "cancelled") {
+        throw new Error(task?.error || "任务失败")
+      }
+    } catch (err) {
+      if (isRateLimitError(err)) {
+        const waitMs = getRateLimitBackoffMs(rateLimitAttempt)
+        rateLimitAttempt += 1
+        console.warn(`[rate-limit] pollTaskUntilDone backing off ${waitMs}ms`)
+        await sleep(waitMs)
+        continue
+      }
+      if (isTransientPollError(err) && transientAttempt < GATEWAY_MAX_ATTEMPTS) {
+        const waitMs = getGatewayBackoffMs(transientAttempt)
+        transientAttempt += 1
+        console.warn(`[poll-retry] pollTaskUntilDone transient error, wait ${waitMs}ms`)
+        await sleep(waitMs)
+        continue
+      }
+      throw err
     }
     await sleep(intervalMs)
   }

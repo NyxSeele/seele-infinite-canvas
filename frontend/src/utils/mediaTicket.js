@@ -1,4 +1,11 @@
 import { API_BASE } from "../services/api"
+import {
+  applyMediaPublicBase,
+  isCanvasR2KeyPath,
+  isR2PublicMediaUrl,
+  rememberR2PublicBaseFromUrl,
+  resolveCanvasR2MediaUrl,
+} from "./r2MediaUrl"
 
 const TICKET_KEY = "media_ticket"
 const TICKET_EXP_KEY = "media_ticket_exp"
@@ -42,13 +49,22 @@ export function stripMediaTicket(url) {
   if (!url || typeof url !== "string") return url
   const s = url.trim()
   if (s.startsWith("data:") || s.startsWith("blob:")) return s
+  rememberR2PublicBaseFromUrl(s)
   try {
     const absolute = s.startsWith("http")
       ? s
       : `${API_BASE || (typeof window !== "undefined" ? window.location.origin : "")}${s.startsWith("/") ? s : `/${s}`}`
     const parsed = new URL(absolute)
     parsed.searchParams.delete("mt")
-    return `${parsed.pathname}${parsed.search}`
+    if (isR2PublicMediaUrl(parsed.href)) {
+      return `${parsed.origin}${parsed.pathname}${parsed.search}`
+    }
+    const pathOnly = `${parsed.pathname}${parsed.search}`
+    if (isCanvasR2KeyPath(pathOnly)) {
+      const resolved = resolveCanvasR2MediaUrl(pathOnly)
+      if (resolved && resolved.startsWith("http")) return resolved
+    }
+    return pathOnly
   } catch {
     return s.replace(/([?&])mt=[^&]*(?=&|$)/g, "$1").replace(/[?&]$/, "")
   }
@@ -61,12 +77,17 @@ export function toRelativeMediaUrl(url) {
   if (!stripped) return stripped
   if (stripped.startsWith("data:") || stripped.startsWith("blob:")) return stripped
   if (stripped.startsWith("http://") || stripped.startsWith("https://")) {
+    if (isR2PublicMediaUrl(stripped)) return stripped
     try {
       const parsed = new URL(stripped)
       return `${parsed.pathname}${parsed.search}`
     } catch {
       return stripped
     }
+  }
+  if (isCanvasR2KeyPath(stripped)) {
+    const resolved = resolveCanvasR2MediaUrl(stripped)
+    if (resolved && resolved.startsWith("http")) return resolved
   }
   return stripped.startsWith("/") ? stripped : `/${stripped}`
 }
@@ -88,12 +109,19 @@ export function ensureMediaUrl(url) {
   if (!s) return s
   // base64 或 blob URL 不走媒体代理，避免被拼成相对路径触发错误 GET
   if (s.startsWith("data:") || s.startsWith("blob:")) return s
+  const r2Resolved = resolveCanvasR2MediaUrl(s)
+  if (r2Resolved !== s && r2Resolved.startsWith("http")) return appendMediaTicket(r2Resolved)
   if (!s.includes("/api/view") && !s.includes("/api/uploads")) return s
   const relative = toRelativeMediaUrl(s)
+  const pathOnly = relative.startsWith("/") ? relative : `/${relative}`
+  const withBase = applyMediaPublicBase(pathOnly)
+  if (withBase.startsWith("http")) {
+    return appendMediaTicket(withBase)
+  }
   const base = shouldUseRelativeMediaDisplay() ? "" : API_BASE
   const target = base
-    ? `${base}${relative.startsWith("/") ? relative : `/${relative}`}`
-    : relative
+    ? `${base}${pathOnly}`
+    : pathOnly
   return appendMediaTicket(target)
 }
 

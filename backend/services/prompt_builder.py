@@ -10,7 +10,7 @@ from services.quality_presets import get_suffixes, normalize_quality_preset_id
 from services.script_shot_strategy import detect_new_subject, new_subject_emphasis
 from services.style_reference_service import format_style_for_prompt
 
-WorkflowType = Literal["sd15", "sdxl", "flux"]
+WorkflowType = Literal["sd15", "sdxl", "flux", "qwen-image"]
 ModelTarget = Literal["flux", "wan-t2v", "wan-i2v", "seedance"]
 
 SEEDANCE_MIN_WORDS = 30
@@ -28,9 +28,12 @@ MAX_POSITIVE_LENGTH: dict[str, int] = {
     "sd15": 500,
     "sdxl": 600,
     "flux": 512,
+    "qwen-image": 512,
 }
 
-DEFAULT_NEGATIVE_ZH = "模糊, 低质量, 水印, 文字"
+DEFAULT_NEGATIVE_EN = "blurry, low quality, watermark, text"
+# 兼容旧引用
+DEFAULT_NEGATIVE_ZH = DEFAULT_NEGATIVE_EN
 ANIME_NEGATIVE_EN = "photorealistic, realistic, 3D render, photo"
 _ANIME_STYLE_KEYS = frozenset({"二次元", "动漫", "2D", "cel"})
 
@@ -236,12 +239,17 @@ WAN_VIDEO_NEGATIVE = (
     "too many fingers, malformed limbs"
 )
 
+
+WAN_VIDEO_POSITIVE_SUFFIX = (
+    "natural motion, coherent action, stable framing, detailed"
+)
+
 WAN_MODEL_PARAMS: dict[str, dict] = {
-    "wan-t2v": {"steps": 4, "cfg": 1.0, "width": 848, "height": 480, "fps": 24},
-    "wan-i2v": {"steps": 4, "cfg": 1.0, "width": 640, "height": 640, "fps": 24},
+    "wan-t2v": {"steps": 8, "cfg": 1.0, "width": 1280, "height": 720, "fps": 24},
+    "wan-i2v": {"steps": 8, "cfg": 1.0, "width": 1280, "height": 720, "fps": 24},
 }
 
-FLUX_MODEL_PARAMS = {"steps": 20, "cfg": 1.0, "width": 1344, "height": 768}
+FLUX_MODEL_PARAMS = {"steps": 25, "cfg": 3.5, "width": 1344, "height": 768}
 
 FLUX_QUALITY_SUFFIX = (
     "sharp focus, high detail, professional photography, "
@@ -254,9 +262,15 @@ FLUX_PERSON_SUFFIX = (
 )
 
 _FLUX_PERSON_RE = re.compile(
-    r"(girl|boy|woman|man|person|people|人|女|男|她|他)",
+    r"(person|woman|man|face|portrait|character|girl|boy|people|"
+    r"人|女|男|她|他)",
     re.IGNORECASE,
 )
+
+
+def prompt_has_person_subject(text: str) -> bool:
+    """检测 prompt 是否描述人物主体（用于决定是否注入 anatomy suffix）。"""
+    return bool(_FLUX_PERSON_RE.search(text or ""))
 
 
 def apply_flux_positive_suffixes(positive: str) -> str:
@@ -267,19 +281,53 @@ def apply_flux_positive_suffixes(positive: str) -> str:
     parts = [cleaned]
     if FLUX_QUALITY_SUFFIX.lower() not in cleaned.lower():
         parts.append(FLUX_QUALITY_SUFFIX)
-    if _FLUX_PERSON_RE.search(cleaned):
+    if prompt_has_person_subject(cleaned):
         if FLUX_PERSON_SUFFIX.lower() not in cleaned.lower():
             parts.append(FLUX_PERSON_SUFFIX)
     return ", ".join(parts)
 
 
-HUNYUAN_VIDEO_POSITIVE_SUFFIX = (
-    "cinematic quality, smooth motion, realistic lighting, "
-    "high detail, anatomically correct, natural movement"
+QWEN_IMAGE_QUALITY_SUFFIX = (
+    "sharp focus, high detail, professional photography, "
+    "cinematic lighting, 8k resolution, photorealistic"
 )
 
-HUNYUAN_PERSON_SUFFIX = (
-    "proper hand anatomy, five fingers, natural body proportions"
+QWEN_IMAGE_PERSON_SUFFIX = (
+    "anatomically correct, natural pose, proper hand anatomy, "
+    "five fingers, realistic human proportions"
+)
+
+
+def apply_qwen_image_suffixes(positive: str) -> str:
+    """Qwen-Image 正向 suffix：画质 + 人物场景专项（镜像 Flux 逻辑）。"""
+    cleaned = (positive or "").strip()
+    if not cleaned:
+        return positive
+    parts = [cleaned]
+    if QWEN_IMAGE_QUALITY_SUFFIX.lower() not in cleaned.lower():
+        parts.append(QWEN_IMAGE_QUALITY_SUFFIX)
+    if prompt_has_person_subject(cleaned):
+        if QWEN_IMAGE_PERSON_SUFFIX.lower() not in cleaned.lower():
+            parts.append(QWEN_IMAGE_PERSON_SUFFIX)
+    return ", ".join(parts)
+
+
+
+LTX2_VIDEO_POSITIVE_SUFFIX = (
+    "photorealistic, natural body mechanics, stable camera, "
+    "continuous props, consistent identity"
+)
+
+LTX2_PERSON_SUFFIX = (
+    "recognizable face, anatomically correct hands, five fingers, no clipping"
+)
+
+LTX2_DEFAULT_NEGATIVE = (
+    "neon signs, LED lights, modern city skyline, glowing text, sci-fi hologram, "
+    "face morphing, wrong identity, generic face, deformed hands, extra limbs, "
+    "clipping through props, floating objects, disappearing props, "
+    "exaggerated dust explosions, superhero VFX, anime, cartoon, "
+    "chaotic layered audio, out-of-sync sound, watermark, blurry, low quality"
 )
 
 
@@ -292,19 +340,52 @@ def _append_suffix_if_missing(text: str, suffix: str) -> str:
     return f"{cleaned}, {suffix}"
 
 
-def build_hunyuan_prompt(prompt: str, scene: str = "") -> str:
-    """Hunyuan 视频正向专项：画质 suffix + 人物场景约束。"""
+def build_ltx2_prompt(prompt: str) -> str:
+    """LTX-2 正向专项：写实纪录片感 + 人物辨识/物理连续性。"""
+    merged = (prompt or "").strip()
+    merged = _append_suffix_if_missing(merged, LTX2_VIDEO_POSITIVE_SUFFIX)
+    if prompt_has_person_subject(merged):
+        merged = _append_suffix_if_missing(merged, LTX2_PERSON_SUFFIX)
+    return merged
+
+
+def merge_ltx2_negative(negative: str | None) -> str:
+    """合并用户/L3 负向与 LTX-2 默认翻车项。"""
     parts: list[str] = []
-    base = (prompt or "").strip()
-    if base:
-        parts.append(base)
-    scene_clean = (scene or "").strip()
-    if scene_clean and scene_clean.lower() not in base.lower():
-        parts.append(scene_clean)
-    merged = ", ".join(parts) if parts else ""
-    merged = _append_suffix_if_missing(merged, HUNYUAN_VIDEO_POSITIVE_SUFFIX)
-    if _FLUX_PERSON_RE.search(merged):
-        merged = _append_suffix_if_missing(merged, HUNYUAN_PERSON_SUFFIX)
+    for chunk in ((negative or "").strip(), LTX2_DEFAULT_NEGATIVE):
+        if chunk and chunk.lower() not in " | ".join(parts).lower():
+            parts.append(chunk)
+    return ", ".join(parts) if parts else LTX2_DEFAULT_NEGATIVE
+
+
+def build_ltx23_prompt(prompt: str) -> str:
+    """LTX-2.3 I2AV 与 LTX-2 同族：人物辨识 + 运镜/道具连续性。"""
+    return build_ltx2_prompt(prompt)
+
+
+def merge_ltx23_negative(negative: str | None) -> str:
+    """LTX-2.3 负向：复用 LTX-2 翻车项（穿模/霓虹/音画乱）。"""
+    return merge_ltx2_negative(negative)
+
+
+def merge_wan_negative(negative: str | None) -> str:
+    """合并用户/L3 负向与 Wan 肢体/抖动翻车项。"""
+    parts: list[str] = []
+    for chunk in ((negative or "").strip(), WAN_VIDEO_NEGATIVE):
+        if chunk and chunk.lower() not in " | ".join(parts).lower():
+            parts.append(chunk)
+    return ", ".join(parts) if parts else WAN_VIDEO_NEGATIVE
+
+
+def build_wan_prompt(prompt: str) -> str:
+    """Wan 正向轻量 suffix（不堆 cinematic）。"""
+    merged = (prompt or "").strip()
+    merged = _append_suffix_if_missing(merged, WAN_VIDEO_POSITIVE_SUFFIX)
+    if prompt_has_person_subject(merged):
+        merged = _append_suffix_if_missing(
+            merged,
+            "anatomically correct, proper hand anatomy, five fingers",
+        )
     return merged
 
 
@@ -444,9 +525,11 @@ def _build_negative(
 ) -> str:
     if workflow_type == "flux":
         return ""
+    if workflow_type == "qwen-image":
+        return ""
     unwanted = _clean(fields.get("unwanted"))
     base = unwanted if unwanted else ""
-    zh_part = DEFAULT_NEGATIVE_ZH
+    zh_part = DEFAULT_NEGATIVE_EN
     if base:
         parts = [base, zh_part]
     else:

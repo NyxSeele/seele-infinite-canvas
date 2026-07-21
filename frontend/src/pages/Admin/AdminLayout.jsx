@@ -7,6 +7,7 @@ import {
   IconFeedback,
   IconFiles,
   IconModels,
+  IconNetwork,
   IconTasks,
   IconUsers,
 } from "./AdminIcons.jsx"
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { to: "/admin/tasks", label: "任务监控", Icon: IconTasks },
   { to: "/admin/files", label: "用户文件", Icon: IconFiles },
   { to: "/admin/feedback", label: "生成反馈", Icon: IconFeedback },
+  { to: "/network-test", label: "网络测速", Icon: IconNetwork },
 ]
 
 function pageTitle(pathname) {
@@ -28,6 +30,7 @@ function pageTitle(pathname) {
   if (pathname.startsWith("/admin/tasks")) return "任务监控"
   if (pathname.startsWith("/admin/files")) return "用户文件"
   if (pathname.startsWith("/admin/feedback")) return "生成反馈"
+  if (pathname.startsWith("/network-test")) return "网络测速"
   return "系统概览"
 }
 

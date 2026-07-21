@@ -74,6 +74,24 @@ def test_build_ltx2_fp4_audio_false_strips_av_nodes():
     assert wf["126"]["inputs"]["samples"] == ["119", 1]
 
 
+def test_build_ltx2_fp4_defaults_disable_camera_lora_and_use_quality():
+    wf = build_ltx2_fp4_t2v_workflow("probe", "neg", duration_sec=5, audio=False)
+    assert wf["133"]["inputs"]["strength_model"] == 0.0
+    assert wf["134"]["inputs"]["strength_model"] == 0.0
+    assert wf["98"]["inputs"]["steps"] == 28
+    assert wf["128"]["inputs"]["cfg"] == 4.5
+    assert wf["132"]["inputs"]["strength_model"] == 0.85
+
+
+def test_build_ltx2_fp4_fast_profile_fewer_steps():
+    wf = build_ltx2_fp4_t2v_workflow(
+        "probe", "neg", duration_sec=5, audio=False, sampling_profile="fast"
+    )
+    assert wf["98"]["inputs"]["steps"] == 20
+    assert wf["128"]["inputs"]["cfg"] == 4.0
+    assert wf["133"]["inputs"]["strength_model"] == 0.0
+
+
 def test_build_ltx2_fp4_i2v_workflow_nodes():
     wf = build_ltx2_fp4_i2v_workflow(
         "p",
@@ -84,6 +102,7 @@ def test_build_ltx2_fp4_i2v_workflow_nodes():
         duration_sec=5,
         seed=7,
         model_filename=LTX2_CKPT,
+        audio=True,
     )
     assert wf["200"]["inputs"]["image"] == "x.png"
     assert wf["200"]["class_type"] == "LoadImage"

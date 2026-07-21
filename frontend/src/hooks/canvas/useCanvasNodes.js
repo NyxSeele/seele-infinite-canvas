@@ -5,6 +5,7 @@ import { cancelCanvasTask } from "../../services/cancelTask"
 import { stampEditMeta } from "../../utils/canvas/nodeEditMeta"
 import {
   DEFAULT_KEYFRAMES,
+  removeRefsSourcedFromNode,
 } from "../../components/canvas/videoReferenceHelpers"
 import { useCanvasStore } from "../../stores"
 import { pickOutlineNodeFields, outlineSafePatch } from "../../utils/canvas/nodeCompose"
@@ -19,6 +20,7 @@ import {
 } from "../../utils/canvas/nodeHelpers"
 import { useCanvasZIndex } from "./useCanvasZIndex"
 import { getT } from "../../utils/locale"
+import { isNodePatchNoop } from "../../utils/canvas/nodePatch"
 
 export function useCanvasNodes({
   screenToFlowPosition,
@@ -79,6 +81,39 @@ export function useCanvasNodes({
     [readOnlyRef]
   )
 
+  const applyNodePatch = useCallback((nodeId, patch) => {
+    if (isCommitBlocked()) return
+    queueMicrotask(() => {
+      setNodes((ns) => {
+        const target = ns.find((n) => n.id === nodeId)
+        if (!target) return ns
+        const skipPromptSync =
+          target.type === "outline"
+          || target.type === "shot-script"
+          || target.type === "script-table"
+          || target.type === "script-beat-card"
+          || target.type === "image-gen"
+          || target.type === "video-gen"
+        if (!skipPromptSync && target.type === "text-note" && patch.content !== undefined) {
+          useCanvasStore.getState().syncPromptBar(nodeId, patch.content)
+        }
+        if (target.type === "outline") {
+          if (isNodePatchNoop(target.data, outlineSafePatch(patch))) return ns
+          return ns.map((n) =>
+            n.id === nodeId
+              ? { ...n, data: { ...n.data, ...outlineSafePatch(patch) } }
+              : n
+          )
+        }
+        const stamped = stampEditMeta(patch, user)
+        if (isNodePatchNoop(target.data, stamped)) return ns
+        return ns.map((n) =>
+          n.id === nodeId ? { ...n, data: { ...n.data, ...stamped } } : n
+        )
+      })
+    })
+  }, [setNodes, user, isCommitBlocked])
+
   const buildOutlineData = useCallback(
     (extra = {}) => {
       const outlineFields = pickOutlineNodeFields(extra)
@@ -86,13 +121,17 @@ export function useCanvasNodes({
         ...outlineFields,
         onUpdate: (nodeId, patch) => {
           if (isCommitBlocked()) return
-          setNodes((ns) =>
-            ns.map((n) =>
-              n.id === nodeId && n.type === "outline"
-                ? { ...n, data: { ...n.data, ...outlineSafePatch(patch) } }
-                : n
+          queueMicrotask(() => {
+            setNodes((ns) =>
+              ns.map((n) =>
+                n.id === nodeId && n.type === "outline"
+                  ? isNodePatchNoop(n.data, outlineSafePatch(patch))
+                    ? n
+                    : { ...n, data: { ...n.data, ...outlineSafePatch(patch) } }
+                  : n
+              )
             )
-          )
+          })
         },
         onGenerateShotScript: (...args) =>
           screenplayHandlersRef.current.onGenerateShotScript?.(...args),
@@ -106,34 +145,7 @@ export function useCanvasNodes({
   const buildData = useCallback(
     (extra = {}) => ({
       ...extra,
-      onUpdate: (nodeId, patch) => {
-        if (isCommitBlocked()) return
-        setNodes((ns) => {
-          const target = ns.find((n) => n.id === nodeId)
-          if (!target) return ns
-          const skipPromptSync =
-            target.type === "outline"
-            || target.type === "shot-script"
-            || target.type === "script-table"
-            || target.type === "script-beat-card"
-            || target.type === "image-gen"
-            || target.type === "video-gen"
-          if (!skipPromptSync && target.type === "text-note" && patch.content !== undefined) {
-            useCanvasStore.getState().syncPromptBar(nodeId, patch.content)
-          }
-          if (target.type === "outline") {
-            return ns.map((n) =>
-              n.id === nodeId
-                ? { ...n, data: { ...n.data, ...outlineSafePatch(patch) } }
-                : n
-            )
-          }
-          const stamped = stampEditMeta(patch, user)
-          return ns.map((n) =>
-            n.id === nodeId ? { ...n, data: { ...n.data, ...stamped } } : n
-          )
-        })
-      },
+      onUpdate: applyNodePatch,
       onDelete: (id) => {
         if (isCommitBlocked()) return
         setNodes((ns) => ns.filter((n) => n.id !== id))
@@ -147,13 +159,39 @@ export function useCanvasNodes({
             setNodes((ns) =>
               ns.map((n) => {
                 if (n.id !== nodeId) return n
-                const { linkedSourceId, linkedSourceType, linkedSourceData, ...rest } = n.data
-                return { ...n, data: rest }
+                let nextData = { ...n.data }
+                removed.forEach((edge) => {
+                  const refPatch = removeRefsSourcedFromNode(nextData, edge.source) || {}
+                  nextData = { ...nextData, ...refPatch }
+                  if (nextData.linkedSourceId === edge.source) {
+                    const { linkedSourceId, linkedSourceType, linkedSourceData, ...rest } = nextData
+                    nextData = rest
+                  }
+                })
+                return { ...n, data: nextData }
               })
             )
           }
           return es.filter((e) => e.target !== nodeId)
         })
+      },
+      onDisconnectIncomingFromSource: (targetNodeId, sourceNodeId) => {
+        if (isCommitBlocked() || !targetNodeId || !sourceNodeId) return
+        setEdges((es) =>
+          es.filter((e) => !(e.target === targetNodeId && e.source === sourceNodeId))
+        )
+        setNodes((ns) =>
+          ns.map((n) => {
+            if (n.id !== targetNodeId) return n
+            const refPatch = removeRefsSourcedFromNode(n.data, sourceNodeId) || {}
+            let nextData = { ...n.data, ...refPatch }
+            if (n.data.linkedSourceId === sourceNodeId) {
+              const { linkedSourceId, linkedSourceType, linkedSourceData, ...rest } = nextData
+              nextData = rest
+            }
+            return { ...n, data: nextData }
+          })
+        )
       },
       onApplyVideoReference: (targetVideoId, refItem, slot) => {
         if (isCommitBlocked()) return
@@ -239,7 +277,7 @@ export function useCanvasNodes({
       onMigrateShotScript: (...args) =>
         screenplayHandlersRef.current.onMigrateShotScript?.(...args),
     }),
-    [setNodes, setEdges, stopPolling, buildOutlineData, screenplayHandlersRef, user, isCommitBlocked]
+    [setNodes, setEdges, stopPolling, buildOutlineData, screenplayHandlersRef, applyNodePatch, isCommitBlocked]
   )
 
   const createNode = useCallback(
@@ -251,6 +289,7 @@ export function useCanvasNodes({
       const videoDefaults =
         type === "video-gen"
           ? {
+              status: "input",
               referenceMode: "keyframe",
               panelMode: "keyframe",
               vidMode: "首尾帧",
@@ -334,6 +373,7 @@ export function useCanvasNodes({
           vidQuality:      params.vidQuality,
           vidDuration:     params.vidDuration,
           vidAudio:        params.vidAudio,
+          audioUrl:        params.audioUrl || null,
           referenceMode:   params.referenceMode
             || (params.vidMode === "参考"
               ? "freeref"

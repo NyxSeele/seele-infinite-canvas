@@ -10,6 +10,7 @@ const STRIP_DATA_KEYS = new Set([
   "onUpdate",
   "onDelete",
   "onDisconnectIncoming",
+  "onDisconnectIncomingFromSource",
   "onApplyVideoReference",
   "onStopGeneration",
   "composeNodeData",

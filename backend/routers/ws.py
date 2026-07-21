@@ -39,9 +39,15 @@ async def _relay_comfy_to_client(comfy_ws, websocket: WebSocket, client_id: str)
     from services import comfyui_progress
 
     async for message in comfy_ws:
+        if websocket.client_state.name != "CONNECTED":
+            break
         if isinstance(message, bytes):
-            await websocket.send_bytes(message)
+            try:
+                await websocket.send_bytes(message)
+            except (RuntimeError, WebSocketDisconnect):
+                break
             continue
+        outbound = message
         try:
             payload = json.loads(message)
             msg_type = payload.get("type")
@@ -61,9 +67,18 @@ async def _relay_comfy_to_client(comfy_ws, websocket: WebSocket, client_id: str)
                         d.get("max", 0),
                         node=d.get("node"),
                     )
+                    row = comfyui_progress.get_progress(pid)
+                    if row and row.get("progress") is not None:
+                        d = dict(d)
+                        d["progress"] = row["progress"]
+                        payload["data"] = d
+                        outbound = json.dumps(payload)
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
-        await websocket.send_text(message)
+        try:
+            await websocket.send_text(outbound)
+        except (RuntimeError, WebSocketDisconnect):
+            break
 
 
 @router.websocket("/ws")
@@ -134,12 +149,13 @@ async def websocket_proxy(websocket: WebSocket):
 
     except _COMFY_NOT_RUNNING_ERRORS as e:
         print(f"ComfyUI 未启动或连接失败 (user={user.id}): {e}")
-        try:
-            await websocket.send_json(
-                {"type": "error", "message": "ComfyUI 未启动或无法连接"}
-            )
-        except Exception:
-            pass
+        if websocket.client_state.name == "CONNECTED":
+            try:
+                await websocket.send_json(
+                    {"type": "error", "message": "ComfyUI 未启动或无法连接"}
+                )
+            except Exception:
+                pass
     except Exception as e:
         print(f"WebSocket 代理异常 (user={user.id}): {e}")
     finally:
@@ -148,7 +164,8 @@ async def websocket_proxy(websocket: WebSocket):
                 await comfy_ws.close()
             except Exception:
                 pass
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+        if websocket.client_state.name == "CONNECTED":
+            try:
+                await websocket.close()
+            except Exception:
+                pass

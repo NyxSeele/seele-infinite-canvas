@@ -2,6 +2,7 @@
 剧本 / 分镜：调用千问或已注册文本模型。
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -217,35 +218,87 @@ async def invoke_configured_text_llm(
     max_tokens: int = 500,
     temperature: float = 0.7,
     db=None,
+    per_model_timeout: float | None = None,
 ) -> tuple[str, str | None, str]:
     """仅走 Admin 已注册文本模型（llm_router），禁止 DashScope 直连 fallback。"""
-    from services.llm_router import record_usage, resolve_text_model
+    from services.llm_resilience import is_llm_quota_exhausted_error
+    from services.llm_router import (
+        mark_model_quota_exhausted,
+        record_usage,
+        resolve_text_model_candidates,
+    )
 
-    row = resolve_text_model(db)
-    if not row:
+    candidates = resolve_text_model_candidates(db)
+    if not candidates:
         raise ValueError(CONFIGURED_LLM_ERROR)
 
-    api_key = get_registered_model_api_key(row)
-    base_url = (row.api_base or "").strip()
-    model = (row.model_string or row.id).strip()
-    if not api_key or not base_url or not model:
-        raise ValueError(f"模型 {row.id} 未配置 API Key 或 API Base")
-
-    content, finish, usage = await _invoke_chat_completion(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        system_prompt=system_prompt,
-        user_content=user_content,
-        max_tokens=max_tokens,
-        temperature=temperature,
+    # 单模型软超时：避免某一个慢模型吃光整个 optimize_timeout
+    model_timeout = float(
+        per_model_timeout
+        if per_model_timeout is not None
+        else min(float(settings.llm_http_timeout), 20.0)
     )
-    total = int(usage.get("total_tokens") or 0)
-    if total > 0:
-        record_usage(row.id, total)
-    if not content:
-        raise ValueError("LLM 返回空内容")
-    return content, finish, row.id
+
+    last_exc: Exception | None = None
+    tried: set[str] = set()
+
+    while True:
+        row = None
+        for candidate in candidates:
+            if candidate.id not in tried:
+                row = candidate
+                break
+        if row is None:
+            break
+
+        tried.add(row.id)
+        from services.model_gateway_resolver import resolve_chat_endpoint
+
+        ep = resolve_chat_endpoint(model_row=row, db=db)
+        api_key = ep.get("api_key") or ""
+        base_url = (ep.get("base_url") or "").strip()
+        model = (row.model_string or row.id or "").strip() or (ep.get("default_model") or "").strip()
+        if not api_key or not base_url or not model:
+            last_exc = ValueError(f"模型 {row.id} 未配置 API Key 或 API Base")
+            continue
+
+        try:
+            content, finish, usage = await asyncio.wait_for(
+                _invoke_chat_completion(
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_content=user_content,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                timeout=model_timeout,
+            )
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "configured text LLM failed model=%s: %s",
+                row.id,
+                str(exc)[:160],
+            )
+            if is_llm_quota_exhausted_error(exc):
+                mark_model_quota_exhausted(row.id)
+                candidates = resolve_text_model_candidates(db)
+            # 超时/网络等错误继续尝试下一候选，勿直接 raise
+            continue
+
+        total = int(usage.get("total_tokens") or 0)
+        if total > 0:
+            record_usage(row.id, total)
+        if not content:
+            last_exc = ValueError("LLM 返回空内容")
+            continue
+        return content, finish, row.id
+
+    if last_exc is not None:
+        raise last_exc
+    raise ValueError(CONFIGURED_LLM_ERROR)
 
 
 async def _invoke_chat_completion(
@@ -347,20 +400,28 @@ async def _call_registered_model(
             .filter(RegisteredModel.id == model_id, RegisteredModel.enabled.is_(True))
             .first()
         )
-        api_key = get_registered_model_api_key(row)
-        if not row or not api_key or not (row.api_base or "").strip():
+        from services.model_gateway_resolver import resolve_chat_endpoint
+
+        ep = resolve_chat_endpoint(model_row=row, db=db)
+        api_key = ep.get("api_key") or ""
+        base_url = (ep.get("base_url") or "").strip()
+        if not row or not api_key or not base_url:
             raise ValueError(f"模型 {model_id} 未配置或未启用")
+
+        model_name = (row.model_string or row.id).strip() or (ep.get("default_model") or "").strip()
+        if not model_name:
+            raise ValueError(f"模型 {model_id} 缺少 model_string")
 
         llm_timeout = float(settings.llm_http_timeout)
         async with httpx.AsyncClient(trust_env=False, timeout=llm_timeout) as http:
             client = AsyncOpenAI(
                 api_key=api_key,
-                base_url=row.api_base.strip(),
+                base_url=base_url,
                 timeout=llm_timeout,
                 http_client=http,
             )
             response = await client.chat.completions.create(
-                model=(row.model_string or row.id),
+                model=model_name,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

@@ -1,16 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { useReactFlow } from "reactflow"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useReactFlow, useStore } from "reactflow"
 import { useReferenceSelect } from "./CanvasActionsContext"
 import RefPickerTrigger from "./RefPickerTrigger"
 import AddRefHoverPanel, { RefPickAnchor } from "./AddRefHoverPanel"
-import { DEFAULT_KEYFRAMES, truncateLabel, buildRefItem } from "./videoReferenceHelpers"
+import {
+  DEFAULT_KEYFRAMES,
+  truncateLabel,
+  buildRefItem,
+  resolveReferenceImageUrl,
+  resolveRefDisplayUrl,
+} from "./videoReferenceHelpers"
 import { uploadImageFile } from "../../services/uploadImage"
+import api from "../../services/api"
+import { refreshMediaTicket } from "../../utils/mediaTicket"
 import useRefAssetEntries from "../../hooks/canvas/useRefAssetEntries"
 import { useLocale } from "../../utils/locale"
 import VideoStyleReferencePanel from "./VideoStyleReferencePanel"
 import VideoStylePicker from "./VideoStylePicker"
 import CameraMotionPicker from "./CameraMotionPicker"
 import { findScriptTableNode, resolveVideoQualityPresetId } from "../../utils/canvas/scriptTableNode"
+import {
+  reconcileVideoModelAndMode,
+  referenceModeForVidMode,
+} from "../../utils/canvas/videoModelCompat"
+import { useModelStore } from "../../stores"
 import "./VideoStylePicker.css"
 import "./CameraMotionPicker.css"
 import "./VideoReferencePanel.css"
@@ -18,19 +31,121 @@ import "./CanvasImageQuickPicker.css"
 
 const sp = (e) => e.stopPropagation()
 
+function sourceNodeMediaFingerprint(node) {
+  if (!node?.data) return ""
+  const d = node.data
+  const results = Array.isArray(d.results) ? d.results.filter(Boolean).join("|") : ""
+  return [
+    node.id,
+    results,
+    d.resultUrl || "",
+    d.uploadedImage || "",
+    d.imageUrl || "",
+    d.generatedImage || "",
+  ].join("::")
+}
+
 function itemToRefItem(item) {
   return buildRefItem({
     nodeId: item.nodeId,
     imageIndex: item.imageIndex ?? 0,
-    imageUrl: item.url,
+    imageUrl: item.url || item.imageUrl,
     imageId: item.imageId,
     label: item.label,
   })
 }
 
+function RefThumbnail({ refItem, getNode, sourceFingerprint = "", className = "", imgStyle, onLoadFail }) {
+  const resolveSrc = useCallback(
+    () => resolveRefDisplayUrl(refItem, getNode),
+    [refItem, getNode]
+  )
+  const [src, setSrc] = useState(resolveSrc)
+  const retryCountRef = useRef(0)
+  const identityKey = [
+    refItem?.nodeId || "",
+    refItem?.imageIndex ?? 0,
+    refItem?.imageUrl || "",
+    sourceFingerprint,
+  ].join("|")
+
+  useEffect(() => {
+    setSrc(resolveSrc())
+    retryCountRef.current = 0
+  }, [identityKey, resolveSrc])
+
+  const handleError = useCallback(async () => {
+    if (retryCountRef.current >= 2) {
+      setSrc(null)
+      onLoadFail?.()
+      return
+    }
+    retryCountRef.current += 1
+    try {
+      await refreshMediaTicket(api)
+    } catch {
+      /* ignore */
+    }
+    const retry = resolveSrc()
+    setSrc(retry || null)
+  }, [resolveSrc, onLoadFail])
+
+  if (!src) {
+    return <span className={`ref-thumb-fallback${className ? ` ${className}` : ""}`} aria-hidden />
+  }
+
+  return (
+    <img
+      className={className}
+      src={src}
+      alt=""
+      draggable={false}
+      onDragStart={(e) => e.preventDefault()}
+      onError={handleError}
+      style={imgStyle}
+    />
+  )
+}
+
+function RefTag({ refItem, getNode, sourceFingerprint = "", label, onRemove }) {
+  if (!refItem) return null
+  const displayUrl = resolveRefDisplayUrl(refItem, getNode)
+  const [thumbFailed, setThumbFailed] = useState(false)
+  const showLabel = !displayUrl || thumbFailed
+
+  useEffect(() => {
+    setThumbFailed(false)
+  }, [displayUrl, refItem?.nodeId, refItem?.imageUrl, refItem?.imageIndex])
+
+  return (
+    <div className="ref-tag nodrag nopan">
+      {displayUrl && !thumbFailed ? (
+        <RefThumbnail
+          refItem={refItem}
+          getNode={getNode}
+          sourceFingerprint={sourceFingerprint}
+          onLoadFail={() => setThumbFailed(true)}
+        />
+      ) : (
+        <span className="ref-thumb-fallback" aria-hidden />
+      )}
+      {showLabel && label ? <span className="ref-label">{label}</span> : null}
+      <button
+        type="button"
+        className="ref-remove nodrag nopan"
+        onClick={(e) => { sp(e); onRemove() }}
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
 function KeyframeSlot({
   slotLabel,
   value,
+  getNode,
+  sourceFingerprint = "",
   onQuickSelect,
   onCanvasPick,
   onUpload,
@@ -39,16 +154,22 @@ function KeyframeSlot({
   assetEntries = [],
   onAssetPick,
 }) {
-  if (value) {
+  const hasValue = Boolean(value && (value.nodeId || value.imageUrl))
+  const displayUrl = resolveRefDisplayUrl(value, getNode)
+
+  if (hasValue) {
     return (
       <div className="keyframe-slot keyframe-slot--filled nodrag nopan">
-        <img
-          src={value.imageUrl}
-          alt=""
-          draggable={false}
-          onDragStart={(e) => e.preventDefault()}
-          style={{ pointerEvents: "none" }}
-        />
+        {displayUrl ? (
+          <RefThumbnail
+            refItem={value}
+            getNode={getNode}
+            sourceFingerprint={sourceFingerprint}
+            imgStyle={{ pointerEvents: "none" }}
+          />
+        ) : (
+          <span className="ref-thumb-fallback" aria-hidden />
+        )}
         <span className="keyframe-slot-tag">{slotLabel}</span>
         <button
           type="button"
@@ -92,9 +213,10 @@ export default function VideoReferencePanel({
   enhancePanelSlot = null,
 }) {
   const { t } = useLocale()
-  const { getNodes } = useReactFlow()
+  const { getNodes, getNode } = useReactFlow()
   const refSelect = useReferenceSelect()
   const { assetEntries, ensureLoaded } = useRefAssetEntries()
+  const videoModels = useModelStore((s) => s.videoModels)
   const [styleRefOpen, setStyleRefOpen] = useState(false)
 
   const onUpdate = data?.onUpdate
@@ -145,6 +267,41 @@ export default function VideoReferencePanel({
     setFreeRefs(data?.freeRefs || [])
   }, [data?.keyframes, data?.freeRefs])
 
+  const sourceNodeIds = useMemo(() => {
+    const ids = []
+    if (keyframes.first?.nodeId) ids.push(String(keyframes.first.nodeId))
+    if (keyframes.last?.nodeId) ids.push(String(keyframes.last.nodeId))
+    for (const ref of freeRefs || []) {
+      if (ref?.nodeId) ids.push(String(ref.nodeId))
+    }
+    return [...new Set(ids)]
+  }, [keyframes, freeRefs])
+
+  const sourceMediaById = useStore(
+    useCallback(
+      (s) => {
+        const map = {}
+        for (const id of sourceNodeIds) {
+          const n = s.nodeInternals.get(id)
+          map[id] = sourceNodeMediaFingerprint(n)
+        }
+        return map
+      },
+      [sourceNodeIds]
+    ),
+    (a, b) => {
+      if (a === b) return true
+      const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})])
+      for (const k of keys) {
+        if ((a || {})[k] !== (b || {})[k]) return false
+      }
+      return true
+    }
+  )
+
+  // Touch fingerprints so React re-renders when source node media changes
+  void sourceMediaById
+
   useEffect(() => {
     if (slotsExpanded) ensureLoaded()
   }, [slotsExpanded, ensureLoaded])
@@ -155,40 +312,56 @@ export default function VideoReferencePanel({
   }, [onUpdate, nodeId])
 
   const handleModeClick = useCallback((mode) => {
-    if (localPanelMode === mode) {
-      const nextExpanded = !slotsExpanded
-      onSlotsExpandedChange?.(nextExpanded)
-      if (!nextExpanded) {
-        if (data?.referenceSlotsOpen) {
-          persist({ referenceSlotsOpen: false })
-        }
-        if (mode === "enhance") {
-          const refMode = referenceModeFromData || "keyframe"
-          setLocalPanelMode(refMode)
-          persist({ panelMode: refMode, referenceSlotsOpen: false })
-        }
-      }
-      return
-    }
+    // 已选中 Tab 再点：保持当前功能区，不折叠
+    if (localPanelMode === mode) return
     setLocalPanelMode(mode)
     if (mode === "enhance") {
       persist({ panelMode: "enhance" }, { rememberSlots: true })
       onSlotsExpandedChange?.(true)
       return
     }
-    persist({
-      panelMode: mode,
-      referenceMode: mode,
-      vidMode: mode === "freeref" ? "参考" : mode === "t2v" ? "文生" : "首尾帧",
+    const nextVidMode = mode === "freeref" ? "参考" : mode === "t2v" ? "文生" : "首尾帧"
+    const reconciled = reconcileVideoModelAndMode({
+      modelId: data?.modelId || "",
+      vidMode: nextVidMode,
+      models: videoModels,
     })
+    const refMode = referenceModeForVidMode(reconciled.vidMode)
+    const modePatch = {
+      panelMode: refMode,
+      referenceMode: refMode,
+      vidMode: reconciled.vidMode,
+      ...(reconciled.modelId ? { modelId: reconciled.modelId } : {}),
+    }
+    if (mode === "freeref") {
+      const currentKeyframes = data?.keyframes || keyframes || DEFAULT_KEYFRAMES
+      const currentFreeRefs = Array.isArray(data?.freeRefs) ? data.freeRefs : freeRefs
+      if (currentFreeRefs.length === 0 && currentKeyframes.first) {
+        const migrated = resolveReferenceImageUrl(currentKeyframes.first, getNode)
+        if (migrated?.imageUrl) {
+          modePatch.freeRefs = [migrated]
+        }
+      }
+    }
+    // 文生无参考槽：折叠并持久化，避免空白展开区；其余模式一并写入 referenceSlotsOpen
+    if (mode === "t2v") {
+      persist({ ...modePatch, referenceSlotsOpen: false })
+      onSlotsExpandedChange?.(false)
+      return
+    }
+    persist(modePatch, { rememberSlots: true })
     onSlotsExpandedChange?.(true)
   }, [
     localPanelMode,
-    slotsExpanded,
     onSlotsExpandedChange,
     persist,
-    data?.referenceSlotsOpen,
-    referenceModeFromData,
+    data?.modelId,
+    data?.keyframes,
+    data?.freeRefs,
+    keyframes,
+    freeRefs,
+    getNode,
+    videoModels,
   ])
 
   const setMode = useCallback((mode) => {
@@ -230,16 +403,22 @@ export default function VideoReferencePanel({
 
   const applyRefItemToSlot = useCallback(
     (refItem, slot) => {
+      const resolved = resolveReferenceImageUrl(refItem, getNode)
+      if (!resolved?.imageUrl) return
+      if (!resolveRefDisplayUrl(refItem, getNode)) {
+        console.warn("参考图 URL 无法展示", resolved.imageUrl)
+        return
+      }
       if (slot === "freeref") {
         updateFreeRefs((refs) => {
-          if (refs.length >= 5 || refs.some((r) => r.imageId === refItem.imageId)) return refs
-          return [...refs, refItem]
+          if (refs.length >= 5 || refs.some((r) => r.imageId === resolved.imageId)) return refs
+          return [...refs, resolved]
         })
         return
       }
-      updateKeyframes((k) => ({ ...k, [slot]: refItem }))
+      updateKeyframes((k) => ({ ...k, [slot]: resolved }))
     },
-    [updateKeyframes, updateFreeRefs]
+    [updateKeyframes, updateFreeRefs, getNode]
   )
 
   const applyQuickToSlot = useCallback(
@@ -254,19 +433,21 @@ export default function VideoReferencePanel({
       if (!file) return
       try {
         const url = await uploadImageFile(file)
+        const uploadId = `upload_${Date.now()}`
+        const baseName = file.name?.replace(/\.[^.]+$/, "").trim()
         const refItem = buildRefItem({
-          nodeId,
+          nodeId: uploadId,
           imageIndex: 0,
           imageUrl: url,
-          imageId: `${nodeId}_upload_${Date.now()}`,
-          label: t("canvas.prompt.uploadImage"),
+          imageId: `${uploadId}_${Math.random().toString(36).slice(2, 8)}`,
+          label: baseName || t("canvas.prompt.refImage"),
         })
         applyRefItemToSlot(refItem, slot)
       } catch (err) {
         console.error("参考图上传失败", err)
       }
     },
-    [nodeId, applyRefItemToSlot, t]
+    [applyRefItemToSlot, t]
   )
 
   const applyAssetToSlot = useCallback(
@@ -315,8 +496,37 @@ export default function VideoReferencePanel({
   )
 
   const removeFreeRef = useCallback((index) => {
+    const ref = freeRefs[index]
+    if (ref?.nodeId && data?.onDisconnectIncomingFromSource) {
+      data.onDisconnectIncomingFromSource(nodeId, ref.nodeId)
+      return
+    }
     updateFreeRefs((refs) => refs.filter((_, i) => i !== index))
-  }, [updateFreeRefs])
+  }, [freeRefs, data, nodeId, updateFreeRefs])
+
+  const clearKeyframeSlot = useCallback((slot) => {
+    const ref = keyframes[slot]
+    const sourceId = ref?.nodeId
+    updateKeyframes((k) => ({ ...k, [slot]: null }))
+    // 仅外部画布源、且首尾帧/freeRefs 都不再引用该源时，再断开连线
+    if (
+      !sourceId
+      || sourceId === nodeId
+      || String(sourceId).startsWith("upload_")
+      || String(sourceId).startsWith("asset_")
+      || !data?.onDisconnectIncomingFromSource
+    ) {
+      return
+    }
+    const otherSlot = slot === "first" ? "last" : "first"
+    const otherStillUses = keyframes[otherSlot]?.nodeId === sourceId
+    const freeStillUses = (Array.isArray(freeRefs) ? freeRefs : []).some(
+      (r) => r?.nodeId === sourceId
+    )
+    if (!otherStillUses && !freeStillUses) {
+      data.onDisconnectIncomingFromSource(nodeId, sourceId)
+    }
+  }, [keyframes, freeRefs, data, nodeId, updateKeyframes])
 
   const applyKeyframePick = useCallback((slot, refItem) => {
     updateKeyframes((k) => ({ ...k, [slot]: refItem }))
@@ -479,45 +689,41 @@ export default function VideoReferencePanel({
           <KeyframeSlot
             slotLabel={t("canvas.image.slotFirst")}
             value={keyframes.first}
+            getNode={getNode}
+            sourceFingerprint={sourceMediaById[keyframes.first?.nodeId] || ""}
             onQuickSelect={(item) => applyQuickToSlot(item, "first")}
             onCanvasPick={() => openCanvasPickerFor("first")}
             onUpload={(file) => uploadFileToSlot(file, "first")}
             onAssetPick={(asset) => applyAssetToSlot(asset, "first")}
             assetEntries={assetEntries}
-            onClear={() => updateKeyframes((k) => ({ ...k, first: null }))}
+            onClear={() => clearKeyframeSlot("first")}
             clearAriaLabel={t("canvas.video.clearSlot", { slot: t("canvas.image.slotFirst") })}
           />
           <KeyframeSlot
             slotLabel={t("canvas.image.slotLast")}
             value={keyframes.last}
+            getNode={getNode}
+            sourceFingerprint={sourceMediaById[keyframes.last?.nodeId] || ""}
             onQuickSelect={(item) => applyQuickToSlot(item, "last")}
             onCanvasPick={() => openCanvasPickerFor("last")}
             onUpload={(file) => uploadFileToSlot(file, "last")}
             onAssetPick={(asset) => applyAssetToSlot(asset, "last")}
             assetEntries={assetEntries}
-            onClear={() => updateKeyframes((k) => ({ ...k, last: null }))}
+            onClear={() => clearKeyframeSlot("last")}
             clearAriaLabel={t("canvas.video.clearSlot", { slot: t("canvas.image.slotLast") })}
           />
         </div>
       ) : (
         <div className="ref-tags-scroll nodrag nopan">
           {freeRefs.map((ref, i) => (
-            <div key={`${ref.nodeId}-${i}`} className="ref-tag nodrag nopan">
-              <img
-                src={ref.imageUrl}
-                alt=""
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-              />
-              <span className="ref-label">{truncateLabel(ref.label)}</span>
-              <button
-                type="button"
-                className="ref-remove nodrag nopan"
-                onClick={(e) => { sp(e); removeFreeRef(i) }}
-              >
-                ×
-              </button>
-            </div>
+            <RefTag
+              key={`${ref.nodeId}-${i}`}
+              refItem={ref}
+              getNode={getNode}
+              sourceFingerprint={sourceMediaById[ref?.nodeId] || ""}
+              label={truncateLabel(ref.label)}
+              onRemove={() => removeFreeRef(i)}
+            />
           ))}
           {freeRefs.length < 5 && (
             <RefPickAnchor
@@ -576,11 +782,16 @@ export default function VideoReferencePanel({
   }
 
   if (section === "promptbar") {
+    const showSlotsMedia =
+      slotsExpanded
+      && localPanelMode !== "t2v"
+      && !isT2vMode
+      && (localPanelMode === "enhance" || slotsSection || keyframePickPop)
     return (
       <div className="video-ref-promptbar nodrag nopan">
         {topBar}
         {cameraMotionSlot}
-        {slotsExpanded ? (
+        {showSlotsMedia ? (
           <div className="video-ref-promptbar-media">
             {localPanelMode === "enhance" ? (
               enhancePanelSlot
@@ -599,6 +810,7 @@ export default function VideoReferencePanel({
 
   if (section === "slots") {
     if (!slotsExpanded) return null
+    if (localPanelMode === "t2v" || isT2vMode) return null
     if (localPanelMode === "enhance") {
       return enhancePanelSlot ? (
         <div className="video-ref-panel video-ref-panel--slots nodrag nopan" onPointerDown={sp} onClick={sp}>

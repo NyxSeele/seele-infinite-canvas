@@ -2,9 +2,9 @@ import { useCallback, useRef } from "react"
 import { message } from "antd"
 import { addEdge, applyEdgeChanges } from "reactflow"
 import { useCanvasStore } from "../../stores"
-import { makeEmptyScriptRow } from "../../components/canvas/ScriptTableNode"
-import { makeId, NODE_WIDTHS_MAP, isEmptyImageGenNode } from "../../utils/canvas/nodeHelpers"
-import { buildIncomingEdgeDataPatch } from "../../components/canvas/videoReferenceHelpers"
+import { makeEmptyScriptRow } from "../../utils/canvas/scriptTableRowFactory"
+import { makeId, NODE_WIDTHS_MAP, isEmptyImageGenNode, isEmptyVideoGenNode } from "../../utils/canvas/nodeHelpers"
+import { buildIncomingEdgeDataPatch, removeRefsSourcedFromNode } from "../../components/canvas/videoReferenceHelpers"
 import {
   hasFlyoutDrag,
   parseFlyoutDrop,
@@ -12,6 +12,8 @@ import {
 import { getT } from "../../utils/locale"
 import { isPaneMenuSuppressed, markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
 import { uploadImageFileWithMeta, buildUploadedImageNodePatch } from "../../services/uploadImage"
+import { uploadVideoFile, buildUploadedVideoNodePatch } from "../../services/uploadVideo"
+import { IMAGE_ACCEPT, VIDEO_ACCEPT, isVideoFile } from "../../utils/uploadFileKind"
 
 export function useCanvasInteraction({
   nodes,
@@ -37,12 +39,24 @@ export function useCanvasInteraction({
   const draggingRef = useRef(null)
   /** 拖线结束到菜单选择之间保留连线上下文（避免 pane click 清空 picker 后丢边） */
   const pendingEdgeCreateRef = useRef(null)
+  const connectSucceededRef = useRef(false)
+
+  const applyTargetDataAfterEdgeRemove = useCallback((node, sourceNodeId) => {
+    const refPatch = removeRefsSourcedFromNode(node.data, sourceNodeId) || {}
+    let nextData = { ...node.data, ...refPatch }
+    if (node.data.linkedSourceId === sourceNodeId) {
+      const { linkedSourceId, linkedSourceType, linkedSourceData, ...rest } = nextData
+      nextData = rest
+    }
+    return { ...node, data: nextData }
+  }, [])
 
   const isRightSourceHandle = (handleId) =>
     !handleId || handleId === "src-right" || handleId === "src"
 
   const onConnect = useCallback(
     (params) => {
+      connectSucceededRef.current = true
       pushHistory?.()
       setEdges((es) => addEdge({ ...params, type: "ghost", animated: false }, es))
       setNodes((ns) =>
@@ -74,8 +88,7 @@ export function useCanvasInteraction({
               setNodes((ns) =>
                 ns.map((n) => {
                   if (n.id !== removedEdge.target) return n
-                  const { linkedSourceId, linkedSourceType, linkedSourceData, ...rest } = n.data
-                  return { ...n, data: rest }
+                  return applyTargetDataAfterEdgeRemove(n, removedEdge.source)
                 })
               )
             }
@@ -85,10 +98,11 @@ export function useCanvasInteraction({
       })
       setEdges((es) => applyEdgeChanges(changes, es))
     },
-    [setEdges, setNodes]
+    [setEdges, setNodes, applyTargetDataAfterEdgeRemove]
   )
 
   const onConnectStart = useCallback((_, { nodeId, handleType, handleId }) => {
+    connectSucceededRef.current = false
     pendingEdgeCreateRef.current = null
     connectingNodeRef.current = { nodeId, handleType, handleId }
   }, [connectingNodeRef])
@@ -99,20 +113,25 @@ export function useCanvasInteraction({
       connectingNodeRef.current = null
       if (!connecting?.nodeId) return
 
-      // Drop on pane OR on a node body (not a valid target handle) → open picker
+      if (connectSucceededRef.current) {
+        connectSucceededRef.current = false
+        return
+      }
+
+      // Drop on blank pane only — not on nodes, handles, or connection line
       const target = event.target
       const isHandle = target.classList.contains("react-flow__handle")
+      const isConnectionLine =
+        target.closest?.(".react-flow__connection")
+        || target.closest?.(".react-flow__connection-path")
+      if (isConnectionLine) return
+      if (isHandle) return
+      if (target.closest?.(".react-flow__node")) return
+
       const isPane =
         target.classList.contains("react-flow__pane") ||
-        target.classList.contains("react-flow__background") ||
-        target.tagName === "svg"
-      // If dropped on a valid handle, RF's onConnect already fired — skip
-      if (isHandle) return
-      if (!isPane) {
-        const droppedNodeId = target.closest(".react-flow__node")?.getAttribute("data-id")
-        // 落在其他节点主体上也应打开创建菜单，而非直接连到该节点（避免落点显示已有图片）
-        if (!droppedNodeId) return
-      }
+        target.classList.contains("react-flow__background")
+      if (!isPane) return
 
       if (connecting.handleId === 'src-left') {
         markSuppressPaneMenu()
@@ -295,7 +314,7 @@ export function useCanvasInteraction({
     }
     const input = document.createElement("input")
     input.type = "file"
-    input.accept = "image/*"
+    input.accept = IMAGE_ACCEPT
     input.onchange = async (e) => {
       const file = e.target.files?.[0]
       if (!file) return
@@ -303,6 +322,43 @@ export function useCanvasInteraction({
       const showPhase = (text) => {
         hideRef.current?.()
         hideRef.current = message.loading(text, 0)
+      }
+      if (isVideoFile(file)) {
+        message.info("检测到视频文件，将按视频上传")
+        showPhase("正在上传视频…")
+        try {
+          const meta = await uploadVideoFile(file, {
+            onProgress: () => showPhase("正在上传视频…"),
+          })
+          const patch = buildUploadedVideoNodePatch(meta)
+          const selected = selectedNodeId ? getNode(selectedNodeId) : null
+          if (isEmptyVideoGenNode(selected) && selected.data?.onUpdate) {
+            pushHistory?.()
+            selected.data.onUpdate(selectedNodeId, patch)
+            message.success("视频已上传")
+            return
+          }
+          pushHistory?.()
+          const id = createNode(
+            "video-gen",
+            { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+            patch,
+            { anchorNodeId: selectedNodeId || null },
+          )
+          if (id) {
+            setSelectedNodeId(id)
+            raiseNodeToFront(id)
+            message.success("视频已上传")
+          } else {
+            message.error("无法创建视频节点，请确认您有画布编辑权限")
+          }
+        } catch (err) {
+          console.error("视频上传失败", err)
+          message.error(err.message || err.response?.data?.detail || "视频上传失败，请重试")
+        } finally {
+          hideRef.current?.()
+        }
+        return
       }
       showPhase("正在上传…")
       try {
@@ -344,9 +400,63 @@ export function useCanvasInteraction({
     input.click()
   }, [createNode, getNode, pushHistory, raiseNodeToFront, readOnly, selectedNodeId, setSelectedNodeId])
 
+  const handleUploadVideo = useCallback(() => {
+    if (readOnly) {
+      message.warning("当前为只读模式，无法上传视频")
+      return
+    }
+    const input = document.createElement("input")
+    input.type = "file"
+    input.accept = VIDEO_ACCEPT
+    input.onchange = async (e) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      const hideRef = { current: null }
+      const showPhase = (text) => {
+        hideRef.current?.()
+        hideRef.current = message.loading(text, 0)
+      }
+      showPhase("正在上传视频…")
+      try {
+        const meta = await uploadVideoFile(file, {
+          onProgress: () => showPhase("正在上传视频…"),
+        })
+        const patch = buildUploadedVideoNodePatch(meta)
+        const selected = selectedNodeId ? getNode(selectedNodeId) : null
+        if (isEmptyVideoGenNode(selected) && selected.data?.onUpdate) {
+          pushHistory?.()
+          selected.data.onUpdate(selectedNodeId, patch)
+          message.success("视频已上传")
+          return
+        }
+        pushHistory?.()
+        const id = createNode(
+          "video-gen",
+          { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+          patch,
+          { anchorNodeId: selectedNodeId || null },
+        )
+        if (id) {
+          setSelectedNodeId(id)
+          raiseNodeToFront(id)
+          message.success("视频已上传")
+        } else {
+          message.error("无法创建视频节点，请确认您有画布编辑权限")
+        }
+      } catch (err) {
+        console.error("视频上传失败", err)
+        message.error(err.message || err.response?.data?.detail || "视频上传失败，请重试")
+      } finally {
+        hideRef.current?.()
+      }
+    }
+    input.click()
+  }, [createNode, getNode, pushHistory, raiseNodeToFront, readOnly, selectedNodeId, setSelectedNodeId])
+
   const handleAddNodeOfType = useCallback(
     (type) => {
       if (type === "image-upload") { handleUploadImage(); return }
+      if (type === "video-upload") { handleUploadVideo(); return }
       pushHistory?.()
       const id = createNode(
         type,
@@ -359,7 +469,7 @@ export function useCanvasInteraction({
         raiseNodeToFront(id)
       }
     },
-    [createNode, handleUploadImage, pushHistory, raiseNodeToFront, selectedNodeId, setSelectedNodeId]
+    [createNode, handleUploadImage, handleUploadVideo, pushHistory, raiseNodeToFront, selectedNodeId, setSelectedNodeId]
   )
 
   const handleQuickCreate = useCallback(
@@ -463,6 +573,7 @@ export function useCanvasInteraction({
     handleAddNodeOfType,
     handleQuickCreate,
     handleUploadImage,
+    handleUploadVideo,
     handleFlyoutDragOver,
     handleFlyoutDrop,
     onConnect,

@@ -41,43 +41,49 @@ function dedupeByUrl(items) {
   return out
 }
 
+export async function loadVideoHistoryItems(scope, activeTeamId) {
+  if (scope === "team") {
+    if (!activeTeamId) return []
+    const records = await fetchTaskRecords({ teamId: activeTeamId, limit: 200 })
+    return dedupeByUrl(
+      mapTaskRecordsToHistory(records).filter((h) => h.kind === "video"),
+    )
+  }
+  const local = filterGenHistory(
+    filterPersonalHistory(readGenHistory([], {})),
+    "video",
+  )
+  let server = []
+  try {
+    const records = await fetchTaskRecords({ limit: 200 })
+    server = mapTaskRecordsToHistory(records).filter((h) => h.kind === "video")
+  } catch {
+    server = []
+  }
+  return dedupeByUrl([...local, ...server])
+}
+
 /**
  * Click-to-select video grid from personal/team generation history.
  */
-export default function GenHistoryVideoPicker({ selectedId, onSelect, disabled }) {
+export default function GenHistoryVideoPicker({
+  selectedId,
+  onSelect,
+  disabled,
+  scope: scopeProp,
+  onScopeChange,
+}) {
   const activeTeamId = useTeamStore((s) => s.activeTeamId)
-  const [scope, setScope] = useState("mine")
+  const [scopeInternal, setScopeInternal] = useState("mine")
+  const scope = scopeProp ?? scopeInternal
+  const setScope = onScopeChange ?? setScopeInternal
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      if (scope === "team") {
-        if (!activeTeamId) {
-          setItems([])
-          return
-        }
-        const records = await fetchTaskRecords({ teamId: activeTeamId, limit: 80 })
-        setItems(
-          dedupeByUrl(
-            mapTaskRecordsToHistory(records).filter((h) => h.kind === "video"),
-          ),
-        )
-        return
-      }
-      const local = filterGenHistory(
-        filterPersonalHistory(readGenHistory([], {})),
-        "video",
-      )
-      let server = []
-      try {
-        const records = await fetchTaskRecords({ limit: 80 })
-        server = mapTaskRecordsToHistory(records).filter((h) => h.kind === "video")
-      } catch {
-        server = []
-      }
-      setItems(dedupeByUrl([...local, ...server]))
+      setItems(await loadVideoHistoryItems(scope, activeTeamId))
     } catch {
       setItems([])
     } finally {

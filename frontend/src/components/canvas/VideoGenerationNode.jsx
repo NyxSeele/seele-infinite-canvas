@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react"
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, memo } from "react"
 import { createPortal } from "react-dom"
 import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
 import { Z_NODE_DOTS_MENU } from "../../utils/zIndexLayers"
@@ -10,12 +10,19 @@ import { getCanvasTeamId, teamIdPayload } from "../../utils/teamContext"
 import { cancelCanvasTask } from "../../services/cancelTask"
 import { buildMediaViewUrl, resolveTaskResultUrl } from "../../utils/mediaViewUrl"
 import { ensureMediaUrl, toRelativeMediaUrl } from "../../utils/mediaTicket"
+import { isNodePatchNoop } from "../../utils/canvas/nodePatch"
+import { isExploreNode } from "../../utils/canvas/exploreTrack"
+import {
+  getActiveScriptTable,
+  resolveStoryboardShotIndex,
+} from "../../utils/canvas/promoteExploreToStoryboard"
 import { downloadMediaUrl } from "../../utils/downloadMedia"
 import MediaFullscreenViewer from "./MediaFullscreenViewer"
 import GenerationStopButton from "./GenerationStopButton"
 import GenerationBrandLoader from "./GenerationBrandLoader"
 import TaskRatingBar from "./TaskRatingBar"
 import VideoEnhancePanel from "./VideoEnhancePanel"
+import { useVideoEnhanceConfig } from "../../hooks/useVideoEnhanceConfig"
 import {
   setVideoEnhanceBridge,
   notifyVideoEnhanceBridge,
@@ -30,12 +37,23 @@ import {
   DEFAULT_KEYFRAMES,
 } from "./videoReferenceHelpers"
 import { mergeMentionRefsIntoFreeRefs } from "./promptMentions"
-import { isNetworkError, networkErrorMessage, parseGenerationError } from "./taskNetworkError"
+import { isNetworkError, isTransientPollError, networkErrorMessage, parseGenerationError } from "./taskNetworkError"
+import { createRateLimitBackoffState } from "../../utils/canvas/rateLimitBackoff"
+import { createGatewayPollRetryState } from "../../utils/canvas/gatewayPollBackoff"
 import { getRetryPolicy } from "../../utils/canvas/generationRetryPolicy"
 import { createStaleProgressGuard, isTerminalTaskStatus, PROGRESS_STALE_MS } from "./taskPollTimeout"
-import { normalizeProgressPercent, mergeMonotonicProgress, logVideoPollDebug } from "./videoProgressSync"
+import {
+  normalizeProgressPercent,
+  mergeMonotonicProgress,
+  capRunningProgress,
+  logVideoPollDebug,
+  resolveVideoGenerationPhase,
+  taskHasGenerationStarted,
+} from "./videoProgressSync"
 import useModelCapabilities from "../../hooks/useModelCapabilities"
 import { uploadImageFile } from "../../services/uploadImage"
+import { uploadVideoFile, buildUploadedVideoNodePatch } from "../../services/uploadVideo"
+import { IMAGE_ACCEPT, VIDEO_ACCEPT, assertImageUploadFile, isVideoFile } from "../../utils/uploadFileKind"
 import { useLocale } from "../../utils/locale"
 import { appendStyleReferenceToDescription, styleReferenceSummary } from "../../utils/canvas/styleReferenceFormat"
 import {
@@ -44,7 +62,8 @@ import {
   normalizeClarityLabel,
   cardDisplayRatio,
 } from "../../utils/canvas/aspectRatioLayout"
-import { T2V_ONLY, NO_FLF2V } from "../../utils/canvas/videoModelCompat"
+import { T2V_ONLY, NO_FLF2V, I2AV_ONLY, defaultVidAudioForModel } from "../../utils/canvas/videoModelCompat"
+import { pickDefaultModel } from "../../utils/canvas/modelCatalog"
 import { IconStyleRef, IconZoom, IconEnhance } from "./CanvasTopbarIcons"
 import { collectConnectedCharacterFaceUrl } from "../../utils/canvas/entityRefs"
 import CameraMotionPicker, {
@@ -54,6 +73,7 @@ import CameraMotionPicker, {
 import "./CameraMotionPicker.css"
 import { useCanvasNodeWheel } from "./canvasScrollHelpers"
 import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
+import { openCanvasDropdown, closeCanvasDropdown } from "./canvasDropdownCoordinator"
 import { findScriptTableNode, resolveVideoQualityPresetId } from "../../utils/canvas/scriptTableNode"
 import { isLutActive, submitVideoLutTask } from "../../services/lutApi"
 import { isRealProjectId } from "../../utils/canvas/projectId"
@@ -62,9 +82,36 @@ import "./GenerationCardNode.css"
 import "./VideoGenerationNode.css"
 import "./VideoReferencePanel.css"
 
-const POLL_INTERVAL_MS = 2000
+const POLL_INTERVAL_MS = 3500
+const POLL_INTERVAL_MID_MS = 2000
+const POLL_INTERVAL_LATE_MS = 1200
+const FASTSTART_UPGRADE_POLL_MS = 2000
+const FASTSTART_UPGRADE_MAX_TICKS = 20
+const PROGRESS_PERSIST_MS = 2000
 const VIDEO_MENU_WIDTH = 200
 const VIDEO_MENU_EST_HEIGHT = 280
+
+function shouldMuteVideoPlayback(vidAudio, modelId) {
+  if (vidAudio === "关闭") return true
+  if (vidAudio === "开启") return false
+  return defaultVidAudioForModel(modelId) === "关闭"
+}
+
+function resolveLtx2AudioEnabled(vidAudio, modelId, modelCapabilities) {
+  const resolvedModelId = modelId || "wan-2.6"
+  const videoBackend = String(modelCapabilities?.video_backend || "").toLowerCase()
+  const isLtx2Model = resolvedModelId === "ltx2-fp4"
+  const isLtx2Backend = videoBackend === "ltx2" || (isLtx2Model && !videoBackend)
+  if (!isLtx2Backend) return false
+
+  const supportsAudio = modelCapabilities
+    ? Boolean(modelCapabilities.supports_audio)
+    : isLtx2Model
+  if (!supportsAudio) return false
+
+  const resolvedVidAudio = vidAudio || defaultVidAudioForModel(resolvedModelId)
+  return resolvedVidAudio !== "关闭"
+}
 
 function computeVideoMenuPos(btnRect) {
   let x = btnRect.right - VIDEO_MENU_WIDTH
@@ -74,6 +121,20 @@ function computeVideoMenuPos(btnRect) {
     y = btnRect.top - VIDEO_MENU_EST_HEIGHT
   }
   return { x, y }
+}
+
+function resolveVideoMenuPos(anchorEl, fallbackX = 0, fallbackY = 0) {
+  if (anchorEl) {
+    try {
+      const rect = anchorEl.getBoundingClientRect()
+      if (rect.width || rect.height) {
+        return computeVideoMenuPos(rect)
+      }
+    } catch {
+      // ignore detached / invalid anchor
+    }
+  }
+  return { x: fallbackX, y: fallbackY }
 }
 
 /** 阻止 React Flow 选中/拖拽，但保留按钮点击 */
@@ -118,9 +179,45 @@ const AssetLibraryIcon = () => (
   </svg>
 )
 
-export default function VideoGenerationNode({ id, data, selected }) {
+function videoGenerationPropsAreEqual(prev, next) {
+  if (prev.id !== next.id || prev.selected !== next.selected) return false
+  const p = prev.data
+  const n = next.data
+  if (p === n) return true
+  const keys = [
+    "status",
+    "taskId",
+    "videoUrl",
+    "prompt",
+    "displayPrompt",
+    "userRating",
+    "ratingTags",
+    "ratingComment",
+    "error",
+    "label",
+    "modelId",
+    "vidRatio",
+    "vidMode",
+    "referenceMode",
+    "panelMode",
+    "enhancedVideoUrl",
+    "enhanceStatus",
+    "lutVideoUrl",
+    "lutStatus",
+    "keyframes",
+    "freeRefs",
+    "pendingTrigger",
+  ]
+  for (const key of keys) {
+    if (p?.[key] !== n?.[key]) return false
+  }
+  return true
+}
+
+function VideoGenerationNode({ id, data, selected }) {
   const { t } = useLocale()
   const [status, setStatus] = useState(() => data.status || "input")
+  const statusRef = useRef(data.status || "input")
   const [prompt, setPrompt] = useState(data.prompt || "")
   const [resIndex, setResIndex] = useState(0)
   const [duration, setDuration] = useState(3)
@@ -128,8 +225,12 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const taskIdRef = useRef(null)
   const [progress, setProgress] = useState(0)
   const [isQueued, setIsQueued] = useState(false)
+  const [isPreparing, setIsPreparing] = useState(false)
+  const generationStartedRef = useRef(false)
+  const stoppingRef = useRef(false)
   const [videoUrl, setVideoUrl] = useState(data.videoUrl || null)
   const [errorMessage, setErrorMessage] = useState(null)
+  const [pollRetryHint, setPollRetryHint] = useState(null)
   const [toast, setToast] = useState(null)
   const [sending, setSending] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -140,6 +241,8 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const wasPlayingBeforeScrubRef = useRef(false)
   const [videoMenu, setVideoMenu] = useState(null)
   const videoMenuPortalRef = useRef(null)
+  const videoMenuAnchorRef = useRef(null)
+  const viewportTransform = useStore((s) => s.transform)
   const [enhanceUpscaleFactor, setEnhanceUpscaleFactor] = useState(
     () => data.enhanceUpscaleFactor ?? 2
   )
@@ -158,6 +261,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const [enhanceModelSize, setEnhanceModelSize] = useState(
     () => data.enhanceModelSize || "7b"
   )
+  const enhanceDefaultsAppliedRef = useRef(false)
   const [enhanceManualMode, setEnhanceManualMode] = useState(
     () => !!data.enhanceManualMode
   )
@@ -173,31 +277,87 @@ export default function VideoGenerationNode({ id, data, selected }) {
   const enhancePollTimersRef = useRef(null)
   const lutPollTimersRef = useRef(null)
   const autoApplyLutRef = useRef(null)
-  const [videoViewTab, setVideoViewTab] = useState("graded")
+  const [videoViewTab, setVideoViewTab] = useState("original")
+  const [mediaBuffering, setMediaBuffering] = useState(false)
   const toastTimerRef = useRef(null)
   const pollTimersRef = useRef(null)
   const staleGuardRef = useRef(null)
   const enhanceStaleGuardRef = useRef(null)
+  const videoModels = useModelStore((s) => s.videoModels)
+  const fetchModels = useModelStore((s) => s.fetchModels)
+  const modelsFetched = useModelStore((s) => s.fetched)
+  const enhanceConfig = useVideoEnhanceConfig()
+  const availableEnhanceModelSizes = enhanceConfig.availableModelSizes?.length
+    ? enhanceConfig.availableModelSizes
+    : ["3b", "7b"]
+
+  useEffect(() => {
+    if (!modelsFetched) fetchModels()
+  }, [modelsFetched, fetchModels])
+
+  useEffect(() => {
+    if (!enhanceConfig.loaded || enhanceDefaultsAppliedRef.current) return
+    if (data.enhanceModelSize) {
+      enhanceDefaultsAppliedRef.current = true
+      return
+    }
+    const preferred = enhanceConfig.defaultModelSize || "7b"
+    const nextSize = availableEnhanceModelSizes.includes(preferred)
+      ? preferred
+      : availableEnhanceModelSizes[0]
+    if (!nextSize || nextSize === enhanceModelSize) {
+      enhanceDefaultsAppliedRef.current = true
+      return
+    }
+    enhanceDefaultsAppliedRef.current = true
+    setEnhanceModelSize(nextSize)
+    data.onUpdate?.(id, { enhanceModelSize: nextSize })
+  }, [
+    enhanceConfig.loaded,
+    enhanceConfig.defaultModelSize,
+    data.enhanceModelSize,
+    availableEnhanceModelSizes,
+    enhanceModelSize,
+    data,
+    id,
+  ])
   const lutStaleGuardRef = useRef(null)
   const pollMetaRef = useRef({ taskId: null, startedAt: 0 })
+  const pollOnceRef = useRef(null)
   const completedLatchRef = useRef(false)
+  const lastPersistedVideoUrlRef = useRef(
+    toRelativeMediaUrl(data.videoUrl || null) || data.videoUrl || null
+  )
+  const progressPersistTimerRef = useRef(null)
+  const latestProgressRef = useRef(0)
+  const onUpdateRef = useRef(data.onUpdate)
+  const stopPollingRef = useRef(() => {})
   const videoRef = useRef(null)
   const [mediaRevision, setMediaRevision] = useState(0)
-  const videoModels = useModelStore((s) => s.videoModels)
   const [modelId, setModelId] = useState(data.modelId || "")
   const generateRef = useRef(null)
   const lastSubmitParamsRef = useRef(null)
   const effectiveModelId = data.modelId || modelId
   const { capabilities: modelCapabilities } = useModelCapabilities(effectiveModelId)
+  const playbackMuted = useMemo(
+    () => shouldMuteVideoPlayback(data.vidAudio, effectiveModelId),
+    [data.vidAudio, effectiveModelId],
+  )
   const [cameraPickerOpen, setCameraPickerOpen] = useState(false)
   const cameraMove = data.cameraMove || "auto"
   const shotScale = data.shotScale || "auto"
 
   useEffect(() => {
     if (videoModels.length > 0 && !modelId) {
-      setModelId(videoModels[0].id || videoModels[0].display_name || "")
+      const vidMode = data.vidMode || "首尾帧"
+      setModelId(
+        pickDefaultModel(videoModels, { category: "video", vidMode })
+        || videoModels[0].id
+        || videoModels[0].display_name
+        || "",
+      )
     }
-  }, [videoModels])
+  }, [videoModels, modelId, data.vidMode])
 
   useEffect(() => {
     if (!data.onUpdate) return
@@ -234,8 +394,9 @@ export default function VideoGenerationNode({ id, data, selected }) {
 
   useEffect(() => {
     if (!modelCapabilities || !data.onUpdate) return
+    if (isNodePatchNoop(data, { capabilities: modelCapabilities })) return
     data.onUpdate(id, { capabilities: modelCapabilities })
-  }, [modelCapabilities, id, data.onUpdate])
+  }, [modelCapabilities, id, data])
 
   useEffect(() => {
     if (data.prompt !== undefined && data.prompt !== prompt) {
@@ -244,36 +405,75 @@ export default function VideoGenerationNode({ id, data, selected }) {
   }, [data.prompt])
 
   useEffect(() => {
-    if (status === "generating" || sending) return
-    if (data.status === "generating" || data.status === "pending" || data.status === "queued") {
-      return
-    }
-    if (data.status === "completed" && data.videoUrl) {
-      completedLatchRef.current = true
-      setStatus("completed")
-      setVideoUrl(data.videoUrl)
-      setProgress(data.progress ?? 100)
-      setSending(false)
-      setErrorMessage(null)
-    }
-  }, [data.status, data.videoUrl, data.progress, status, sending])
+    onUpdateRef.current = data.onUpdate
+  }, [data.onUpdate])
 
   const stopStaleGuard = useCallback(() => {
     staleGuardRef.current?.stop()
     staleGuardRef.current = null
   }, [])
 
+  const flushProgressToCanvas = useCallback(() => {
+    if (progressPersistTimerRef.current) {
+      clearTimeout(progressPersistTimerRef.current)
+      progressPersistTimerRef.current = null
+    }
+    onUpdateRef.current?.(id, { progress: latestProgressRef.current })
+  }, [id])
+
+  const clearProgressPersist = useCallback(() => {
+    if (progressPersistTimerRef.current) {
+      clearTimeout(progressPersistTimerRef.current)
+      progressPersistTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleProgressPersist = useCallback((next) => {
+    latestProgressRef.current = next
+    if (progressPersistTimerRef.current) return
+    progressPersistTimerRef.current = setTimeout(() => {
+      progressPersistTimerRef.current = null
+      onUpdateRef.current?.(id, { progress: latestProgressRef.current })
+    }, PROGRESS_PERSIST_MS)
+  }, [id])
+
   const stopPollInterval = useCallback(() => {
     const timers = pollTimersRef.current
     if (!timers) return
     if (timers.interval) clearInterval(timers.interval)
+    if (timers.timeout) clearTimeout(timers.timeout)
     pollTimersRef.current = null
   }, [])
 
-  const stopPolling = useCallback(() => {
+  const stopPolling = useCallback(({ flushProgress = true } = {}) => {
     stopStaleGuard()
     stopPollInterval()
-  }, [stopStaleGuard, stopPollInterval])
+    pollOnceRef.current = null
+    if (flushProgress) flushProgressToCanvas()
+  }, [stopStaleGuard, stopPollInterval, flushProgressToCanvas])
+
+  stopPollingRef.current = stopPolling
+
+  useEffect(() => () => clearProgressPersist(), [clearProgressPersist])
+
+  useEffect(() => () => stopPollingRef.current(), [])
+
+  useEffect(() => {
+    if (data.status === "completed" && data.videoUrl) {
+      stopPolling()
+      completedLatchRef.current = true
+      setStatus("completed")
+      setVideoUrl(data.videoUrl)
+      setProgress(data.progress ?? 100)
+      setSending(false)
+      setErrorMessage(null)
+      return
+    }
+    if (status === "generating" || sending) return
+    if (data.status === "generating" || data.status === "pending" || data.status === "queued") {
+      return
+    }
+  }, [data.status, data.videoUrl, data.progress, status, sending, stopPolling])
 
   useEffect(() => {
     if (sending || status === "generating") return
@@ -289,34 +489,58 @@ export default function VideoGenerationNode({ id, data, selected }) {
     }
   }, [data.status, data.error, status, sending, stopPolling, t])
 
-  const applyProgress = useCallback((pct, { reset = false } = {}) => {
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
+  const applyProgress = useCallback((pct, { reset = false, isComplete = false } = {}) => {
+    const capped = capRunningProgress(pct, {
+      isComplete: isComplete || statusRef.current === "completed",
+    })
+    if (capped == null) return
+    if (capped > 0) {
+      generationStartedRef.current = true
+      setIsQueued(false)
+      setIsPreparing(false)
+    }
     setProgress((prev) => {
-      const next = mergeMonotonicProgress(prev, pct, { allowDecrease: reset })
+      const next = mergeMonotonicProgress(prev, capped, { allowDecrease: reset })
       staleGuardRef.current?.bump(next)
-      data.onUpdate?.(id, { progress: next })
+      scheduleProgressPersist(next)
+      if (next >= 100 && pollOnceRef.current) {
+        queueMicrotask(() => pollOnceRef.current?.())
+      }
       return next
     })
-  }, [id, data])
+  }, [scheduleProgressPersist])
 
   const failTask = useCallback((nextStatus, msg) => {
-    stopPolling()
+    clearProgressPersist()
+    stopPolling({ flushProgress: false })
     setStatus(nextStatus)
     setErrorMessage(msg)
+    setPollRetryHint(null)
     setSending(false)
-    data.onUpdate?.(id, { status: nextStatus, error: msg })
-  }, [stopPolling, id, data])
+    data.onUpdate?.(id, { status: nextStatus, error: msg, progress: latestProgressRef.current })
+  }, [clearProgressPersist, stopPolling, id, data])
 
   const finalizeVideoCompleted = useCallback((url, activeTaskId, { writeHistory = true } = {}) => {
     const wasAlreadyCompleted = completedLatchRef.current
     completedLatchRef.current = true
     if (wasAlreadyCompleted) return false
 
+    clearProgressPersist()
+    stopPolling({ flushProgress: false })
+    setIsQueued(false)
+    setIsPreparing(false)
     setMediaRevision((r) => r + 1)
+    lastPersistedVideoUrlRef.current = toRelativeMediaUrl(url) || url
     setVideoUrl(url)
     setStatus("completed")
     setProgress(100)
     setSending(false)
     setErrorMessage(null)
+    setPollRetryHint(null)
     const completedAt = Date.now()
     data.onUpdate?.(id, {
       status: "completed",
@@ -343,9 +567,27 @@ export default function VideoGenerationNode({ id, data, selected }) {
     }
     autoApplyLutRef.current?.(url)
     return true
-  }, [id, data])
+  }, [id, data, stopPolling, clearProgressPersist])
+
+  const upgradePlaybackUrl = useCallback((url) => {
+    if (!url) return
+    const normalized = toRelativeMediaUrl(url) || url
+    const current =
+      toRelativeMediaUrl(videoUrl || data.videoUrl || null)
+      || videoUrl
+      || data.videoUrl
+      || null
+    if (!normalized || normalized === current || lastPersistedVideoUrlRef.current === normalized) {
+      return
+    }
+    lastPersistedVideoUrlRef.current = normalized
+    setMediaRevision((r) => r + 1)
+    setVideoUrl(url)
+    data.onUpdate?.(id, { videoUrl: url })
+  }, [id, data, videoUrl, data.videoUrl])
 
   const startTaskPolling = useCallback((activeTaskId) => {
+    if (completedLatchRef.current) return
     stopPolling()
     pollMetaRef.current = { taskId: activeTaskId, startedAt: Date.now() }
     const terminalRef = { current: false }
@@ -362,20 +604,30 @@ export default function VideoGenerationNode({ id, data, selected }) {
     })
     staleGuard.start()
     staleGuardRef.current = staleGuard
+    const rateLimit = createRateLimitBackoffState()
+    const gatewayRetry = createGatewayPollRetryState()
 
     const pollOnce = async () => {
+      if (completedLatchRef.current || terminalRef.current) return
+      if (rateLimit.paused || gatewayRetry.paused) return
       try {
         const res = await api.get(`/api/tasks/${activeTaskId}`)
         const task = res.data
+        rateLimit.reset()
+        gatewayRetry.reset()
+        setPollRetryHint(null)
         staleGuard.touch?.()
-        const queued =
-          task.status === "pending"
-          && (
-            task.stage === "queued"
-            || task.message === "queued"
-            || (task.progress == null || Number(task.progress) === 0)
-          )
-        setIsQueued(queued)
+        const pct = capRunningProgress(normalizeProgressPercent(task.progress), {
+          isComplete: task.status === "completed",
+        })
+        if (taskHasGenerationStarted(task, pct)) {
+          generationStartedRef.current = true
+        }
+        const phase = resolveVideoGenerationPhase(task, {
+          hasStarted: generationStartedRef.current,
+        })
+        setIsQueued(phase.isQueued)
+        setIsPreparing(phase.isPreparing)
         if (task.comfy_prompt_id && task.comfy_prompt_id !== taskIdRef.current) {
           taskIdRef.current = task.comfy_prompt_id
           data.onUpdate?.(id, { comfyPromptId: task.comfy_prompt_id })
@@ -384,9 +636,9 @@ export default function VideoGenerationNode({ id, data, selected }) {
           terminalRef.current = true
           staleGuardRef.current?.stop()
         }
-        const pct = normalizeProgressPercent(task.progress)
         if (pct != null) {
-          applyProgress(pct)
+          pollMetaRef.current.lastProgress = pct
+          applyProgress(pct, { isComplete: task.status === "completed" })
         }
         logVideoPollDebug({
           taskId: activeTaskId,
@@ -397,25 +649,52 @@ export default function VideoGenerationNode({ id, data, selected }) {
           ...staleGuard.getDebugState(),
           elapsed: Date.now() - pollMetaRef.current.startedAt,
         })
-        if (task.status === "completed" && task.result) {
-          stopPolling()
-          setIsQueued(false)
-          const url = resolveTaskResultUrl(task.result)
-          console.log("[video-gen] poll completed, video src=", url, "raw result=", task.result)
-          finalizeVideoCompleted(url, activeTaskId)
-        } else if (task.status === "failed") {
+        const resultUrl = task.result ? resolveTaskResultUrl(task.result) : null
+        if (task.status === "failed") {
           failTask("error", parseGenerationError(null, task))
+        } else if (task.status === "completed") {
+          if (resultUrl) {
+            setIsQueued(false)
+            finalizeVideoCompleted(resultUrl, activeTaskId)
+            if (
+              resultUrl.includes("/api/uploads/videos/")
+              && resultUrl.includes("_fs.mp4")
+            ) {
+              terminalRef.current = true
+              staleGuardRef.current?.stop()
+            }
+          } else {
+            failTask("error", parseGenerationError(null, task) || t("canvas.gen.failed"))
+          }
         }
       } catch (err) {
         console.error("poll video task error:", err)
-        if (isNetworkError(err)) return
+        if (isTransientPollError(err) && gatewayRetry.shouldRetry(err)) {
+          setPollRetryHint(t("canvas.gen.pollRetrying"))
+          return
+        }
+        if (rateLimit.apply(err)) return
+        setPollRetryHint(null)
         failTask("error", parseGenerationError(err, null))
       }
     }
 
-    pollOnce()
-    const interval = setInterval(pollOnce, POLL_INTERVAL_MS)
-    pollTimersRef.current = { interval }
+    const scheduleNextPoll = () => {
+      if (terminalRef.current) return
+      const pct = pollMetaRef.current.lastProgress ?? 0
+      const delay = pct >= 95
+        ? POLL_INTERVAL_LATE_MS
+        : pct >= 80
+          ? POLL_INTERVAL_MID_MS
+          : POLL_INTERVAL_MS
+      const timeout = setTimeout(() => {
+        pollOnce().finally(() => scheduleNextPoll())
+      }, delay)
+      pollTimersRef.current = { ...(pollTimersRef.current || {}), timeout }
+    }
+
+    pollOnceRef.current = pollOnce
+    pollOnce().finally(() => scheduleNextPoll())
   }, [stopPolling, failTask, id, data, applyProgress, t, finalizeVideoCompleted])
 
   useEffect(() => {
@@ -424,6 +703,13 @@ export default function VideoGenerationNode({ id, data, selected }) {
     const locallyGenerating = status === "generating" || sending
     const persistedGenerating =
       st === "generating" || st === "pending" || st === "queued"
+
+    if (
+      (st === "completed" || st === "failed" || st === "cancelled" || st === "error" || st === "timeout")
+      && pollTimersRef.current
+    ) {
+      stopPollingRef.current({ flushProgress: false })
+    }
 
     if (
       !locallyGenerating &&
@@ -438,16 +724,16 @@ export default function VideoGenerationNode({ id, data, selected }) {
         setErrorMessage(null)
       }
       if (status === "completed" && st !== "completed" && savedUrl) {
-        data.onUpdate?.(
-          id,
-          buildClearGenerationTaskPatch({
-            status: "completed",
-            error: null,
-            videoUrl: savedUrl,
-            taskId: taskId || data.taskId,
-            progress: 100,
-          })
-        )
+        const completionPatch = buildClearGenerationTaskPatch({
+          status: "completed",
+          error: null,
+          videoUrl: savedUrl,
+          taskId: taskId || data.taskId,
+          progress: 100,
+        })
+        if (!isNodePatchNoop(data, completionPatch)) {
+          data.onUpdate?.(id, completionPatch)
+        }
       }
       return
     }
@@ -460,6 +746,13 @@ export default function VideoGenerationNode({ id, data, selected }) {
       status === "generating"
 
     if (persistedActive && !data.pendingTrigger && !locallyActive) {
+      if (
+        stoppingRef.current
+        || completedLatchRef.current
+        || status === "completed"
+        || status === "error"
+        || status === "timeout"
+      ) return
       const activeTaskId = data.taskId || taskId
       if (activeTaskId) {
         setTaskId(activeTaskId)
@@ -468,7 +761,13 @@ export default function VideoGenerationNode({ id, data, selected }) {
         setSending(true)
         setErrorMessage(null)
         if (data.progress != null) {
-          setProgress(Math.min(100, Math.max(0, Number(data.progress) || 0)))
+          const recovered = Math.min(100, Math.max(0, Number(data.progress) || 0))
+          setProgress(recovered)
+          if (recovered > 0) {
+            generationStartedRef.current = true
+            setIsPreparing(false)
+            setIsQueued(false)
+          }
         }
         startTaskPolling(activeTaskId)
         return
@@ -479,12 +778,15 @@ export default function VideoGenerationNode({ id, data, selected }) {
         setStatus("completed")
         setSending(false)
         setErrorMessage(null)
-        data.onUpdate?.(id, {
+        const recoveredPatch = {
           status: "completed",
           videoUrl: savedUrl,
           error: null,
           progress: data.progress ?? 100,
-        })
+        }
+        if (!isNodePatchNoop(data, recoveredPatch)) {
+          data.onUpdate?.(id, recoveredPatch)
+        }
         return
       }
       const localTerminal =
@@ -520,7 +822,10 @@ export default function VideoGenerationNode({ id, data, selected }) {
       !pollTimersRef.current &&
       !sending &&
       status !== "error" &&
-      status !== "timeout"
+      status !== "timeout" &&
+      !completedLatchRef.current &&
+      !stoppingRef.current &&
+      status !== "completed"
     ) {
       setTaskId(activeTaskId)
       taskIdRef.current = data.comfyPromptId || activeTaskId
@@ -528,7 +833,13 @@ export default function VideoGenerationNode({ id, data, selected }) {
       setSending(true)
       setErrorMessage(null)
       if (data.progress != null) {
-        setProgress(Math.min(100, Math.max(0, Number(data.progress) || 0)))
+        const recovered = Math.min(100, Math.max(0, Number(data.progress) || 0))
+        setProgress(recovered)
+        if (recovered > 0) {
+          generationStartedRef.current = true
+          setIsPreparing(false)
+          setIsQueued(false)
+        }
       }
       startTaskPolling(activeTaskId)
     }
@@ -551,8 +862,6 @@ export default function VideoGenerationNode({ id, data, selected }) {
     t,
   ])
 
-  useEffect(() => () => stopPolling(), [stopPolling])
-
   useEffect(() => {
     if (status !== "generating") return
     const remove = wsManager.addListener((msg) => {
@@ -560,33 +869,39 @@ export default function VideoGenerationNode({ id, data, selected }) {
       if (msgPromptId && taskIdRef.current && msgPromptId !== taskIdRef.current) return
 
       if (msg.type === "progress") {
-        const percent = normalizeProgressPercent(
-          msg.data?.max
+        const mapped = msg.data?.progress
+        const rawPercent = mapped != null
+          ? mapped
+          : (msg.data?.max
             ? (msg.data.value / msg.data.max) * 100
-            : msg.data?.progress
-        )
+            : null)
+        const percent = capRunningProgress(normalizeProgressPercent(rawPercent), {
+          isComplete: false,
+        })
         if (percent != null) {
+          generationStartedRef.current = true
+          setIsQueued(false)
+          setIsPreparing(false)
           applyProgress(percent)
           logVideoPollDebug({
             taskId: taskIdRef.current,
             status: "running",
             progress: percent,
             source: "websocket",
+            mapped: mapped != null,
             ...staleGuardRef.current?.getDebugState?.(),
           })
         }
 
       } else if (msg.type === "executed") {
         const videos = msg.data?.output?.videos || msg.data?.output?.gifs || []
+        const activeTaskId = pollMetaRef.current?.taskId || data.taskId
         if (videos.length > 0) {
           const url = buildMediaViewUrl(videos[0])
           console.log("[video-gen] websocket executed, video src=", url, "media=", videos[0])
-          const activeTaskId = pollMetaRef.current?.taskId || data.taskId
           finalizeVideoCompleted(url, activeTaskId)
-          stopStaleGuard()
-          if (activeTaskId && !pollTimersRef.current) {
-            startTaskPolling(activeTaskId)
-          }
+        } else if (activeTaskId) {
+          pollOnceRef.current?.()
         }
 
       } else if (msg.type === "execution_error") {
@@ -597,7 +912,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
       }
     })
     return remove
-  }, [status, failTask, stopPolling, stopStaleGuard, id, data, applyProgress, t, startTaskPolling, finalizeVideoCompleted])
+  }, [status, failTask, stopPolling, id, data, applyProgress, t, finalizeVideoCompleted])
 
   const showToast = useCallback((msg) => {
     clearTimeout(toastTimerRef.current)
@@ -619,6 +934,24 @@ export default function VideoGenerationNode({ id, data, selected }) {
       return { inEdge, srcNode }
     }, [id])
   )
+  const allNodes = useStore((s) => Array.from(s.nodeInternals.values()))
+  const allEdges = useStore((s) => s.edges)
+  const showExploreBadge = useMemo(
+    () => isExploreNode({ id, type: "video-gen" }, allNodes, allEdges),
+    [id, allNodes, allEdges]
+  )
+  const scriptTable = useMemo(
+    () => getActiveScriptTable(allNodes, allEdges),
+    [allNodes, allEdges]
+  )
+  const storyboardShotIndex = useMemo(() => {
+    if (showExploreBadge || !scriptTable) return null
+    return resolveStoryboardShotIndex({
+      genNodeId: id,
+      scriptTableRef: data.scriptTableRef,
+      scriptTable,
+    })
+  }, [showExploreBadge, scriptTable, id, data.scriptTableRef])
 
   const lastIncomingKeyRef = useRef(null)
 
@@ -639,7 +972,9 @@ export default function VideoGenerationNode({ id, data, selected }) {
 
   const clearNodeTaskState = useCallback(
     (nextStatus = "generating") => {
+      stoppingRef.current = false
       completedLatchRef.current = false
+      lastPersistedVideoUrlRef.current = null
       setMediaRevision((r) => r + 1)
       const el = videoRef.current
       if (el) {
@@ -649,7 +984,10 @@ export default function VideoGenerationNode({ id, data, selected }) {
       }
       setTaskId(null)
       taskIdRef.current = null
+      generationStartedRef.current = false
       setProgress(0)
+      setIsQueued(false)
+      setIsPreparing(false)
       setErrorMessage(null)
       setStatus(nextStatus === "input" ? "input" : "generating")
       setVideoUrl(null)
@@ -680,10 +1018,12 @@ export default function VideoGenerationNode({ id, data, selected }) {
     )
 
     clearNodeTaskState("generating")
+    generationStartedRef.current = false
     setSending(true)
     setStatus("generating")
     setProgress(0)
     setIsQueued(false)
+    setIsPreparing(true)
     setErrorMessage(null)
     try {
       const rawDuration = data.vidDuration || "5s"
@@ -713,8 +1053,10 @@ export default function VideoGenerationNode({ id, data, selected }) {
         resolution = allowedQualities[0]
       }
 
-      const supportsAudio = Boolean(modelCapabilities?.supports_audio)
-      const audioEnabled = supportsAudio && data.vidAudio === "开启"
+      const videoBackend = String(modelCapabilities?.video_backend || "").toLowerCase()
+      const modelForSubmitEarly = data.modelId || modelId || "wan-2.6"
+      const audioEnabled = resolveLtx2AudioEnabled(data.vidAudio, modelForSubmitEarly, modelCapabilities)
+      const audioUrl = videoBackend === "ltx23" ? (data.audioUrl || null) : null
 
       const refMode =
         data.referenceMode
@@ -739,20 +1081,49 @@ export default function VideoGenerationNode({ id, data, selected }) {
       const qualityPresetId = resolveVideoQualityPresetId(data, scriptTable?.data || null)
 
       let modelForSubmit = data.modelId || modelId || "wan-2.6"
-      // 双帧 + 任意 T2V-only → 自动切 i2v；已选 wan-fun-inpaint 保持不变
-      if (
-        refMode !== "freeref"
-        && refMode !== "t2v"
+      const isSeedanceT2v = modelForSubmit === "seedance-2.0"
+      let effectiveRefMode = isSeedanceT2v ? "t2v" : refMode
+      let useFirstFrameOnly = false
+
+      const hasDualKeyframes =
+        effectiveRefMode !== "freeref"
+        && effectiveRefMode !== "t2v"
         && keyframes.first?.imageUrl
         && keyframes.last?.imageUrl
-        && modelForSubmit !== "wan-fun-inpaint"
-        && (!modelForSubmit || T2V_ONLY.has(modelForSubmit) || NO_FLF2V.has(modelForSubmit))
-      ) {
-        modelForSubmit = "wan-i2v"
+      const dualKeyframesDiffer =
+        hasDualKeyframes
+        && keyframes.first.imageUrl !== keyframes.last.imageUrl
+
+      // 双帧 + T2V-only → 切 wan-i2v 并写回节点；NO_FLF2V 保留模型仅用首帧
+      if (hasDualKeyframes && modelForSubmit !== "wan-fun-inpaint") {
+        if (T2V_ONLY.has(modelForSubmit)) {
+          if (modelForSubmit !== "wan-i2v") {
+            modelForSubmit = "wan-i2v"
+            data.onUpdate?.(id, { modelId: "wan-i2v" })
+            showToast("当前模型不支持首尾帧，已切换为 Wan I2V")
+          }
+        } else if (NO_FLF2V.has(modelForSubmit) && dualKeyframesDiffer) {
+          useFirstFrameOnly = true
+          showToast("该模型不支持首尾帧，已用首帧图生")
+        }
+      }
+
+      if (I2AV_ONLY.has(modelForSubmit)) {
+        const hasRefImage = effectiveRefMode === "freeref"
+          ? freeRefs.some((r) => r?.imageUrl)
+          : Boolean(keyframes.first?.imageUrl || keyframes.last?.imageUrl)
+        if (!hasRefImage) {
+          const msg = `${modelForSubmit} 需要参考图`
+          setErrorMessage(msg)
+          data.onUpdate?.(id, { status: "error", error: msg })
+          showToast(msg)
+          setSending(false)
+          return
+        }
       }
 
       if (modelForSubmit === "wan-fun-inpaint") {
-        if (refMode === "freeref" || refMode === "t2v" || !keyframes.first?.imageUrl || !keyframes.last?.imageUrl) {
+        if (effectiveRefMode === "freeref" || effectiveRefMode === "t2v" || !keyframes.first?.imageUrl || !keyframes.last?.imageUrl) {
           const msg = "Wan Fun Inpaint 需要首帧与尾帧"
           setErrorMessage(msg)
           data.onUpdate?.(id, { status: "error", error: msg })
@@ -767,7 +1138,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
         model:           modelForSubmit,
         prompt:          promptForSubmit,
         quality_preset_id: qualityPresetId !== "auto" ? qualityPresetId : undefined,
-        sampling_profile: data.samplingProfile === "quality" ? "quality" : "fast",
+        sampling_profile: data.samplingProfile === "fast" ? "fast" : "quality",
         mentions:        mentionsList,
         ratio,
         resolution,
@@ -775,14 +1146,21 @@ export default function VideoGenerationNode({ id, data, selected }) {
         audio:           audioEnabled,
         count:           1,
         node_id:         id,
-        generation_mode: refMode === "freeref" ? "freeref" : "keyframe",
+        generation_mode: effectiveRefMode === "freeref" ? "freeref" : "keyframe",
         client_id:       wsManager.getClientId(),
         trace_id:        data.traceId || crypto.randomUUID(),
         camera_move:     data.cameraMove || "auto",
         shot_scale:      data.shotScale || "auto",
         project_id:      isRealProjectId(canvasId) ? canvasId : undefined,
       }
+      if (audioUrl) payload.audio_url = audioUrl
       if (soundNote) payload.sound_note = soundNote
+      if (Array.isArray(data.identityIds) && data.identityIds.length) {
+        payload.identity_ids = data.identityIds
+      }
+      if (Array.isArray(data.entityRefAudit) && data.entityRefAudit.length) {
+        payload.entity_ref_audit = data.entityRefAudit
+      }
 
       // G45: 相连 character-card / 分镜表角色正脸 → 成片后逐帧换脸
       const faceFromCard =
@@ -799,11 +1177,11 @@ export default function VideoGenerationNode({ id, data, selected }) {
       payload.use_reactor = Boolean(reactorFace)
       if (reactorFace) payload.reactor_face_image = reactorFace
 
-      if (refMode === "freeref") {
+      if (effectiveRefMode === "freeref") {
         payload.reference_images = freeRefs.map((r) => r.imageUrl).filter(Boolean)
-      } else if (refMode !== "t2v") {
+      } else if (effectiveRefMode !== "t2v") {
         payload.first_frame = keyframes.first?.imageUrl || null
-        payload.last_frame = keyframes.last?.imageUrl || null
+        payload.last_frame = useFirstFrameOnly ? null : (keyframes.last?.imageUrl || null)
       }
 
       console.log("[video-gen] submit payload", JSON.stringify(payload, null, 2))
@@ -894,10 +1272,15 @@ export default function VideoGenerationNode({ id, data, selected }) {
     })
     staleGuard.start()
     enhanceStaleGuardRef.current = staleGuard
+    const rateLimit = createRateLimitBackoffState()
+    const gatewayRetry = createGatewayPollRetryState()
     const pollOnce = async () => {
+      if (rateLimit.paused || gatewayRetry.paused) return
       try {
         const res = await api.get(`/api/tasks/${activeTaskId}`)
         const task = res.data
+        rateLimit.reset()
+        gatewayRetry.reset()
         staleGuard.touch?.()
         const apiStatus = task.status
         if (apiStatus === "completed" && task.result) {
@@ -924,7 +1307,8 @@ export default function VideoGenerationNode({ id, data, selected }) {
           })
         }
       } catch (e) {
-        if (isNetworkError(e)) return
+        if (isTransientPollError(e) && gatewayRetry.shouldRetry(e)) return
+        if (rateLimit.apply(e)) return
         stopEnhancePolling()
         const msg = parseGenerationError(e, null)
         setEnhancing(false)
@@ -961,10 +1345,15 @@ export default function VideoGenerationNode({ id, data, selected }) {
     })
     staleGuard.start()
     lutStaleGuardRef.current = staleGuard
+    const rateLimit = createRateLimitBackoffState()
+    const gatewayRetry = createGatewayPollRetryState()
     const pollOnce = async () => {
+      if (rateLimit.paused || gatewayRetry.paused) return
       try {
         const res = await api.get(`/api/tasks/${activeTaskId}`)
         const task = res.data
+        rateLimit.reset()
+        gatewayRetry.reset()
         staleGuard.touch?.()
         if (task.status === "completed" && task.result) {
           stopLutPolling()
@@ -987,7 +1376,8 @@ export default function VideoGenerationNode({ id, data, selected }) {
           })
         }
       } catch (e) {
-        if (isNetworkError(e)) return
+        if (isTransientPollError(e) && gatewayRetry.shouldRetry(e)) return
+        if (rateLimit.apply(e)) return
         stopLutPolling()
         data.onUpdate?.(id, {
           lutStatus: "failed",
@@ -1333,9 +1723,30 @@ export default function VideoGenerationNode({ id, data, selected }) {
   }, [data.enhanceTaskId, data.enhanceStatus, enhancing, startEnhancePolling])
 
   const handleStopGeneration = useCallback(async () => {
+    if (stoppingRef.current) return
+    stoppingRef.current = true
     const activeId = taskId || data.taskId
-    stopPolling()
+    const stoppedMsg = t("canvas.gen.stopped")
+
+    stopPolling({ flushProgress: false })
     setSending(false)
+    setStatus("error")
+    setErrorMessage(stoppedMsg)
+    setIsQueued(false)
+    setIsPreparing(false)
+    generationStartedRef.current = false
+    setProgress(0)
+    setTaskId(null)
+    taskIdRef.current = null
+
+    data.onUpdate?.(
+      id,
+      buildClearGenerationTaskPatch({
+        status: "error",
+        error: stoppedMsg,
+      })
+    )
+
     if (activeId) {
       try {
         await cancelCanvasTask(activeId)
@@ -1343,13 +1754,6 @@ export default function VideoGenerationNode({ id, data, selected }) {
         console.error("[video-gen] cancel failed:", err)
       }
     }
-    setStatus("error")
-    setErrorMessage(t("canvas.gen.stopped"))
-    data.onUpdate?.(id, {
-      status: "error",
-      error: t("canvas.gen.stopped"),
-      progress: 0,
-    })
   }, [taskId, data, id, stopPolling, t])
 
   const handleDelete = useCallback(() => {
@@ -1366,7 +1770,8 @@ export default function VideoGenerationNode({ id, data, selected }) {
 
   const isIdle = status === "input" && !data.videoUrl && !videoUrl
   const showUploadRow = isIdle && (selected || isRefSource)
-  const uploadRef = useRef(null)
+  const uploadVideoInputRef = useRef(null)
+  const uploadFirstFrameInputRef = useRef(null)
   const setAssetLibraryOpen = useCanvasStore((s) => s.setAssetLibraryOpen)
 
   const openAssetLibrary = useCallback(() => {
@@ -1374,10 +1779,31 @@ export default function VideoGenerationNode({ id, data, selected }) {
     useCanvasStore.getState().setGenHistoryOpen(false)
   }, [setAssetLibraryOpen])
 
-  const handleTopUpload = useCallback(async (e) => {
+  const handleVideoFileUpload = useCallback(async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
     try {
+      const meta = await uploadVideoFile(file)
+      const patch = buildUploadedVideoNodePatch(meta)
+      data.onUpdate?.(id, patch)
+      setVideoUrl(meta.url)
+      setStatus("completed")
+    } catch (err) {
+      console.error("视频上传失败", err)
+      showToast(err.message || t("common.uploadFail"))
+    }
+    e.target.value = ""
+  }, [id, data, showToast, t])
+
+  const handleFirstFrameUpload = useCallback(async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      if (isVideoFile(file)) {
+        showToast(t("canvas.menu.uploadVideo"))
+        return
+      }
+      assertImageUploadFile(file)
       const url = await uploadImageFile(file)
       const kf = data.keyframes || DEFAULT_KEYFRAMES
       data.onUpdate?.(id, {
@@ -1388,18 +1814,24 @@ export default function VideoGenerationNode({ id, data, selected }) {
         },
       })
     } catch (err) {
-      console.error("上传失败", err)
+      console.error("首帧上传失败", err)
+      showToast(err.message || t("common.uploadFail"))
     }
     e.target.value = ""
-  }, [id, data])
+  }, [id, data, showToast, t])
 
+  const locallyTerminal = status === "error" || status === "timeout"
   const activeGeneration =
-    status === "generating" ||
-    sending ||
-    data.status === "generating" ||
-    data.status === "pending" ||
-    data.status === "queued"
-  const isGenerating = activeGeneration
+    !locallyTerminal
+    && !stoppingRef.current
+    && (
+      status === "generating"
+      || sending
+      || data.status === "generating"
+      || data.status === "pending"
+      || data.status === "queued"
+    )
+  const isGenerating = activeGeneration && !locallyTerminal
   const playbackUrl = activeGeneration
     ? null
     : ensureMediaUrl(videoUrl || data.videoUrl || null)
@@ -1424,6 +1856,78 @@ export default function VideoGenerationNode({ id, data, selected }) {
     : null
   const displayPlaybackUrl =
     videoViewTab === "graded" && lutPlaybackUrl ? lutPlaybackUrl : playbackUrl
+
+  const clearBufferingIfReady = useCallback((el) => {
+    if (!el) return false
+    if (el.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+      setMediaBuffering(false)
+      return true
+    }
+    return false
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!displayPlaybackUrl) {
+      setMediaBuffering(false)
+      return undefined
+    }
+    setMediaBuffering(true)
+    const el = videoRef.current
+    if (clearBufferingIfReady(el)) {
+      return undefined
+    }
+    if (el) {
+      el.load()
+    }
+    const timer = window.setTimeout(() => {
+      clearBufferingIfReady(videoRef.current)
+    }, 12000)
+    return () => window.clearTimeout(timer)
+  }, [displayPlaybackUrl, mediaRevision, clearBufferingIfReady])
+
+  useEffect(() => {
+    const activeId = taskId || data.taskId
+    const currentUrl = videoUrl || data.videoUrl
+    if (!activeId || !currentUrl || status !== "completed") return
+    if (currentUrl.includes("_fs.mp4")) return
+    if (!currentUrl.includes("/api/view") && !currentUrl.includes("/api/uploads/videos/")) return
+
+    let cancelled = false
+    let ticks = 0
+    const pollFaststart = async () => {
+      if (cancelled || ticks >= FASTSTART_UPGRADE_MAX_TICKS) return
+      ticks += 1
+      try {
+        const res = await api.get(`/api/tasks/${activeId}`)
+        const next = res.data?.result ? resolveTaskResultUrl(res.data.result) : null
+        if (
+          next
+          && next !== currentUrl
+          && (next.includes("_fs.mp4") || next.includes("/api/uploads/videos/"))
+        ) {
+          upgradePlaybackUrl(next)
+          return
+        }
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled && ticks < FASTSTART_UPGRADE_MAX_TICKS) {
+        faststartTimer = setTimeout(pollFaststart, FASTSTART_UPGRADE_POLL_MS)
+      }
+    }
+    let faststartTimer = setTimeout(pollFaststart, FASTSTART_UPGRADE_POLL_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(faststartTimer)
+    }
+  }, [
+    taskId,
+    data.taskId,
+    videoUrl,
+    data.videoUrl,
+    status,
+    upgradePlaybackUrl,
+  ])
   const enhanceStatus = data.enhanceStatus || "idle"
   const enhanceRetryPolicy = useMemo(
     () => getRetryPolicy(enhanceError || data.enhanceError || ""),
@@ -1448,6 +1952,8 @@ export default function VideoGenerationNode({ id, data, selected }) {
       batchSize: enhanceBatchSize,
       colorCorrection: enhanceColorCorrection,
       modelSize: enhanceModelSize,
+      availableModelSizes: availableEnhanceModelSizes,
+      enhanceAvailable: enhanceConfig.available,
       error: enhanceError || data.enhanceError || null,
       onUpscaleChange: handleEnhanceUpscaleChange,
       onStrengthChange: handleEnhanceStrengthChange,
@@ -1461,7 +1967,6 @@ export default function VideoGenerationNode({ id, data, selected }) {
       onCancel: () => {},
     }
     setVideoEnhanceBridge(id, enhanceBridgeRef)
-    notifyVideoEnhanceBridge()
   }, [
     id,
     isDone,
@@ -1474,6 +1979,8 @@ export default function VideoGenerationNode({ id, data, selected }) {
     enhanceBatchSize,
     enhanceColorCorrection,
     enhanceModelSize,
+    availableEnhanceModelSizes,
+    enhanceConfig.available,
     enhanceManualMode,
     enhanceReasoning,
     enhanceAnalyzing,
@@ -1515,16 +2022,77 @@ export default function VideoGenerationNode({ id, data, selected }) {
     setEnhanceMenuOpen(false)
   }, [])
 
+  const updateVideoMenuPos = useCallback(() => {
+    const el = videoMenuAnchorRef.current
+    if (!el) return false
+    const rect = el.getBoundingClientRect()
+    if (
+      rect.bottom < 0
+      || rect.top > window.innerHeight
+      || rect.right < 0
+      || rect.left > window.innerWidth
+    ) {
+      return false
+    }
+    setVideoMenu((prev) => {
+      if (!prev) return null
+      return { ...prev, menuPos: computeVideoMenuPos(rect) }
+    })
+    return true
+  }, [])
+
   useEffect(() => {
     if (!videoMenu) return undefined
-    const onDocDown = (e) => {
-      if (videoMenuPortalRef.current?.contains(e.target)) return
+
+    openCanvasDropdown(closeVideoMenu)
+    updateVideoMenuPos()
+
+    const isInside = (e) => {
+      const path = e.composedPath?.() || []
+      if (videoMenuAnchorRef.current && path.includes(videoMenuAnchorRef.current)) return true
+      if (videoMenuPortalRef.current?.contains(e.target)) return true
+      return false
+    }
+
+    const onPointerDown = (e) => {
+      if (isInside(e)) return
       markSuppressPaneMenu()
       closeVideoMenu()
     }
-    document.addEventListener("mousedown", onDocDown)
-    return () => document.removeEventListener("mousedown", onDocDown)
-  }, [videoMenu, closeVideoMenu])
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") closeVideoMenu()
+    }
+    const onReflow = () => updateVideoMenuPos()
+
+    document.addEventListener("pointerdown", onPointerDown, true)
+    document.addEventListener("keydown", onKeyDown)
+    window.addEventListener("scroll", onReflow, true)
+    window.addEventListener("resize", onReflow)
+
+    return () => {
+      closeCanvasDropdown(closeVideoMenu)
+      document.removeEventListener("pointerdown", onPointerDown, true)
+      document.removeEventListener("keydown", onKeyDown)
+      window.removeEventListener("scroll", onReflow, true)
+      window.removeEventListener("resize", onReflow)
+    }
+  }, [videoMenu, closeVideoMenu, updateVideoMenuPos])
+
+  // 画布平移/缩放、节点拖动时持续对齐锚点（fixed portal 不随 React Flow transform 自动移动）
+  useEffect(() => {
+    if (!videoMenu) return undefined
+    let rafId = 0
+    const tick = () => {
+      const ok = updateVideoMenuPos()
+      if (!ok) {
+        closeVideoMenu()
+        return
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [videoMenu, updateVideoMenuPos, viewportTransform, closeVideoMenu])
 
   useEffect(() => {
     if (activeGeneration) {
@@ -1532,22 +2100,27 @@ export default function VideoGenerationNode({ id, data, selected }) {
       return
     }
     setIsPlaying(false)
-    if (videoUrl) {
-      console.log("[video-gen] videoUrl updated:", videoUrl)
-    }
   }, [videoUrl, activeGeneration])
+
+  useEffect(() => {
+    lastPersistedVideoUrlRef.current =
+      toRelativeMediaUrl(data.videoUrl || null) || data.videoUrl || null
+  }, [id, data.videoUrl])
 
   const handleTogglePlay = useCallback((e) => {
     stopFlowPointer(e)
     const el = videoRef.current
     if (!el) return
     if (el.paused) {
+      if (!playbackMuted) {
+        el.muted = false
+      }
       el.play().then(() => setIsPlaying(true)).catch(() => {})
     } else {
       el.pause()
       setIsPlaying(false)
     }
-  }, [])
+  }, [playbackMuted])
 
   const seekFromClientX = useCallback((clientX, barEl) => {
     const el = videoRef.current
@@ -1629,15 +2202,44 @@ export default function VideoGenerationNode({ id, data, selected }) {
     >
       <div className={`gn2-upload-row${showUploadRow ? " gn2-upload-row--visible" : ""}`}>
         <div className="gn2-upload-bar">
-          <button type="button" className="gn2-upload-btn nodrag" aria-label={t("canvas.common.upload")} onClick={() => uploadRef.current?.click()}>
-            <UploadIcon /> {t("canvas.common.upload")}
+          <button
+            type="button"
+            className="gn2-upload-btn nodrag"
+            aria-label={t("canvas.menu.uploadVideo")}
+            onClick={() => uploadVideoInputRef.current?.click()}
+          >
+            <UploadIcon /> {t("canvas.menu.uploadVideo")}
+          </button>
+          <span className="gn2-upload-divider" aria-hidden="true" />
+          <button
+            type="button"
+            className="gn2-upload-btn nodrag"
+            aria-label={t("canvas.prompt.uploadImage")}
+            onClick={() => uploadFirstFrameInputRef.current?.click()}
+          >
+            <UploadIcon /> {t("canvas.prompt.uploadImage")}
           </button>
           <span className="gn2-upload-divider" aria-hidden="true" />
           <button type="button" className="gn2-upload-btn nodrag" aria-label={t("canvas.image.fromLibrary")} onClick={openAssetLibrary}>
             <AssetLibraryIcon /> {t("canvas.image.fromLibrary")}
           </button>
         </div>
-        <input ref={uploadRef} type="file" accept="image/*" hidden onChange={handleTopUpload} aria-label={t("canvas.common.upload")} />
+        <input
+          ref={uploadVideoInputRef}
+          type="file"
+          accept={VIDEO_ACCEPT}
+          hidden
+          onChange={handleVideoFileUpload}
+          aria-label={t("canvas.menu.uploadVideo")}
+        />
+        <input
+          ref={uploadFirstFrameInputRef}
+          type="file"
+          accept={IMAGE_ACCEPT}
+          hidden
+          onChange={handleFirstFrameUpload}
+          aria-label={t("canvas.prompt.uploadImage")}
+        />
       </div>
 
       <div className="gn2-label-row">
@@ -1656,8 +2258,17 @@ export default function VideoGenerationNode({ id, data, selected }) {
         className={`gn2-root gn2-root--video${selected ? " gn2-root--selected" : ""}`}
         style={{ width: videoCardSize.width }}
       >
+        {showExploreBadge ? (
+          <span className="canvas-explore-badge" title={t("canvas.draft.badgeTitle")}>
+            {t("canvas.draft.badge")}
+          </span>
+        ) : storyboardShotIndex != null ? (
+          <span className="canvas-shot-badge">
+            {t("canvas.draft.shotLabel", { n: storyboardShotIndex + 1 })}
+          </span>
+        ) : null}
         {/* Target handle — tgt, top:50% relative to gn2-root */}
-        <Handle type="target" position={Position.Left} id="tgt" style={{ position: 'absolute', top: '50%', left: -1, width: 1, height: 1, minWidth: 1, minHeight: 1, background: 'transparent', border: 'none', opacity: 0, transform: 'translateY(-50%)', zIndex: 25 }} />
+        <Handle type="target" position={Position.Left} id="tgt" className="gn2-edge-handle gn2-edge-handle--target" />
 
         {/* Source handles: large hit area centered on card edge */}
         <Handle type="source" position={Position.Left}  id="src-left"  className="gn2-edge-handle gn2-edge-handle--left"
@@ -1715,14 +2326,28 @@ export default function VideoGenerationNode({ id, data, selected }) {
               <div className="gn2-generating-info">
                 <GenerationBrandLoader />
                 <span className="gn2-pct">
-                  {isQueued ? t("canvas.gen.queued") : `${progress}%`}
+                  {pollRetryHint
+                    ? pollRetryHint
+                    : isPreparing
+                      ? t("canvas.gen.preparing")
+                      : isQueued
+                        ? t("canvas.gen.queued")
+                        : progress > 0
+                          ? `${progress}%`
+                          : t("canvas.gen.inProgress")}
                 </span>
-                <GenerationStopButton onStop={handleStopGeneration} />
+                <GenerationStopButton onStop={handleStopGeneration} disabled={stoppingRef.current} />
               </div>
             </div>
           )}
           {isDone && displayPlaybackUrl && (
             <div className="gn2-video-wrap">
+              {mediaBuffering && (
+                <div className="gn2-video-buffering nodrag nopan" aria-live="polite">
+                  <div className="gn2-video-buffering-shimmer" />
+                  <span className="gn2-video-buffering-label">{t("canvas.video.buffering")}</span>
+                </div>
+              )}
               {lutPlaybackUrl && (
                 <div className="gn2-lut-tabs nodrag nopan" onPointerDown={stopFlowPointer}>
                   <button
@@ -1747,27 +2372,30 @@ export default function VideoGenerationNode({ id, data, selected }) {
                 className="gn2-result-video"
                 src={displayPlaybackUrl}
                 loop
-                muted
+                muted={playbackMuted}
                 playsInline
-                preload="metadata"
+                preload="auto"
                 controls={false}
                 draggable={false}
                 onDragStart={(e) => e.preventDefault()}
                 onPlay={() => setIsPlaying(true)}
                 onPause={() => setIsPlaying(false)}
                 onEnded={() => setIsPlaying(false)}
-                onLoadedData={() => {
-                  console.log("[video-gen] video loaded:", playbackUrl)
-                }}
+                onCanPlay={() => setMediaBuffering(false)}
+                onLoadedData={() => setMediaBuffering(false)}
+                onPlaying={() => setMediaBuffering(false)}
+                onWaiting={() => setMediaBuffering(true)}
                 onLoadedMetadata={(e) => {
                   setPlaybackDuration(e.currentTarget.duration || 0)
                   setPlaybackProgress(0)
+                  clearBufferingIfReady(e.currentTarget)
                 }}
                 onTimeUpdate={(e) => {
                   if (isScrubbingRef.current) return
                   setPlaybackProgress(e.currentTarget.currentTime || 0)
                 }}
                 onError={(e) => {
+                  setMediaBuffering(false)
                   const el = e.currentTarget
                   const code = el?.error?.code
                   const hint =
@@ -1832,6 +2460,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
                 onClick={stopFlowPointer}
               >
                 <button
+                  ref={videoMenuAnchorRef}
                   type="button"
                   className="cell-dots-btn nodrag nopan"
                   aria-label={t("canvas.video.moreActions")}
@@ -1839,9 +2468,13 @@ export default function VideoGenerationNode({ id, data, selected }) {
                   onMouseDown={stopFlowPointer}
                   onClick={(e) => {
                     stopFlowPointer(e)
-                    const rect = e.currentTarget.getBoundingClientRect()
-                    const menuPos = computeVideoMenuPos(rect)
-                    setVideoMenu((prev) => (prev ? null : { menuPos, playbackUrl }))
+                    if (videoMenu) {
+                      closeVideoMenu()
+                      return
+                    }
+                    const anchor = videoMenuAnchorRef.current ?? e.currentTarget
+                    const menuPos = resolveVideoMenuPos(anchor, e.clientX, e.clientY)
+                    setVideoMenu({ menuPos, playbackUrl })
                   }}
                 >
                   ⋯
@@ -1901,7 +2534,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
                   <video
                     className="gn2-enhance-compare-video"
                     src={playbackUrl}
-                    muted
+                    muted={playbackMuted}
                     playsInline
                     controls
                     preload="metadata"
@@ -1912,7 +2545,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
                   <video
                     className="gn2-enhance-compare-video"
                     src={enhancedPlaybackUrl}
-                    muted
+                    muted={playbackMuted}
                     playsInline
                     controls
                     preload="metadata"
@@ -1976,7 +2609,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
         createPortal(
           <div
             ref={videoMenuPortalRef}
-            className={`cell-menu-portal gn2-dots-menu nodrag nopan ${getThemePageClass()}`}
+            className={`cell-menu-portal nodrag nopan ${getThemePageClass()}`}
             style={{
               position: "fixed",
               top: videoMenu.menuPos.y,
@@ -2054,6 +2687,7 @@ export default function VideoGenerationNode({ id, data, selected }) {
                           batchSize={enhanceBatchSize}
                           colorCorrection={enhanceColorCorrection}
                           modelSize={enhanceModelSize}
+                          availableModelSizes={availableEnhanceModelSizes}
                           error={enhanceError}
                           onManualModeChange={handleEnhanceManualModeChange}
                           onAdvancedOpenChange={handleEnhanceAdvancedOpenChange}
@@ -2106,3 +2740,5 @@ export default function VideoGenerationNode({ id, data, selected }) {
     </div>
   )
 }
+
+export default memo(VideoGenerationNode, videoGenerationPropsAreEqual)

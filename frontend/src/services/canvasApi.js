@@ -1,8 +1,10 @@
 import api from "./api"
 
-export async function listCanvasProjects({ teamId = null } = {}) {
+export async function listCanvasProjects({ teamId = null, limit = null, offset = 0 } = {}) {
   const params = {}
   if (teamId) params.team_id = teamId
+  if (limit != null) params.limit = limit
+  if (offset) params.offset = offset
   const res = await api.get("/api/canvas/projects", { params })
   return res.data?.projects ?? []
 }

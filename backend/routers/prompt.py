@@ -38,6 +38,12 @@ from services.prompt_builder import (
 from services.quota_service import create_task_record
 from services.shot_prompt_package import build_shot_prompt_package
 from services.split_shot_beats import split_shot_beats
+from services.entity_refs import (
+    MissingIdentityError,
+    identity_lock_lines,
+    resolve_cast_refs_for_row,
+    validate_row_identity,
+)
 from services.script_shot_strategy import evaluate_visual_reference
 from services.prompt_intent import classify_user_intent
 from trace_bus import push_trace
@@ -284,13 +290,36 @@ async def build_script_shot(
     if not description:
         raise HTTPException(status_code=400, detail="请填写画面描述")
 
+    cast_lib = [c for c in (body.cast_library or []) if c.get("type") != "scene"]
+    row_dict = body.row if isinstance(body.row, dict) else {}
+    if not row_dict and body.identity_ids:
+        row_dict = {"identityIds": body.identity_ids}
+    try:
+        validate_row_identity(row_dict, cast_lib)
+    except MissingIdentityError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "missing_identity",
+                "message": exc.message,
+                "names": exc.names,
+                "identity_ids": exc.identity_ids,
+            },
+        ) from exc
+
+    resolved_cast = resolve_cast_refs_for_row(row_dict, cast_lib)
+    identity_lines = identity_lock_lines(resolved_cast)
+    theme_context = (body.theme_context or "").strip()
+    if identity_lines:
+        theme_context = f"{theme_context}\n{identity_lines}".strip() if theme_context else identity_lines
+
     workflow_type = _resolve_workflow_type(body.model_id)
     prior = [item.model_dump() for item in body.prior_shots]
     built = build_script_shot_prompt(
         description,
         workflow_type,
         global_style=body.global_style,
-        theme_context=body.theme_context,
+        theme_context=theme_context,
         prior_shots=prior,
         shot_number=body.shot_number,
         continuity_mode=body.continuity_mode,

@@ -16,6 +16,7 @@ function usePickerGroups(fromEdge, sourceNodeType) {
         items: [
           { type: "image-gen", action: "create-image", icon: "sparkle", label: t("canvas.menu.imageGen"), sub: t("canvas.menu.subImageStyle") },
           { type: "video-gen", action: "create-video", icon: "video", label: t("canvas.menu.videoGen"), sub: t("canvas.menu.subVideoStyle") },
+          { type: "short-video-factory", action: "create-short-video", icon: "video", label: t("canvas.menu.shortVideoFactory"), sub: t("canvas.menu.subShortVideoFactory") },
           { type: "text-note", action: "create-text", icon: "text", label: t("canvas.menu.textNote"), sub: t("canvas.menu.subTextNote") },
           { type: "script-table", action: "create-script-table", icon: "script", label: t("canvas.menu.scriptTable"), sub: t("canvas.menu.subScriptTable") },
           { type: "character-card", action: "create-character-card", icon: "text", label: t("canvas.menu.characterCard"), sub: t("canvas.menu.subCharacterCard") },

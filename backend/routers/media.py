@@ -1,20 +1,24 @@
 import logging
 from pathlib import Path
+from typing import Annotated
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from comfyui import client as comfyui
 from core.comfyui_settings import resolve_comfyui_node_url
 from core.config import settings
-from core.dependencies import get_current_user, get_media_user
+from core.dependencies import get_current_user, get_media_user, security
 from core.logging_setup import studio_print
 from db.session import get_db
 from models import User
 from services.media_access import (
     issue_media_ticket,
+    resolve_media_user,
     sanitize_filename,
     sanitize_upload_rel_path,
     user_can_access_comfy_output,
@@ -42,6 +46,40 @@ async def issue_user_media_ticket(user: User = Depends(get_current_user)):
     return issue_media_ticket(user.id)
 
 
+@router.get("/api/media/auth-check")
+async def media_auth_check(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+    db: Session = Depends(get_db),
+    mt: str | None = Query(None, alias="mt"),
+):
+    """
+    Nginx auth_request 子请求：只校验 Bearer/?mt= 与资源归属，不读文件体。
+    视频文件由 Nginx 静态直出（见 deploy/nginx-*.conf）。
+
+    注意：auth_request 子请求的 $args 常为空，mt 需从 X-Original-URI 回读。
+    """
+    original = request.headers.get("x-original-uri") or ""
+    path = urlparse(original).path if original else ""
+    if not (mt or "").strip() and original:
+        qs = parse_qs(urlparse(original).query)
+        vals = qs.get("mt") or []
+        mt = vals[0] if vals else None
+
+    bearer_user = None
+    if credentials and credentials.scheme.lower() == "bearer":
+        bearer_user = get_current_user(credentials, db)
+    user = resolve_media_user(db, bearer_user=bearer_user, media_ticket=mt)
+
+    prefix = "/api/uploads/"
+    if not path.startswith(prefix):
+        raise HTTPException(status_code=400, detail="非法媒体路径")
+    safe_rel = sanitize_upload_rel_path(path[len(prefix) :])
+    if not user_can_access_upload(db, user, safe_rel):
+        raise HTTPException(status_code=403, detail="无权访问该上传文件")
+    return Response(status_code=200)
+
+
 @router.get("/api/storage/info")
 async def storage_info(user: User = Depends(get_current_user)):
     try:
@@ -61,6 +99,7 @@ async def serve_upload(
     user: User = Depends(get_media_user),
     db: Session = Depends(get_db),
 ):
+    """回退路径：直连后端时仍可用；生产环境视频由 Nginx 静态直出。"""
     safe_rel = sanitize_upload_rel_path(rel_path)
     if not user_can_access_upload(db, user, safe_rel):
         raise HTTPException(status_code=403, detail="无权访问该上传文件")

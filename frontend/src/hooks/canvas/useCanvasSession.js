@@ -6,6 +6,8 @@ import {
   releaseCanvasSession,
 } from "../../services/canvasApi"
 import { canvasWsManager } from "../../services/canvasWs"
+import { isNetworkError } from "../../components/canvas/taskNetworkError"
+import { createRateLimitBackoffState } from "../../utils/canvas/rateLimitBackoff"
 import { useAuth } from "../../contexts/AuthContext"
 import { getT } from "../../utils/locale"
 import { readDisplayName } from "../../utils/canvas/commentUserDisplay"
@@ -16,6 +18,7 @@ function personLabel(who) {
 }
 
 const HEARTBEAT_MS = 25000
+const HEARTBEAT_NETWORK_FAIL_MAX = 2
 const VIEWER_LOCK_POLL_MS = 12000
 const EDIT_REQUEST_TIMEOUT_MS = 30000
 
@@ -31,6 +34,8 @@ export function useCanvasSession(projectId, { enabled = true, onRemoteUpdate = n
   const lockHolderRef = useRef(null)
   const heartbeatTimerRef = useRef(null)
   const editRequestTimerRef = useRef(null)
+  const heartbeatFailRef = useRef(0)
+  const heartbeatRateLimitRef = useRef(createRateLimitBackoffState())
   const [isEditor, setIsEditor] = useState(false)
   const [lockHolder, setLockHolder] = useState(null)
   const [kickedNotice, setKickedNotice] = useState(null)
@@ -96,14 +101,25 @@ export function useCanvasSession(projectId, { enabled = true, onRemoteUpdate = n
 
   const startHeartbeat = useCallback(() => {
     stopHeartbeat()
+    heartbeatFailRef.current = 0
+    heartbeatRateLimitRef.current.reset()
     heartbeatTimerRef.current = setInterval(async () => {
       const sid = sessionIdRef.current
       if (!sid || !projectId) return
+      if (heartbeatRateLimitRef.current.paused) return
       try {
         await heartbeatCanvasSession(projectId, sid)
-      } catch {
+        heartbeatFailRef.current = 0
+        heartbeatRateLimitRef.current.reset()
+      } catch (err) {
+        if (isNetworkError(err) || heartbeatRateLimitRef.current.apply(err)) {
+          heartbeatFailRef.current += 1
+          if (heartbeatFailRef.current < HEARTBEAT_NETWORK_FAIL_MAX) return
+        }
         setIsEditor(false)
         sessionIdRef.current = null
+        heartbeatFailRef.current = 0
+        heartbeatRateLimitRef.current.reset()
         setKickedNotice(getT()("canvas.session.expired"))
       }
     }, HEARTBEAT_MS)

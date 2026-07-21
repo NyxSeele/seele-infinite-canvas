@@ -347,6 +347,55 @@
   box-shadow: var(--adm-card-shadow);
 }
 
+.adm-tools-section {
+  margin-bottom: 28px;
+}
+
+.adm-tools-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--adm-text-sub);
+  margin-bottom: 12px;
+}
+
+.adm-tool-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--adm-surface);
+  backdrop-filter: var(--adm-glass-blur);
+  -webkit-backdrop-filter: var(--adm-glass-blur);
+  border: 1px solid var(--adm-border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: var(--adm-card-shadow);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.adm-tool-card:hover {
+  border-color: rgba(52, 211, 153, 0.45);
+  transform: translateY(-1px);
+}
+
+.adm-tool-card-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.adm-tool-card-desc {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--adm-text-sub);
+}
+
+.adm-tool-card-action {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--adm-accent-light);
+}
+
 .adm-activity-title {
   font-size: 14px;
   font-weight: 600;

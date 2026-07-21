@@ -1502,6 +1502,42 @@ body:has(.rf-page--light) .ap-cast-pick-popover__asset:hover:not(:disabled) {
   background: var(--ap-border);
 }
 
+.ap-plus-menu--skills {
+  min-width: 260px;
+  max-height: min(420px, 55vh);
+  overflow-y: auto;
+}
+
+.ap-plus-menu__skills-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  font-size: 12px;
+  color: var(--ap-muted);
+}
+
+.ap-plus-menu__skills-close {
+  border: none;
+  background: transparent;
+  color: var(--ap-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.ap-plus-menu__skills-status {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--ap-muted);
+}
+
+.ap-plus-menu__skills-status--err {
+  color: #e07070;
+}
+
 .ap-mode-tooltip {
   position: absolute;
   left: 50%;

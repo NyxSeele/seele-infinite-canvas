@@ -93,7 +93,7 @@ export default function WorkspaceDropSelect({
     mounted,
     closing,
     open,
-    base: `wds-menu wds-menu-portal wds-menu--${placement} ${getThemePageClass()}`,
+    base: `wds-menu wds-menu-portal ws-overlay-root wds-menu--${placement} ${getThemePageClass()}`,
     enterClass: open && !closing
       ? (placement === "top" ? "motion-popover-in motion-popover-in--top" : "motion-popover-in")
       : "",

@@ -2,11 +2,16 @@ import base64
 import json
 import logging
 import random
+import time
 import uuid
+from copy import deepcopy
 from pathlib import Path
+from threading import Lock
+from typing import Callable
 
 import httpx
 
+from comfyui.workflow_registry import load_workflow_template
 from core.logging_setup import studio_print
 from core.comfyui_settings import comfyui_http_url, comfyui_nodes_list, comfyui_node_port, comfyui_ws_url
 
@@ -15,6 +20,10 @@ logger = logging.getLogger(__name__)
 COMFYUI_URL = comfyui_http_url()
 COMFYUI_WS_URL = comfyui_ws_url()
 HTTP_TIMEOUT = 5.0
+COMFY_POLL_CACHE_FRESH_SEC = 4.0
+COMFY_POLL_THROTTLE_SEC = 2.5
+_poll_fetch_lock = Lock()
+_last_comfy_fetch: dict[str, float] = {}
 COMFYUI_UNREACHABLE_MSG = (
     "ComfyUI 服务未启动或无法连接，请先启动 ComfyUI"
 )
@@ -35,16 +44,36 @@ def _acquire_gpu_node_url(
     required_vram: int = 0,
     prefer_short: bool = True,
 ) -> str:
-    """从 GPUPool 选取节点（上传与 prompt 须使用同一 URL）。"""
+    """从 GPUPool 选取可达节点（上传与 prompt 须使用同一 URL）。"""
     from services.gpu_pool import get_gpu_pool
 
     pool = get_gpu_pool()
-    node = pool.get_available_node(
+    preferred = pool.get_available_node(
         required_vram=required_vram,
         prefer_short=prefer_short,
         estimated_duration_sec=estimated_duration_sec,
     )
-    return node.comfyui_url.rstrip("/")
+    candidates = [preferred.comfyui_url.rstrip("/")]
+    for node in pool.nodes:
+        url = node.comfyui_url.rstrip("/")
+        if url in candidates:
+            continue
+        # 高显存任务禁止回落到不满足 required_vram 的节点
+        if required_vram > 0 and node.available_vram < required_vram:
+            continue
+        candidates.append(url)
+
+    last_error: Exception | None = None
+    for url in candidates:
+        try:
+            res = httpx.get(f"{url}/system_stats", timeout=5.0)
+            if res.status_code == 200:
+                return url
+        except (httpx.ConnectError, httpx.HTTPError, httpx.TimeoutException) as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("无可用 ComfyUI 节点")
 
 
 HISTORY_LIMIT = 50
@@ -71,13 +100,13 @@ WAN22_QUALITY_STEPS = 8  # G31 sampling_profile=quality
 
 
 def resolve_wan_steps(sampling_profile: str | None = None, steps: int | None = None) -> int:
-    """fast→4，quality→8；显式 steps 优先。"""
+    """fast→4，quality→8；未指定默认 quality；显式 steps 优先。"""
     if steps is not None:
         return max(2, int(steps))
-    profile = (sampling_profile or "fast").strip().lower()
-    if profile == "quality":
-        return int(WAN22_QUALITY_STEPS)
-    return int(WAN22_T2V_STEPS)
+    profile = (sampling_profile or "quality").strip().lower()
+    if profile == "fast":
+        return int(WAN22_T2V_STEPS)
+    return int(WAN22_QUALITY_STEPS)
 
 
 def _wan_sampler_split(steps: int) -> tuple[int, int]:
@@ -86,18 +115,7 @@ def _wan_sampler_split(steps: int) -> tuple[int, int]:
     mid = max(1, s // 2)
     return mid, s
 
-HUNYUAN_CKPT = "hunyuan_video_t2v_720p_bf16.safetensors"
-HUNYUAN_VAE = "hunyuan_video_vae_bf16.safetensors"
-HUNYUAN_CLIP_L = "clip_l.safetensors"
-HUNYUAN_CLIP_LLAVA = "llava_llama3_fp8_scaled.safetensors"
-HUNYUAN15_CKPT = "hunyuanvideo1.5_720p_t2v_fp16.safetensors"
-HUNYUAN15_VAE = "hunyuanvideo15_vae_fp16.safetensors"
-HUNYUAN15_CLIP_QWEN = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
-HUNYUAN15_CLIP_BYT5 = "byt5_small_glyphxl_fp16.safetensors"
-HUNYUAN15_DISTILLED_STEPS = 12
-HUNYUAN15_CFG_DISTILLED = 1.0
-HUNYUAN15_CFG_DEFAULT = 6.0
-HY_CACHE = "74"
+
 WAN_T5_ENCODER = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 LTX_T5_ENCODER = "t5xxl_fp16.safetensors"
 LTX2_CKPT = "ltx-2-19b-dev-fp4.safetensors"
@@ -105,12 +123,14 @@ LTX2_GEMMA_ENCODER = "gemma_3_12B_it_fp4_mixed.safetensors"
 LTX2_UPSCALER = "ltx-2-spatial-upscaler-x2-1.0.safetensors"
 LTX2_DISTILLED_LORA = "ltx-2-19b-distilled-lora-384.safetensors"
 LTX2_CAMERA_LORA = "ltx-2-19b-lora-camera-control-dolly-left.safetensors"
-LTX2_WORKFLOW_TEMPLATE = (
-    Path(__file__).resolve().parent / "workflows" / "ltx2_fp4_t2v_api.json"
-)
-LTX2_I2V_WORKFLOW_TEMPLATE = (
-    Path(__file__).resolve().parent / "workflows" / "ltx2_fp4_i2v_api.json"
-)
+LTX23_UNET = "ltx-2.3-22b-dev_transformer_only_fp8_scaled.safetensors"
+LTX23_TEXT_PROJ = "ltx-2.3_text_projection_bf16.safetensors"
+LTX23_DISTILLED_LORA = "ltx-2.3-22b-distilled-lora-384.safetensors"
+LTX23_AUDIO_VAE = "LTX23_audio_vae_bf16.safetensors"
+LTX23_VIDEO_VAE = "LTX23_video_vae_bf16.safetensors"
+LTX23_WORKFLOW_KEY = "ltx23_i2av_api.json"
+LTX2_WORKFLOW_KEY = "ltx2_fp4_t2v_api.json"
+LTX2_I2V_WORKFLOW_KEY = "ltx2_fp4_i2v_api.json"
 LTX_T5_DOWNLOAD_HINT = (
     "LTX 视频需要 T5 文本编码器。请将 t5xxl_fp16.safetensors 放入 "
     "ComfyUI/models/text_encoders/ 目录后重试。"
@@ -185,8 +205,6 @@ VIDEO_WORKFLOW_CLASS = VIDEO_SAVE_CLASS | {
     "WanFirstLastFrameToVideo",
     "WanFunInpaintToVideo",
     "LoadImage",
-    "HunyuanVideoModelLoader",
-    "HunyuanVideoSampler",
     "SeedVR2LoadDiTModel",
     "SeedVR2LoadVAEModel",
     "SeedVR2VideoUpscaler",
@@ -225,7 +243,6 @@ VIDEO_CKPT_KEYWORDS = (
     "svd",
     "animatediff",
     "mochi",
-    "hunyuan",
     "cogvideo",
     "wan2",
     "genmo",
@@ -327,22 +344,6 @@ WAN_TEXT_ENCODE = W22_POS
 WAN_SAMPLER = W22_SAMPLE_L
 WAN_DECODE = W22_DECODE
 WAN_SAVE = W22_SAVE
-
-# HunyuanVideo 原生 T2V 节点
-HY_UNET = "60"
-HY_DUAL_CLIP = "61"
-HY_VAE = "62"
-HY_CLIP_POS = "63"
-HY_CLIP_NEG = "64"
-HY_EMPTY_LATENT = "65"
-HY_MODEL_SAMPLING = "66"
-HY_SCHEDULER = "67"
-HY_NOISE = "68"
-HY_SAMPLER_SEL = "69"
-HY_GUIDER = "70"
-HY_SAMPLER = "71"
-HY_DECODE = "72"
-HY_SAVE = "73"
 
 _object_info_cache_by_node: dict[str, dict] = {}
 
@@ -512,7 +513,9 @@ async def _fetch_object_info(node_url: str | None = None) -> dict:
     cached = _object_info_cache_by_node.get(base)
     if cached is not None:
         return cached
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    # 远程 H800 object_info 体积大，放宽超时
+    timeout = 30.0 if base.startswith("https://") else HTTP_TIMEOUT
+    async with httpx.AsyncClient(timeout=timeout) as client:
         res = await client.get(f"{base}/object_info")
         res.raise_for_status()
         _object_info_cache_by_node[base] = res.json()
@@ -554,10 +557,18 @@ async def ensure_video_mp4_capable(node_url: str | None = None) -> None:
         if node_url
         else comfyui_nodes_list()
     )
+    last_error: Exception | None = None
     for url in nodes:
-        info = await _fetch_object_info(url)
+        try:
+            info = await _fetch_object_info(url)
+        except (httpx.ConnectError, httpx.HTTPError) as exc:
+            last_error = exc
+            logger.warning("ensure_video_mp4_capable skip unreachable node %s: %s", url, exc)
+            continue
         if _can_output_mp4(info):
             return
+    if last_error is not None and len(nodes) == 1:
+        raise last_error
     extra = ""
     if not VHS_PLUGIN_PATH.is_dir():
         extra = f"\n未检测到插件目录：{VHS_PLUGIN_PATH}"
@@ -664,7 +675,7 @@ def align_ltx_dimensions(width: int, height: int) -> tuple[int, int]:
 
 
 def align_video_dimensions(width: int, height: int, *, multiple: int = 16) -> tuple[int, int]:
-    """通用视频宽高对齐（Wan / Hunyuan 等）。"""
+    """通用视频宽高对齐（Wan 等）。"""
     m = max(8, int(multiple))
     w = max(m, int(width))
     h = max(m, int(height))
@@ -1013,17 +1024,15 @@ def build_ltx_video_workflow(
 
 
 def _load_ltx2_fp4_template() -> dict:
-    path = LTX2_WORKFLOW_TEMPLATE
-    if not path.is_file():
-        raise FileNotFoundError(f"LTX2 workflow 模板不存在: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return load_workflow_template(LTX2_WORKFLOW_KEY)
 
 
 def _load_ltx2_fp4_i2v_template() -> dict:
-    path = LTX2_I2V_WORKFLOW_TEMPLATE
-    if not path.is_file():
-        raise FileNotFoundError(f"LTX2 I2V workflow 模板不存在: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return load_workflow_template(LTX2_I2V_WORKFLOW_KEY)
+
+
+def _load_ltx23_i2av_template() -> dict:
+    return load_workflow_template(LTX23_WORKFLOW_KEY)
 
 
 def _strip_ltx2_audio_branch(workflow: dict) -> None:
@@ -1053,6 +1062,77 @@ def _strip_ltx2_audio_branch(workflow: dict) -> None:
         workflow["122"]["inputs"]["audio"] = None
 
 
+# LTX2 quality profiles（反馈调优：默认关 camera LoRA、quality 加步数）
+LTX2_QUALITY_PROFILES: dict[str, dict] = {
+    "fast": {
+        "steps": 20,
+        "cfg_stage1": 4.0,
+        "cfg_stage2": 1.0,
+        "stage2_sigmas": "0.909375, 0.725, 0.421875, 0.0",
+        "distilled_strength": 1.0,
+        "camera_lora_strength": 0.0,
+    },
+    "quality": {
+        "steps": 28,
+        "cfg_stage1": 4.5,
+        "cfg_stage2": 1.2,
+        "stage2_sigmas": "1.0, 0.909375, 0.725, 0.5, 0.25, 0.0",
+        "distilled_strength": 0.85,
+        "camera_lora_strength": 0.0,
+        "i2v_img_compression": 20,
+    },
+}
+
+
+def _normalize_ltx2_sampling_profile(sampling_profile: str | None) -> str:
+    profile = (sampling_profile or "quality").strip().lower()
+    return profile if profile in LTX2_QUALITY_PROFILES else "quality"
+
+
+def _apply_ltx2_quality_tuning(
+    workflow: dict,
+    *,
+    sampling_profile: str | None = "quality",
+    camera_lora_strength: float | None = None,
+    distilled_strength: float | None = None,
+) -> str:
+    """写入 steps/CFG/LoRA；默认关闭 dolly-left camera LoRA（模板硬编码 strength=1 会毁镜头）。"""
+    profile_key = _normalize_ltx2_sampling_profile(sampling_profile)
+    cfg = LTX2_QUALITY_PROFILES[profile_key]
+    cam = (
+        float(camera_lora_strength)
+        if camera_lora_strength is not None
+        else float(cfg["camera_lora_strength"])
+    )
+    dist = (
+        float(distilled_strength)
+        if distilled_strength is not None
+        else float(cfg["distilled_strength"])
+    )
+
+    if "98" in workflow:
+        workflow["98"]["inputs"]["steps"] = int(cfg["steps"])
+    if "128" in workflow:
+        workflow["128"]["inputs"]["cfg"] = float(cfg["cfg_stage1"])
+    if "103" in workflow:
+        workflow["103"]["inputs"]["cfg"] = float(cfg["cfg_stage2"])
+    if "100" in workflow:
+        workflow["100"]["inputs"]["sigmas"] = str(cfg["stage2_sigmas"])
+    if "132" in workflow:
+        workflow["132"]["inputs"]["strength_model"] = dist
+    # 133/134 = camera control LoRA（默认 0，避免所有镜头被强制 dolly-left）
+    for node_id in ("133", "134"):
+        if node_id in workflow:
+            workflow[node_id]["inputs"]["strength_model"] = cam
+
+    # I2V：quality 档降低 img_compression，减轻首帧糊化
+    i2v_comp = cfg.get("i2v_img_compression")
+    if i2v_comp is not None and "202" in workflow:
+        workflow["202"]["inputs"]["img_compression"] = int(i2v_comp)
+
+    return profile_key
+
+
 def build_ltx2_fp4_t2v_workflow(
     positive_prompt: str,
     negative_prompt: str,
@@ -1063,7 +1143,9 @@ def build_ltx2_fp4_t2v_workflow(
     *,
     model_filename: str | None = None,
     ckpt_name: str | None = None,
-    audio: bool = True,
+    audio: bool = False,
+    sampling_profile: str | None = "quality",
+    camera_lora_strength: float | None = None,
 ) -> dict:
     """
     LTX-2 19B fp4 文生视频（云绘 fp4 工作流 API 平坦子图）。
@@ -1102,6 +1184,12 @@ def build_ltx2_fp4_t2v_workflow(
     if "99" in workflow:
         workflow["99"]["inputs"]["text_encoder"] = LTX2_GEMMA_ENCODER
 
+    _apply_ltx2_quality_tuning(
+        workflow,
+        sampling_profile=sampling_profile,
+        camera_lora_strength=camera_lora_strength,
+    )
+
     if not audio:
         _strip_ltx2_audio_branch(workflow)
 
@@ -1120,7 +1208,9 @@ def build_ltx2_fp4_i2v_workflow(
     *,
     model_filename: str | None = None,
     ckpt_name: str | None = None,
-    audio: bool = True,
+    audio: bool = False,
+    sampling_profile: str | None = "quality",
+    camera_lora_strength: float | None = None,
 ) -> dict:
     """
     LTX-2 19B fp4 图生视频（云绘 fp4 I2V 工作流 API 平坦子图）。
@@ -1163,8 +1253,91 @@ def build_ltx2_fp4_i2v_workflow(
     if "99" in workflow:
         workflow["99"]["inputs"]["text_encoder"] = LTX2_GEMMA_ENCODER
 
+    _apply_ltx2_quality_tuning(
+        workflow,
+        sampling_profile=sampling_profile,
+        camera_lora_strength=camera_lora_strength,
+    )
+
     if not audio:
         _strip_ltx2_audio_branch(workflow)
+
+    return workflow
+
+
+def _normalize_resize_image_mask_inputs(inputs: dict) -> None:
+    """ComfyUI V3 ResizeImageMaskNode 使用 resize_type.* 嵌套字段名。"""
+    if inputs.get("resize_type") != "scale dimensions":
+        return
+    for key in ("width", "height", "crop"):
+        if key in inputs:
+            inputs[f"resize_type.{key}"] = inputs.pop(key)
+
+
+def build_ltx23_i2av_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    image_filename: str,
+    audio_filename: str | None = None,
+    width: int = 848,
+    height: int = 480,
+    duration_sec: int = 5,
+    seed: int | None = None,
+    *,
+    sampling_profile: str | None = "quality",
+) -> dict:
+    """LTX-2.3 图+音生视频（云绘 I2AV 模板，Kijai 分片权重）。"""
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    workflow = deepcopy(_load_ltx23_i2av_template())
+    positive = str(positive_prompt).strip()
+    negative = str(negative_prompt).strip()
+    image_name = str(image_filename or "").strip()
+    if not image_name:
+        raise ValueError("LTX-2.3 I2AV 需要 image_filename")
+
+    out_w, out_h = align_ltx_dimensions(width, height)
+    length = int(duration_sec) * 25 + 1
+
+    workflow["42"]["inputs"]["unet_name"] = LTX23_UNET
+    workflow["43"]["inputs"]["clip_name1"] = LTX2_GEMMA_ENCODER
+    workflow["43"]["inputs"]["clip_name2"] = LTX23_TEXT_PROJ
+    workflow["46"]["inputs"]["lora_name"] = LTX23_DISTILLED_LORA
+    workflow["51"]["inputs"]["vae_name"] = LTX23_AUDIO_VAE
+    workflow["52"]["inputs"]["vae_name"] = LTX23_VIDEO_VAE
+    workflow["35"]["inputs"]["text"] = negative
+    workflow["36"]["inputs"]["text"] = positive
+    workflow["48"]["inputs"]["image"] = image_name
+    workflow["32"]["inputs"]["noise_seed"] = int(seed)
+    workflow["22"]["inputs"]["width"] = out_w
+    workflow["22"]["inputs"]["height"] = out_h
+    workflow["22"]["inputs"]["length"] = length
+    workflow.pop("62", None)
+
+    if audio_filename:
+        workflow["60"]["inputs"]["audio"] = str(audio_filename).strip()
+        workflow["60"]["inputs"]["duration"] = int(duration_sec)
+        workflow["60"]["inputs"]["start_time"] = 0
+    else:
+        for node_id in ("60", "61", "70", "15", "10"):
+            workflow.pop(node_id, None)
+        workflow["8"]["inputs"]["latent_image"] = ["23", 0]
+        workflow["74"]["inputs"]["samples"] = ["8", 0]
+        workflow["38"]["inputs"].pop("audio", None)
+
+    if "33" in workflow:
+        _normalize_resize_image_mask_inputs(workflow["33"]["inputs"])
+
+    profile = (sampling_profile or "quality").strip().lower()
+    if profile == "fast" and "59" in workflow:
+        workflow["59"]["inputs"]["sigmas"] = (
+            "1., 0.975, 0.909375, 0.725, 0.421875, 0.0"
+        )
+        if "46" in workflow:
+            workflow["46"]["inputs"]["strength_model"] = 0.85
+    elif "46" in workflow:
+        workflow["46"]["inputs"]["strength_model"] = 0.7
 
     return workflow
 
@@ -1394,6 +1567,7 @@ def build_wan_video_workflow(
             "inputs": {"vae_name": WAN_VAE},
         },
         W22_EMPTY: {
+            # ComfyUI 上游节点类名（Wan 2.2 T2V 复用；与已下线 Hunyuan 产品无关）
             "class_type": "EmptyHunyuanLatentVideo",
             "inputs": {
                 "width": int(width),
@@ -2081,20 +2255,17 @@ def build_wan_fun_inpaint_workflow(
     }
 
 
-HUNYUAN_DEFAULT_STEPS = 50
 HUNYUAN_DEFAULT_WIDTH = 1280
 HUNYUAN_DEFAULT_HEIGHT = 720
 
 
-def _is_hunyuan_15_checkpoint(model_filename: str | None) -> bool:
-    name = (model_filename or "").strip().lower()
-    if not name:
-        return True  # 默认走 1.5
-    if "hunyuanvideo1.5" in name or "hunyuan_video_1.5" in name or "hunyuanvideo15" in name:
-        return True
-    if name == HUNYUAN_CKPT.lower() or "hunyuan_video_t2v" in name:
-        return False
-    return "1.5" in name or name == HUNYUAN15_CKPT.lower()
+def resolve_hunyuan_cache_backend(info: dict | None) -> str | None:
+    """优先 MagCache（专支持 hunyuan_video1.5），否则 EasyCache。"""
+    if _has_node("MagCache", info):
+        return "magcache"
+    if _has_node("EasyCache", info):
+        return "easycache"
+    return None
 
 
 def build_hunyuan_video_workflow(
@@ -2110,22 +2281,26 @@ def build_hunyuan_video_workflow(
     use_distilled: bool = False,
     cfg_distilled: bool = False,
     use_cache: bool = False,
+    cache_backend: str | None = None,
 ) -> dict:
     """
-    HunyuanVideo T2V。
-    - 1.5（默认）：UNET + DualCLIP(hunyuan_video_15) + EmptyHunyuanVideo15Latent
-    - 原版 13B：DualCLIP(hunyuan_video) + EmptyHunyuanLatentVideo
+    HunyuanVideo 1.5 T2V：UNET + DualCLIP(hunyuan_video_15) + EmptyHunyuanVideo15Latent。
     use_distilled=True → steps=12；cfg_distilled=True → cfg=1.0；
-    use_cache=True → MagCache（不可用时回退 EasyCache）接在 KSampler 前。
+    use_cache=True → MagCache / EasyCache 接在 KSampler 前（cache_backend 可显式指定）。
     """
     if seed is None:
         seed = random.randint(0, 2**32)
 
-    use_15 = _is_hunyuan_15_checkpoint(model_filename)
-    if use_15:
-        ckpt = (model_filename or HUNYUAN15_CKPT).strip() or HUNYUAN15_CKPT
+    raw_ckpt = (model_filename or "").strip()
+    # 仅支持 1.5；旧 13B 文件名一律回退到 1.5 权重
+    if raw_ckpt and (
+        "hunyuanvideo1.5" in raw_ckpt.lower()
+        or "hunyuanvideo15" in raw_ckpt.lower()
+        or "1.5" in raw_ckpt.lower()
+    ):
+        ckpt = raw_ckpt
     else:
-        ckpt = (model_filename or HUNYUAN_CKPT).strip() or HUNYUAN_CKPT
+        ckpt = HUNYUAN15_CKPT
 
     length = video_frame_length(duration_sec)
     positive = str(positive_prompt).strip()
@@ -2134,41 +2309,37 @@ def build_hunyuan_video_workflow(
     if use_distilled and steps is None:
         sample_steps = HUNYUAN15_DISTILLED_STEPS
     else:
-        sample_steps = int(steps) if steps is not None else HUNYUAN_DEFAULT_STEPS
+        sample_steps = int(steps) if steps is not None else HUNYUAN15_DEFAULT_STEPS
     if sample_steps < 1:
-        sample_steps = HUNYUAN15_DISTILLED_STEPS if use_distilled else HUNYUAN_DEFAULT_STEPS
+        sample_steps = (
+            HUNYUAN15_DISTILLED_STEPS if use_distilled else HUNYUAN15_DEFAULT_STEPS
+        )
+    sample_steps = min(sample_steps, HUNYUAN15_MAX_STEPS)
 
     cfg_value = HUNYUAN15_CFG_DISTILLED if cfg_distilled else HUNYUAN15_CFG_DEFAULT
 
+    effective_backend = (cache_backend or "").strip().lower() if use_cache else ""
+    if use_cache and not effective_backend:
+        # 单测 / 未探测时默认 MagCache；线上 submit 会传入探测结果
+        effective_backend = "magcache"
+
     studio_print(
         "comfyui-video",
-        f"Hunyuan workflow: {ckpt} v={'1.5' if use_15 else '13b'} "
+        f"Hunyuan workflow: {ckpt} v=1.5 "
         f"{width}x{height} length={length} steps={sample_steps} cfg={cfg_value} "
-        f"cache={use_cache} distilled={use_distilled}",
+        f"cache={use_cache} backend={effective_backend or '-'} distilled={use_distilled}",
     )
 
-    if use_15:
-        dual_clip = {
-            "class_type": "DualCLIPLoader",
-            "inputs": {
-                "clip_name1": HUNYUAN15_CLIP_QWEN,
-                "clip_name2": HUNYUAN15_CLIP_BYT5,
-                "type": "hunyuan_video_15",
-            },
-        }
-        vae_name = HUNYUAN15_VAE
-        latent_type = "EmptyHunyuanVideo15Latent"
-    else:
-        dual_clip = {
-            "class_type": "DualCLIPLoader",
-            "inputs": {
-                "clip_name1": HUNYUAN_CLIP_L,
-                "clip_name2": HUNYUAN_CLIP_LLAVA,
-                "type": "hunyuan_video",
-            },
-        }
-        vae_name = HUNYUAN_VAE
-        latent_type = "EmptyHunyuanLatentVideo"
+    dual_clip = {
+        "class_type": "DualCLIPLoader",
+        "inputs": {
+            "clip_name1": HUNYUAN15_CLIP_QWEN,
+            "clip_name2": HUNYUAN15_CLIP_BYT5,
+            "type": "hunyuan_video_15",
+        },
+    }
+    vae_name = HUNYUAN15_VAE
+    latent_type = "EmptyHunyuanVideo15Latent"
 
     model_src = HY_UNET
     workflow: dict = {
@@ -2209,8 +2380,7 @@ def build_hunyuan_video_workflow(
         },
     }
 
-    if use_cache:
-        # MagCache（Zehong-Ma/ComfyUI-MagCache）；无自定义节点时可用 EasyCache 原生替代
+    if use_cache and effective_backend == "magcache":
         workflow[HY_CACHE] = {
             "class_type": "MagCache",
             "inputs": {
@@ -2224,6 +2394,28 @@ def build_hunyuan_video_workflow(
             },
         }
         model_src = HY_CACHE
+    elif use_cache and effective_backend == "easycache":
+        workflow[HY_CACHE] = {
+            "class_type": "EasyCache",
+            "inputs": {
+                "model": [HY_UNET, 0],
+                "reuse_threshold": 0.2,
+                "start_percent": 0.15,
+                "end_percent": 0.95,
+                "verbose": False,
+            },
+        }
+        model_src = HY_CACHE
+
+    # 官方 720p T2V flow shift=9
+    workflow[HY_MODEL_SAMPLING] = {
+        "class_type": "ModelSamplingSD3",
+        "inputs": {
+            "model": [model_src, 0],
+            "shift": float(HUNYUAN_T2V_SHIFT),
+        },
+    }
+    model_src = HY_MODEL_SAMPLING
 
     workflow[HY_SAMPLER] = {
         "class_type": "KSampler",
@@ -2246,6 +2438,187 @@ def build_hunyuan_video_workflow(
             "samples": [HY_SAMPLER, 0],
             "vae": [HY_VAE, 0],
         },
+    }
+    workflow[HY_SAVE] = {
+        "class_type": "VHS_VideoCombine",
+        "inputs": _vhs_video_combine_inputs(HY_DECODE),
+    }
+    return workflow
+
+
+# Hunyuan 1.5 I2V 节点（与 T2V 共用部分 ID，独立工作流勿混用）
+HY15I_CLIP_VISION = "50"
+HY15I_CLIP_VISION_ENCODE = "51"
+HY15I_LOAD = "52"
+HY15I_I2V = "53"
+
+
+def build_hunyuan_i2v_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    image_filename: str,
+    width: int = HUNYUAN_DEFAULT_WIDTH,
+    height: int = HUNYUAN_DEFAULT_HEIGHT,
+    duration_sec: int = 5,
+    seed: int | None = None,
+    *,
+    model_filename: str | None = None,
+    steps: int | None = None,
+    use_distilled: bool = False,
+    cfg_distilled: bool = False,
+    use_cache: bool = False,
+    cache_backend: str | None = None,
+) -> dict:
+    """
+    HunyuanVideo 1.5 单帧 I2V：CLIPVision + HunyuanVideo15ImageToVideo。
+    官方 720p：shift=7；非首尾帧 / 非全能参考。
+    """
+    if seed is None:
+        seed = random.randint(0, 2**32)
+    image_name = str(image_filename or "").strip()
+    if not image_name:
+        raise ValueError("图生视频需要参考图文件名")
+
+    ckpt = (model_filename or "").strip() or HUNYUAN15_I2V_CKPT
+    length = video_frame_length(duration_sec)
+    positive = str(positive_prompt).strip()
+    negative = str(negative_prompt).strip() or DEFAULT_VIDEO_NEGATIVE
+
+    if use_distilled and steps is None:
+        sample_steps = HUNYUAN15_DISTILLED_STEPS
+    else:
+        sample_steps = int(steps) if steps is not None else HUNYUAN15_DEFAULT_STEPS
+    if sample_steps < 1:
+        sample_steps = (
+            HUNYUAN15_DISTILLED_STEPS if use_distilled else HUNYUAN15_DEFAULT_STEPS
+        )
+    sample_steps = min(sample_steps, HUNYUAN15_MAX_STEPS)
+    cfg_value = HUNYUAN15_CFG_DISTILLED if cfg_distilled else HUNYUAN15_CFG_DEFAULT
+
+    effective_backend = (cache_backend or "").strip().lower() if use_cache else ""
+    if use_cache and not effective_backend:
+        effective_backend = "magcache"
+
+    studio_print(
+        "comfyui-video",
+        f"Hunyuan I2V workflow: {ckpt} {width}x{height} length={length} "
+        f"steps={sample_steps} cfg={cfg_value} shift={HUNYUAN_I2V_SHIFT} "
+        f"cache={use_cache} backend={effective_backend or '-'}",
+    )
+
+    model_src = HY_UNET
+    workflow: dict = {
+        HY_UNET: {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": ckpt, "weight_dtype": "default"},
+        },
+        HY_DUAL_CLIP: {
+            "class_type": "DualCLIPLoader",
+            "inputs": {
+                "clip_name1": HUNYUAN15_CLIP_QWEN,
+                "clip_name2": HUNYUAN15_CLIP_BYT5,
+                "type": "hunyuan_video_15",
+            },
+        },
+        HY_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": HUNYUAN15_VAE},
+        },
+        HY_CLIP_POS: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": positive, "clip": [HY_DUAL_CLIP, 0]},
+        },
+        HY_CLIP_NEG: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": negative, "clip": [HY_DUAL_CLIP, 0]},
+        },
+        HY15I_CLIP_VISION: {
+            "class_type": "CLIPVisionLoader",
+            "inputs": {"clip_name": HUNYUAN15_CLIP_VISION},
+        },
+        HY15I_LOAD: {
+            "class_type": "LoadImage",
+            "inputs": {"image": image_name},
+        },
+        HY15I_CLIP_VISION_ENCODE: {
+            "class_type": "CLIPVisionEncode",
+            "inputs": {
+                "clip_vision": [HY15I_CLIP_VISION, 0],
+                "image": [HY15I_LOAD, 0],
+                "crop": "center",
+            },
+        },
+        HY15I_I2V: {
+            "class_type": "HunyuanVideo15ImageToVideo",
+            "inputs": {
+                "positive": [HY_CLIP_POS, 0],
+                "negative": [HY_CLIP_NEG, 0],
+                "vae": [HY_VAE, 0],
+                "width": int(width),
+                "height": int(height),
+                "length": int(length),
+                "batch_size": 1,
+                "start_image": [HY15I_LOAD, 0],
+                "clip_vision_output": [HY15I_CLIP_VISION_ENCODE, 0],
+            },
+        },
+    }
+
+    if use_cache and effective_backend == "magcache":
+        workflow[HY_CACHE] = {
+            "class_type": "MagCache",
+            "inputs": {
+                "model": [HY_UNET, 0],
+                "model_type": "hunyuan_video1.5",
+                "magcache_thresh": 0.06,
+                "retention_ratio": 0.2,
+                "magcache_K": 2,
+                "start_step": 0,
+                "end_step": -1,
+            },
+        }
+        model_src = HY_CACHE
+    elif use_cache and effective_backend == "easycache":
+        workflow[HY_CACHE] = {
+            "class_type": "EasyCache",
+            "inputs": {
+                "model": [HY_UNET, 0],
+                "reuse_threshold": 0.2,
+                "start_percent": 0.15,
+                "end_percent": 0.95,
+                "verbose": False,
+            },
+        }
+        model_src = HY_CACHE
+
+    workflow[HY_MODEL_SAMPLING] = {
+        "class_type": "ModelSamplingSD3",
+        "inputs": {
+            "model": [model_src, 0],
+            "shift": float(HUNYUAN_I2V_SHIFT),
+        },
+    }
+    model_src = HY_MODEL_SAMPLING
+
+    # HunyuanVideo15ImageToVideo 输出：positive, negative, latent
+    workflow[HY_SAMPLER] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": int(seed),
+            "steps": sample_steps,
+            "cfg": float(cfg_value),
+            "sampler_name": "euler",
+            "scheduler": "simple",
+            "denoise": 1.0,
+            "model": [model_src, 0],
+            "positive": [HY15I_I2V, 0],
+            "negative": [HY15I_I2V, 1],
+            "latent_image": [HY15I_I2V, 2],
+        },
+    }
+    workflow[HY_DECODE] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": [HY_SAMPLER, 0], "vae": [HY_VAE, 0]},
     }
     workflow[HY_SAVE] = {
         "class_type": "VHS_VideoCombine",
@@ -2332,6 +2705,54 @@ async def _log_and_post_video_workflow(
         f"[{backend}] 已提交 prompt_id={prompt_id} client_id={used_client} node={posted_node}",
     )
     return prompt_id, used_client, workflow, posted_node
+
+
+async def submit_by_workflow_key(
+    key: str,
+    *,
+    patch_fn: Callable[[dict], dict] | None = None,
+    workflow: dict | None = None,
+    client_id: str | None = None,
+    node_url: str | None = None,
+    estimated_duration_sec: int = 120,
+    required_vram: int = 0,
+    prefer_short: bool = True,
+    as_video: bool = False,
+    backend: str = "workflow_key",
+    task_id: str | None = None,
+    width: int = 0,
+    height: int = 0,
+    duration: int = 0,
+    mode: str = "workflow",
+) -> tuple:
+    """Load workflow by registry key, optionally patch, then submit via existing gpu_pool paths."""
+    wf = deepcopy(workflow) if workflow is not None else deepcopy(load_workflow_template(key))
+    if patch_fn is not None:
+        wf = patch_fn(wf)
+    if as_video:
+        return await _log_and_post_video_workflow(
+            wf,
+            client_id=client_id,
+            backend=backend,
+            width=width,
+            height=height,
+            duration=duration,
+            mode=mode,
+            task_id=task_id,
+            estimated_duration_sec=estimated_duration_sec,
+            required_vram=required_vram,
+            node_url=node_url,
+        )
+    prompt_id, used_client, posted_node = await _post_workflow(
+        wf,
+        client_id,
+        task_id=task_id,
+        estimated_duration_sec=estimated_duration_sec,
+        required_vram=required_vram,
+        prefer_short=prefer_short,
+        node_url=node_url,
+    )
+    return prompt_id, used_client, posted_node
 
 
 async def _resolve_video_workflow(
@@ -2465,19 +2886,39 @@ async def _post_workflow(
     from services.gpu_pool import get_gpu_pool
 
     pool = get_gpu_pool()
+    candidate_urls: list[str]
     if node_url:
-        base_url = node_url.rstrip("/")
+        candidate_urls = [node_url.rstrip("/")]
     else:
         node = pool.get_available_node(
             required_vram=required_vram,
             prefer_short=prefer_short,
             estimated_duration_sec=estimated_duration_sec,
         )
-        base_url = (node.comfyui_url or comfyui_http_url()).rstrip("/")
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        res = await client.post(f"{base_url}/prompt", json=payload)
-        res.raise_for_status()
-        data = res.json()
+        candidate_urls = [node.comfyui_url.rstrip("/")]
+        for n in pool.nodes:
+            url = n.comfyui_url.rstrip("/")
+            if url in candidate_urls:
+                continue
+            if required_vram > 0 and n.available_vram < required_vram:
+                continue
+            candidate_urls.append(url)
+
+    last_error: Exception | None = None
+    for base_url in candidate_urls:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                res = await client.post(f"{base_url}/prompt", json=payload)
+                res.raise_for_status()
+                data = res.json()
+            break
+        except (httpx.ConnectError, httpx.HTTPError) as exc:
+            last_error = exc
+            logger.warning("_post_workflow retry next node after %s: %s", base_url, exc)
+    else:
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("无可用 ComfyUI 节点")
     if data.get("node_errors"):
         raise ValueError(f"工作流节点错误: {data['node_errors']}")
     if data.get("error"):
@@ -2492,7 +2933,7 @@ async def _post_workflow(
 
 async def submit_prompt(
     prompt: str,
-    negative_prompt: str = "模糊, 低质量, 水印, 文字",
+    negative_prompt: str = "blurry, low quality, watermark, text",
     style: str = "realistic",
     steps: int = DEFAULT_STEPS,
     width: int = 512,
@@ -2733,7 +3174,7 @@ async def submit_hunyuan_video_prompt(
     steps: int | None = None,
     use_distilled: bool = False,
     cfg_distilled: bool = False,
-    use_cache: bool = False,
+    use_cache: bool = True,
 ) -> tuple[str, str, dict, str]:
     positive = prompt.strip()
     if raw_prompt:
@@ -2742,35 +3183,94 @@ async def submit_hunyuan_video_prompt(
         negative = normalize_video_negative(negative_prompt)
     width, height = align_video_dimensions(width, height)
 
+    if mode not in ("text2video", "image2video"):
+        raise ValueError(f"HunyuanVideo 不支持 mode={mode}（首尾帧请用 wan-i2v）")
+    if mode == "image2video" and not image_b64:
+        raise ValueError("图生视频需要上传图片")
+
+    reserved_node = _acquire_gpu_node_url(
+        estimated_duration_sec=480,
+        required_vram=HUNYUAN_REQUIRED_VRAM,
+        prefer_short=False,
+    )
+    await ensure_video_mp4_capable(reserved_node)
+
+    cache_backend: str | None = None
+    effective_cache = bool(use_cache)
+    info: dict | None = None
+    try:
+        info = await _fetch_object_info(reserved_node)
+    except (httpx.ConnectError, httpx.HTTPError, httpx.TimeoutException) as exc:
+        logger.warning("hunyuan object_info probe failed on %s: %s", reserved_node, exc)
+    if effective_cache:
+        cache_backend = resolve_hunyuan_cache_backend(info)
+        if not cache_backend:
+            logger.warning(
+                "H800 无 MagCache/EasyCache，禁用 cache 继续生成 node=%s",
+                reserved_node,
+            )
+            effective_cache = False
+
+    image_filename: str | None = None
     if mode == "image2video":
-        raise ValueError("HunyuanVideo workflow 暂不支持图生视频")
+        if info is not None and not _has_node("HunyuanVideo15ImageToVideo", info):
+            raise ValueError("当前 ComfyUI 缺少 HunyuanVideo15ImageToVideo 节点")
+        image_filename = await upload_image_base64(image_b64, node_url=reserved_node)
 
-    await ensure_video_mp4_capable()
-
+    default_ckpt = HUNYUAN15_I2V_CKPT if mode == "image2video" else HUNYUAN15_CKPT
+    # registry 里 hunyuan-video-1.5 登记的是 T2V 文件名；图生时忽略，强制 I2V 权重
+    if mode == "image2video":
+        resolved_ckpt = HUNYUAN15_I2V_CKPT
+    else:
+        resolved_ckpt = (model_filename or "").strip() or default_ckpt
     logger.info(
-        "submit_hunyuan_video_prompt inputs: duration=%s width=%s height=%s prompt_len=%s "
-        "steps=%s distilled=%s cfg_distilled=%s cache=%s",
+        "submit_hunyuan_video_prompt inputs: mode=%s duration=%s width=%s height=%s "
+        "prompt_len=%s steps=%s distilled=%s cfg_distilled=%s cache=%s backend=%s "
+        "ckpt=%s node=%s",
+        mode,
         duration,
         width,
         height,
         len(positive or ""),
-        steps if steps is not None else (HUNYUAN15_DISTILLED_STEPS if use_distilled else HUNYUAN_DEFAULT_STEPS),
+        steps
+        if steps is not None
+        else (HUNYUAN15_DISTILLED_STEPS if use_distilled else HUNYUAN15_DEFAULT_STEPS),
         use_distilled,
         cfg_distilled,
-        use_cache,
+        effective_cache,
+        cache_backend or "-",
+        resolved_ckpt,
+        reserved_node,
     )
-    workflow = build_hunyuan_video_workflow(
-        positive,
-        negative,
-        width,
-        height,
-        duration,
-        model_filename=model_filename or HUNYUAN15_CKPT,
-        steps=steps,
-        use_distilled=use_distilled,
-        cfg_distilled=cfg_distilled,
-        use_cache=use_cache,
-    )
+    if mode == "image2video":
+        workflow = build_hunyuan_i2v_workflow(
+            positive,
+            negative,
+            image_filename or "",
+            width,
+            height,
+            duration,
+            model_filename=resolved_ckpt,
+            steps=steps,
+            use_distilled=use_distilled,
+            cfg_distilled=cfg_distilled,
+            use_cache=effective_cache,
+            cache_backend=cache_backend,
+        )
+    else:
+        workflow = build_hunyuan_video_workflow(
+            positive,
+            negative,
+            width,
+            height,
+            duration,
+            model_filename=resolved_ckpt,
+            steps=steps,
+            use_distilled=use_distilled,
+            cfg_distilled=cfg_distilled,
+            use_cache=effective_cache,
+            cache_backend=cache_backend,
+        )
     return await _log_and_post_video_workflow(
         workflow,
         client_id=client_id,
@@ -2780,7 +3280,8 @@ async def submit_hunyuan_video_prompt(
         duration=duration,
         mode=mode,
         estimated_duration_sec=480,
-        required_vram=24,
+        required_vram=HUNYUAN_REQUIRED_VRAM,
+        node_url=reserved_node,
     )
 
 
@@ -2796,7 +3297,9 @@ async def submit_ltx2_video_prompt(
     raw_prompt: bool = False,
     *,
     model_filename: str | None = None,
-    audio: bool = True,
+    audio: bool = False,
+    sampling_profile: str | None = "quality",
+    camera_lora_strength: float | None = None,
     **_ignored,
 ) -> tuple[str, str, dict, str]:
     """LTX-2 19B fp4 文生/图生视频（ComfyUI SaveVideo MP4）。"""
@@ -2809,6 +3312,7 @@ async def submit_ltx2_video_prompt(
     else:
         negative = normalize_video_negative(negative_prompt)
     width, height = align_ltx_dimensions(width, height)
+    profile = _normalize_ltx2_sampling_profile(sampling_profile)
 
     image_filename = None
     reserved_node = None
@@ -2823,13 +3327,21 @@ async def submit_ltx2_video_prompt(
     await ensure_video_mp4_capable(reserved_node)
 
     logger.info(
-        "submit_ltx2_video_prompt inputs: mode=%s duration=%s width=%s height=%s audio=%s prompt_len=%s",
+        "submit_ltx2_video_prompt inputs: mode=%s duration=%s width=%s height=%s "
+        "audio=%s profile=%s prompt_len=%s",
         mode,
         duration,
         width,
         height,
         bool(audio),
+        profile,
         len(positive or ""),
+    )
+    common_kw = dict(
+        model_filename=model_filename,
+        audio=bool(audio),
+        sampling_profile=profile,
+        camera_lora_strength=camera_lora_strength,
     )
     if mode == "image2video":
         workflow = build_ltx2_fp4_i2v_workflow(
@@ -2839,8 +3351,7 @@ async def submit_ltx2_video_prompt(
             width,
             height,
             duration,
-            model_filename=model_filename,
-            audio=bool(audio),
+            **common_kw,
         )
     else:
         workflow = build_ltx2_fp4_t2v_workflow(
@@ -2849,8 +3360,7 @@ async def submit_ltx2_video_prompt(
             width,
             height,
             duration,
-            model_filename=model_filename,
-            audio=bool(audio),
+            **common_kw,
         )
     return await _log_and_post_video_workflow(
         workflow,
@@ -3042,9 +3552,173 @@ def _execution_status_failed(
     }
 
 
+def _execution_status_running(
+    *,
+    progress: int = 0,
+    stage: str | None = "running",
+    message: str | None = None,
+) -> dict:
+    shown = progress if progress > 0 else 3
+    return {
+        "status": "running",
+        "progress": shown,
+        "stage": stage or "running",
+        "message": message,
+        "result": None,
+        "error": None,
+    }
+
+
+def _cache_age_seconds(cached: dict) -> float:
+    updated_at = cached.get("updated_at")
+    if not updated_at:
+        return float("inf")
+    try:
+        return max(0.0, time.time() - float(updated_at))
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _should_fetch_comfy_http(prompt_id: str, *, force: bool = False) -> bool:
+    if force:
+        now = time.time()
+        with _poll_fetch_lock:
+            _last_comfy_fetch[str(prompt_id)] = now
+        return True
+    now = time.time()
+    pid = str(prompt_id)
+    with _poll_fetch_lock:
+        last = _last_comfy_fetch.get(pid, 0.0)
+        if now - last < COMFY_POLL_THROTTLE_SEC:
+            return False
+        _last_comfy_fetch[pid] = now
+        return True
+
+
+def reset_comfy_poll_throttle_for_tests() -> None:
+    with _poll_fetch_lock:
+        _last_comfy_fetch.clear()
+
+
+async def probe_comfy_prompt_liveness(
+    prompt_id: str,
+    node_url: str | None = None,
+) -> dict:
+    """
+    超时/僵尸回收专用：强制查 Comfy 队列与 history，不走轮询节流短路。
+
+    返回:
+      state: busy | idle | unreachable
+      status/result/error: 便于回收时直接 completed/failed
+    """
+    from services import comfyui_progress
+
+    pid = str(prompt_id or "").strip()
+    if not pid:
+        return {"state": "idle", "status": "failed", "result": None, "error": "缺少 prompt_id"}
+
+    base = _resolve_comfyui_base(node_url)
+    cached = comfyui_progress.get_progress(pid) or {}
+    progress = int(cached.get("progress") or 0)
+    cache_age = _cache_age_seconds(cached)
+
+    # 近期仍有 sampler 进度 → 视为仍在跑（即使 /queue 瞬时空）
+    if progress > 0 and progress < 100 and cache_age <= max(COMFY_POLL_CACHE_FRESH_SEC, 30.0):
+        return {
+            "state": "busy",
+            "status": "running",
+            "progress": progress,
+            "result": None,
+            "error": None,
+        }
+
+    in_running = False
+    in_pending = False
+    hist_res = None
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            queue_res = await client.get(f"{base}/queue")
+            hist_res = await client.get(f"{base}/history/{pid}")
+        queue_data = queue_res.json()
+        for item in queue_data.get("queue_running", []) or []:
+            if len(item) > 1 and str(item[1]) == pid:
+                in_running = True
+                break
+        for item in queue_data.get("queue_pending", []) or []:
+            if len(item) > 1 and str(item[1]) == pid:
+                in_pending = True
+                break
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        studio_print("comfyui", f"liveness 不可达 prompt_id={pid}: {exc}")
+        return {
+            "state": "unreachable",
+            "status": "running",
+            "progress": progress,
+            "result": None,
+            "error": None,
+        }
+    except Exception as exc:
+        logger.exception("probe_comfy_prompt_liveness error prompt_id=%s", pid)
+        studio_print("comfyui", f"liveness 查询异常 prompt_id={pid}: {exc}")
+        return {
+            "state": "unreachable",
+            "status": "running",
+            "progress": progress,
+            "result": None,
+            "error": None,
+        }
+
+    if in_running or in_pending:
+        return {
+            "state": "busy",
+            "status": "running" if in_running else "pending",
+            "progress": progress if progress > 0 else (3 if in_running else 0),
+            "result": None,
+            "error": None,
+        }
+
+    if hist_res is not None and hist_res.status_code == 200:
+        try:
+            payload = hist_res.json()
+        except Exception:
+            payload = {}
+        if pid in payload:
+            # 复用完整状态解析（含 result / error）
+            exec_info = await get_prompt_execution_status(
+                pid, node_url=node_url, force_http=True
+            )
+            status = exec_info.get("status") or "failed"
+            if status in ("pending", "queued", "running"):
+                return {
+                    "state": "busy",
+                    "status": status,
+                    "progress": exec_info.get("progress") or progress,
+                    "result": None,
+                    "error": None,
+                }
+            return {
+                "state": "idle",
+                "status": status,
+                "progress": exec_info.get("progress"),
+                "result": exec_info.get("result"),
+                "error": exec_info.get("error"),
+            }
+
+    # 可达、不在队列、无 history → 后端已不持有该任务
+    return {
+        "state": "idle",
+        "status": "failed",
+        "progress": progress,
+        "result": None,
+        "error": "ComfyUI 中未找到该任务，可能已过期",
+    }
+
+
 async def get_prompt_execution_status(
     prompt_id: str,
     node_url: str | None = None,
+    *,
+    force_http: bool = False,
 ) -> dict:
     """
     查询单个 ComfyUI prompt 的执行状态（队列 + history + WS 进度缓存）。
@@ -3059,6 +3733,27 @@ async def get_prompt_execution_status(
     message = None
     if cached.get("max"):
         message = f"step {cached.get('value', 0)}/{cached.get('max', 0)}"
+
+    cache_age = _cache_age_seconds(cached)
+    if (
+        not force_http
+        and progress > 0
+        and progress < 95
+        and cache_age <= COMFY_POLL_CACHE_FRESH_SEC
+    ):
+        return _execution_status_running(
+            progress=progress,
+            stage=stage,
+            message=message,
+        )
+    if not force_http and not _should_fetch_comfy_http(
+        prompt_id, force=progress >= 95
+    ):
+        return _execution_status_running(
+            progress=progress,
+            stage=stage,
+            message=message,
+        )
 
     in_running = False
     in_pending = False
@@ -3078,14 +3773,26 @@ async def get_prompt_execution_status(
                 break
     except httpx.ConnectError as exc:
         studio_print("comfyui", f"无法连接 ComfyUI prompt_id={prompt_id}: {exc}")
-        return _execution_status_failed(COMFYUI_UNREACHABLE_MSG)
+        return _execution_status_running(
+            progress=progress,
+            stage=stage or "running",
+            message=message,
+        )
     except httpx.TimeoutException:
         studio_print("comfyui", f"连接 ComfyUI 超时 prompt_id={prompt_id}")
-        return _execution_status_failed("ComfyUI 请求超时，请检查服务是否正常运行")
+        return _execution_status_running(
+            progress=progress,
+            stage=stage or "running",
+            message=message,
+        )
     except Exception as exc:
         logger.exception("get_prompt_execution_status error prompt_id=%s", prompt_id)
         studio_print("comfyui", f"查询 ComfyUI 异常 prompt_id={prompt_id}: {exc}")
-        return _execution_status_failed(f"ComfyUI 查询失败: {exc}")
+        return _execution_status_running(
+            progress=progress,
+            stage=stage or "running",
+            message=message,
+        )
 
     if hist_res is not None and hist_res.status_code == 200:
         try:
@@ -3403,6 +4110,8 @@ SEEDVR2_DIT_3B = "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
 SEEDVR2_DIT_3B_SHARP = "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
 SEEDVR2_VAE = "ema_vae_fp16.safetensors"
 REALESRGAN_MODEL = "RealESRGAN_x4plus.pth"
+VIDEO_ENHANCE_SEEDVR2_KEY = "video_enhance_seedvr2.json"
+VIDEO_ENHANCE_REALESRGAN_KEY = "video_enhance_realesrgan.json"
 
 VE_LOAD = "1"
 VE_DIT = "2"
@@ -3410,16 +4119,24 @@ VE_VAE = "3"
 VE_UPSCALE = "4"
 VE_SAVE = "5"
 
+IE_LOAD = "1"
+IE_DIT = "2"
+IE_VAE = "3"
+IE_UPSCALE = "4"
+IE_SAVE = "5"
+
 RE_LOAD = "1"
 RE_UPMODEL = "2"
 RE_UPSCALE = "3"
 RE_SAVE = "4"
 
 
-def _seedvr2_dit_model(strength: str, model_size: str = "3b") -> str:
-    size = (model_size or "3b").strip().lower()
+def _seedvr2_dit_model(strength: str, model_size: str = "7b") -> str:
+    """选型：默认 7B FP16（H800 顶配）；3B 仅作轻量/5090 降级。"""
+    size = (model_size or "7b").strip().lower()
     sharp = (strength or "").strip().lower() == "sharp"
     if size == "3b":
+        # HF 无独立 3B sharp；sharp 与 normal 共用 3B fp8
         return SEEDVR2_DIT_3B_SHARP if sharp else SEEDVR2_DIT_3B
     return SEEDVR2_DIT_SHARP if sharp else SEEDVR2_DIT_NORMAL
 
@@ -3458,7 +4175,7 @@ def build_seedvr2_enhance_workflow(
     input_noise_scale: float = 0.25,
     color_correction: str = "lab",
     strength: str = "normal",
-    model_size: str = "3b",
+    model_size: str = "7b",
     source_height: int | None = None,
 ) -> dict:
     """SeedVR2 视频画质增强 workflow（ComfyUI-SeedVR2_VideoUpscaler 自定义节点）。"""
@@ -3468,64 +4185,18 @@ def build_seedvr2_enhance_workflow(
     color_mode = (color_correction or "lab").strip().lower()
     if color_mode not in ("lab", "none"):
         color_mode = "lab"
-    return {
-        VE_LOAD: {
-            "class_type": "VHS_LoadVideo",
-            "inputs": {
-                "video": video_filename,
-                "force_rate": float(VIDEO_FPS),
-                "custom_width": 0,
-                "custom_height": 0,
-                "frame_load_cap": 0,
-                "skip_first_frames": 0,
-                "select_every_nth": 1,
-            },
-        },
-        VE_DIT: {
-            "class_type": "SeedVR2LoadDiTModel",
-            "inputs": {
-                "model": dit_model,
-                "device": "cuda:0",
-                "blocks_to_swap": int(block_swap),
-                "swap_io": False,
-            },
-        },
-        VE_VAE: {
-            "class_type": "SeedVR2LoadVAEModel",
-            "inputs": {
-                "model": SEEDVR2_VAE,
-                "device": "cuda:0",
-                "encode_tiled": True,
-                "encode_tile_size": 1024,
-                "decode_tiled": True,
-                "decode_tile_size": 1024,
-            },
-        },
-        VE_UPSCALE: {
-            "class_type": "SeedVR2VideoUpscaler",
-            "inputs": {
-                "image": [VE_LOAD, 0],
-                "dit": [VE_DIT, 0],
-                "vae": [VE_VAE, 0],
-                "seed": 42,
-                "resolution": target_resolution,
-                "max_resolution": 0,
-                "batch_size": int(batch_size) if int(batch_size) % 4 == 1 else 5,
-                "color_correction": color_mode,
-                "input_noise_scale": float(input_noise_scale),
-                "uniform_batch_size": False,
-                "temporal_overlap": 0,
-                "prepend_frames": 0,
-            },
-        },
-        VE_SAVE: {
-            "class_type": "VHS_VideoCombine",
-            "inputs": {
-                **_vhs_video_combine_inputs(VE_UPSCALE),
-                "audio": [VE_LOAD, 2],
-            },
-        },
-    }
+    batch = int(batch_size) if int(batch_size) % 4 == 1 else 5
+    workflow = deepcopy(load_workflow_template(VIDEO_ENHANCE_SEEDVR2_KEY))
+    workflow[VE_LOAD]["inputs"]["video"] = video_filename
+    workflow[VE_LOAD]["inputs"]["force_rate"] = float(VIDEO_FPS)
+    workflow[VE_DIT]["inputs"]["model"] = dit_model
+    workflow[VE_DIT]["inputs"]["blocks_to_swap"] = int(block_swap)
+    workflow[VE_VAE]["inputs"]["model"] = SEEDVR2_VAE
+    workflow[VE_UPSCALE]["inputs"]["resolution"] = target_resolution
+    workflow[VE_UPSCALE]["inputs"]["batch_size"] = batch
+    workflow[VE_UPSCALE]["inputs"]["color_correction"] = color_mode
+    workflow[VE_UPSCALE]["inputs"]["input_noise_scale"] = float(input_noise_scale)
+    return workflow
 
 
 def build_realesrgan_enhance_workflow(
@@ -3535,38 +4206,11 @@ def build_realesrgan_enhance_workflow(
 ) -> dict:
     """Real-ESRGAN 逐帧视频超分 fallback workflow。"""
     _clamp_upscale_factor(upscale_factor)
-    return {
-        RE_LOAD: {
-            "class_type": "VHS_LoadVideo",
-            "inputs": {
-                "video": video_filename,
-                "force_rate": float(VIDEO_FPS),
-                "custom_width": 0,
-                "custom_height": 0,
-                "frame_load_cap": 0,
-                "skip_first_frames": 0,
-                "select_every_nth": 1,
-            },
-        },
-        RE_UPMODEL: {
-            "class_type": "UpscaleModelLoader",
-            "inputs": {"model_name": REALESRGAN_MODEL},
-        },
-        RE_UPSCALE: {
-            "class_type": "ImageUpscaleWithModel",
-            "inputs": {
-                "upscale_model": [RE_UPMODEL, 0],
-                "image": [RE_LOAD, 0],
-            },
-        },
-        RE_SAVE: {
-            "class_type": "VHS_VideoCombine",
-            "inputs": {
-                **_vhs_video_combine_inputs(RE_UPSCALE),
-                "audio": [RE_LOAD, 2],
-            },
-        },
-    }
+    workflow = deepcopy(load_workflow_template(VIDEO_ENHANCE_REALESRGAN_KEY))
+    workflow[RE_LOAD]["inputs"]["video"] = video_filename
+    workflow[RE_LOAD]["inputs"]["force_rate"] = float(VIDEO_FPS)
+    workflow[RE_UPMODEL]["inputs"]["model_name"] = REALESRGAN_MODEL
+    return workflow
 
 
 async def upload_video_from_url(
@@ -3667,7 +4311,7 @@ async def submit_seedvr2_enhance_prompt(
     except Exception:
         source_height = None
 
-    reserved_node = _acquire_gpu_node_url(estimated_duration_sec=300, required_vram=16)
+    reserved_node = _acquire_gpu_node_url(estimated_duration_sec=300, required_vram=40)
     video_filename = await upload_video_from_url(
         video_url, db=db, user=user, node_url=reserved_node
     )
@@ -3711,3 +4355,119 @@ async def submit_realesrgan_enhance_prompt(
         client_id=client_id,
         node_url=reserved_node,
     )
+
+
+def build_seedvr2_image_enhance_workflow(
+    image_filename: str,
+    *,
+    upscale_factor: float = 2.0,
+    model_variant: str | None = None,
+    batch_size: int = 1,
+    block_swap: int = 0,
+    input_noise_scale: float = 0.25,
+    color_correction: str = "lab",
+    strength: str = "normal",
+    model_size: str = "7b",
+    source_height: int | None = None,
+) -> dict:
+    """SeedVR2 静帧画质增强（复用 SeedVR2VideoUpscaler，单帧 batch）。"""
+    factor = _clamp_upscale_factor(upscale_factor)
+    dit_model = model_variant or _seedvr2_dit_model(strength, model_size)
+    target_resolution = _seedvr2_target_resolution(factor, source_height)
+    color_mode = (color_correction or "lab").strip().lower()
+    if color_mode not in ("lab", "none"):
+        color_mode = "lab"
+    bs = int(batch_size) if int(batch_size) % 4 == 1 else 1
+    return {
+        IE_LOAD: {
+            "class_type": "LoadImage",
+            "inputs": {"image": image_filename},
+        },
+        IE_DIT: {
+            "class_type": "SeedVR2LoadDiTModel",
+            "inputs": {
+                "model": dit_model,
+                "device": "cuda:0",
+                "blocks_to_swap": int(block_swap),
+                "swap_io": False,
+            },
+        },
+        IE_VAE: {
+            "class_type": "SeedVR2LoadVAEModel",
+            "inputs": {
+                "model": SEEDVR2_VAE,
+                "device": "cuda:0",
+                "encode_tiled": True,
+                "encode_tile_size": 1024,
+                "decode_tiled": True,
+                "decode_tile_size": 1024,
+            },
+        },
+        IE_UPSCALE: {
+            "class_type": "SeedVR2VideoUpscaler",
+            "inputs": {
+                "image": [IE_LOAD, 0],
+                "dit": [IE_DIT, 0],
+                "vae": [IE_VAE, 0],
+                "seed": 42,
+                "resolution": target_resolution,
+                "max_resolution": 0,
+                "batch_size": bs,
+                "color_correction": color_mode,
+                "input_noise_scale": float(input_noise_scale),
+                "uniform_batch_size": False,
+                "temporal_overlap": 0,
+                "prepend_frames": 0,
+            },
+        },
+        IE_SAVE: {
+            "class_type": "SaveImage",
+            "inputs": {
+                "images": [IE_UPSCALE, 0],
+                "filename_prefix": "AIStudio_seedvr2_image",
+            },
+        },
+    }
+
+
+async def submit_seedvr2_image_enhance_prompt(
+    image_url: str,
+    *,
+    db,
+    user,
+    upscale_factor: float = 2.0,
+    strength: str = "normal",
+    input_noise_scale: float = 0.25,
+    color_correction: str = "lab",
+    model_size: str = "7b",
+    client_id: str | None = None,
+) -> tuple[str, str, dict, str]:
+    reserved_node = _acquire_gpu_node_url(estimated_duration_sec=120, required_vram=40)
+    resolved_url = (image_url or "").strip()
+    if db is not None and user is not None:
+        from services.media_access import resolve_image_reference_path
+
+        try:
+            local_path = resolve_image_reference_path(db, user, resolved_url)
+            resolved_url = str(local_path)
+        except Exception:
+            pass
+    image_filename = await upload_image_from_url(
+        resolved_url, node_url=reserved_node
+    )
+    workflow = build_seedvr2_image_enhance_workflow(
+        image_filename,
+        upscale_factor=upscale_factor,
+        strength=strength,
+        input_noise_scale=input_noise_scale,
+        color_correction=color_correction,
+        model_size=model_size,
+    )
+    prompt_id, used_client, posted_node = await _post_workflow(
+        workflow,
+        client_id,
+        estimated_duration_sec=120,
+        required_vram=40,
+        node_url=reserved_node,
+    )
+    return prompt_id, used_client, workflow, posted_node

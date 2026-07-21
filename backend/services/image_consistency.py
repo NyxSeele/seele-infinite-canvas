@@ -5,12 +5,13 @@ import io
 from typing import Any
 
 import httpx
+import numpy as np
 from PIL import Image
 
 
 def phash(img: Image.Image, size: int = 8) -> int:
     gray = img.convert("L").resize((size, size), Image.Resampling.LANCZOS)
-    pixels = list(gray.getdata())
+    pixels = np.asarray(gray).flatten().tolist()
     avg = sum(pixels) / len(pixels)
     bits = "".join("1" if p > avg else "0" for p in pixels)
     return int(bits, 2)

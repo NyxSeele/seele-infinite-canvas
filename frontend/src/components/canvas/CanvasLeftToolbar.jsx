@@ -6,7 +6,12 @@ import { useCanvasStore } from "../../stores"
 import { CANVAS_NAV_MODE_OPTIONS } from "../../utils/canvas/canvasNavMode"
 
 import { pushGenHistory, readGenHistory } from "../../utils/canvas/genHistory"
-import { AVATAR_CHANGED_EVENT, readUserAvatar, reloadUserAvatarMedia, avatarBackgroundStyle } from "../../utils/canvas/userAvatar"
+import {
+  AVATAR_CHANGED_EVENT,
+  readUserAvatar,
+  reloadUserAvatarMedia,
+  avatarBackgroundStyle,
+} from "../../utils/canvas/userAvatar"
 import pkg from "../../../package.json"
 import { LineIcon } from "../icons/LineIcons"
 import { navigateWithReturn } from "../../utils/navReturn"
@@ -150,11 +155,13 @@ const TOOLBAR_ITEMS = [
 const ADD_CARDS = [
   { type: "image-gen", icon: "sparkle", labelKey: "canvas.toolbar.imageGen" },
   { type: "video-gen", icon: "video", labelKey: "canvas.toolbar.videoGen" },
+  { type: "short-video-factory", icon: "video", labelKey: "canvas.toolbar.shortVideoFactory" },
   { type: "text-note", icon: "text", labelKey: "canvas.toolbar.textNote" },
   { type: "image-upload", icon: "upload", labelKey: "canvas.toolbar.imageUpload" },
+  { type: "video-upload", icon: "video", labelKey: "canvas.toolbar.videoUpload" },
 ]
 
-function AddMenuPanel({ onSelect, onUploadImage, onClose, t }) {
+function AddMenuPanel({ onSelect, onUploadImage, onUploadVideo, onClose, t }) {
   return (
     <div className="clt-add-menu">
       {ADD_CARDS.map((c) => (
@@ -163,6 +170,7 @@ function AddMenuPanel({ onSelect, onUploadImage, onClose, t }) {
           className="clt-add-card"
           onClick={() => {
             if (c.type === "image-upload") { onClose(); onUploadImage?.() }
+            else if (c.type === "video-upload") { onClose(); onUploadVideo?.() }
             else { onSelect(c.type); onClose() }
           }}
         >
@@ -199,6 +207,7 @@ function CanvasNavModePanel({ mode, onSelect, t }) {
 export default function CanvasLeftToolbar({
   onAddNodeOfType,
   onUploadImage,
+  onUploadVideo,
   isFullscreen = false,
   onToggleFullscreen,
   hasUnreadComments = false,
@@ -347,7 +356,7 @@ export default function CanvasLeftToolbar({
             <PlusIcon />
           </button>
           {activePanel === "add" && (
-            <AddMenuPanel t={t} onSelect={onAddNodeOfType} onUploadImage={onUploadImage} onClose={() => setActivePanel(null)} />
+            <AddMenuPanel t={t} onSelect={onAddNodeOfType} onUploadImage={onUploadImage} onUploadVideo={onUploadVideo} onClose={() => setActivePanel(null)} />
           )}
         </CltItemWrap>
 
@@ -386,7 +395,17 @@ export default function CanvasLeftToolbar({
             onClick={toggleAvatarMenu}
           >
             {avatarUrl ? (
-              <span className="clt-avatar-img" style={avatarBackgroundStyle(avatarUrl)} />
+              <img
+                className="clt-avatar-img"
+                src={avatarUrl}
+                alt=""
+                draggable={false}
+                onError={() => {
+                  reloadUserAvatarMedia().then((url) => {
+                    if (url) setAvatarUrl(url)
+                  })
+                }}
+              />
             ) : avatarLetter}
           </button>
           {avatarMenuOpen && (

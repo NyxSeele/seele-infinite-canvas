@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import api from "../services/api"
+import { enrichModels } from "../utils/canvas/modelCatalog"
 
 export const useModelStore = create((set, get) => ({
   imageModels: [],
@@ -14,7 +15,7 @@ export const useModelStore = create((set, get) => ({
     set({ loading: true, error: null })
     try {
       const { data } = await api.get("/api/models")
-      const models = data?.models || []
+      const models = enrichModels(data?.models || [])
       set({
         textModels: models.filter((m) => m.category === "text"),
         imageModels: models.filter((m) => m.category === "image"),

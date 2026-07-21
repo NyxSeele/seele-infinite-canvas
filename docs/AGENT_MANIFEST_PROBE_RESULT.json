@@ -1,0 +1,119 @@
+{
+  "run_at": "2026-07-21T09:16:18.070640+00:00",
+  "base_url": "http://127.0.0.1:7788",
+  "checks": {
+    "health": {
+      "pass": true,
+      "detail": "health ok"
+    },
+    "manifest_api": {
+      "pass": true,
+      "status": 200,
+      "stage_count": 9,
+      "stage_names": [
+        "create_text_note",
+        "start_text_generation",
+        "generate_outline",
+        "generate_script_table",
+        "split_shot_beats",
+        "generate_storyboard",
+        "generate_video",
+        "manage_cast",
+        "manage_scene"
+      ]
+    },
+    "pipeline_steps": {
+      "pass": true,
+      "recorded": [
+        "create_text_note",
+        "start_text_generation",
+        "generate_outline"
+      ],
+      "expected_relative": [
+        "create_text_note",
+        "start_text_generation",
+        "generate_outline"
+      ]
+    },
+    "outline_in_snapshot": {
+      "pass": true,
+      "outline_count": 1
+    },
+    "text_real": {
+      "pass": true,
+      "mode": "real_completed"
+    }
+  },
+  "recorded_steps": [
+    "create_text_note",
+    "start_text_generation",
+    "generate_outline"
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "elapsed_s": 6.05,
+      "action_types": [
+        "ask_user"
+      ],
+      "errors": [],
+      "thinking_preview": "✓ 收到30秒重庆火锅品牌宣传片的需求，要带故事感\n→ 先构思几个不同视角的叙事方向给你挑",
+      "auto_pick": "我选择「百年匠心」"
+    },
+    {
+      "round": 2,
+      "elapsed_s": 3.85,
+      "action_types": [
+        "pipeline_step",
+        "done"
+      ],
+      "errors": [],
+      "thinking_preview": "✓ 选定「百年匠心」方向\n→ 正在为你建立剧本策划案...",
+      "pipeline_step": "create_text_note",
+      "execute_error": null
+    },
+    {
+      "round": 3,
+      "elapsed_s": 4.02,
+      "action_types": [
+        "pipeline_step",
+        "done"
+      ],
+      "errors": [],
+      "thinking_preview": "✓ 已确认「百年匠心」主题。\n→ 正在为你撰写30秒重庆火锅品牌宣传片的初稿剧本...",
+      "pipeline_step": "start_text_generation",
+      "execute_error": null
+    },
+    {
+      "round": 4,
+      "elapsed_s": 2.65,
+      "action_types": [
+        "pipeline_step",
+        "done"
+      ],
+      "errors": [],
+      "thinking_preview": "✓ 剧本文本已生成\n→ 正在提取故事大纲，梳理起承转合...",
+      "pipeline_step": "generate_outline",
+      "execute_error": null
+    }
+  ],
+  "issues": [],
+  "warnings": [],
+  "env": {
+    "AGENT_MOCK_GENERATION": "false",
+    "GENERATION_MAX_CONCURRENT": "2"
+  },
+  "text_generation_mode": "real_completed",
+  "pass": true,
+  "login_user": "seele",
+  "slots": {
+    "user_id": 1,
+    "active_before": 0,
+    "stale_released": 0,
+    "zombie_failed": 0,
+    "active_after": 0,
+    "redis_slots_after": 0
+  },
+  "project_id": "ca5c0a26-eca1-4540-a30c-0c0898ee017b",
+  "duration_s": 66.0
+}

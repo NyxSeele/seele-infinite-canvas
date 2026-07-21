@@ -1,5 +1,5 @@
 .acm-backdrop {
-  position: fixed;
+  position: fixed !important;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
   display: flex;

@@ -57,7 +57,7 @@ export default function ProductNoticeModal() {
     : (payload.message || "")
 
   return createPortal(
-    <div className="pnm-backdrop" onPointerDown={(e) => { if (e.target === e.currentTarget) close() }}>
+    <div className="pnm-backdrop ws-overlay-root" onPointerDown={(e) => { if (e.target === e.currentTarget) close() }}>
       <div className="pnm-card" role="dialog" aria-modal="true" aria-labelledby="pnm-title">
         <div className="pnm-icon" aria-hidden>
           <svg width="28" height="28" viewBox="0 0 28 28" fill="none">

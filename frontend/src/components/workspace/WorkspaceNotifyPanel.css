@@ -1,5 +1,5 @@
 .wnp-backdrop {
-  position: fixed;
+  position: fixed !important;
   inset: 0;
   z-index: 500; /* Z_WS_NOTIFY */
   background: rgba(0, 0, 0, 0.28);

@@ -9,8 +9,100 @@
   padding-top: 4px;
 }
 
+/* 参考图缩略图：与「添加参考」方格同尺寸对齐（勿用全局 .ref-tag，避免影响 Agent 等） */
 .video-ref-panel .ref-tags-scroll {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 8px;
   padding: 0;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.video-ref-panel .ref-tags-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.video-ref-panel .ref-tag {
+  position: relative;
+  flex: 0 0 64px;
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  max-width: none;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+  background: var(--tl-input-bg);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.video-ref-panel .ref-tag img,
+.video-ref-panel .ref-tag .ref-thumb-fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  object-fit: cover;
+  flex-shrink: 0;
+  display: block;
+}
+
+.video-ref-panel .ref-tag .ref-thumb-fallback {
+  background: var(--tl-toolbar-btn-hover, rgba(128, 128, 128, 0.18));
+}
+
+.video-ref-panel .ref-tag .ref-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 2px 4px;
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.92);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.video-ref-panel .ref-tag .ref-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.video-ref-panel .ref-tag .ref-remove:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.ref-thumb-fallback {
+  background: var(--tl-toolbar-btn-hover, rgba(128, 128, 128, 0.18));
+}
+
+.keyframe-slot--filled .ref-thumb-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
 }
 
 .video-ref-promptbar {
@@ -166,14 +258,14 @@
 .keyframe-slots {
   display: flex;
   gap: 8px;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .keyframe-slot {
   position: relative;
   flex: 0 0 64px;
   width: 64px;
-  height: 48px;
+  height: 64px;
   border-radius: 8px;
   border: 1px solid var(--tl-card-border);
   background: var(--tl-input-bg);
@@ -247,6 +339,7 @@
   align-items: center;
   justify-content: center;
   gap: 2px;
+  flex: 0 0 64px;
   flex-shrink: 0;
   width: 64px;
   height: 64px;
@@ -257,6 +350,7 @@
   color: var(--tl-text-secondary);
   font-size: 9px;
   cursor: pointer;
+  box-sizing: border-box;
 }
 
 .freeref-add-plus {

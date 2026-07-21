@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react"
-import { useReactFlow, useStore } from "reactflow"
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react"
+import { useReactFlow, useStore, useStoreApi } from "reactflow"
 import { useReferenceSelect } from "./CanvasActionsContext"
 import VideoReferencePanel from "./VideoReferencePanel"
 import VideoStylePicker from "./VideoStylePicker"
@@ -13,13 +13,14 @@ import MentionTextarea from "./MentionTextarea"
 import { useCanvasStore, useModelStore } from "../../stores"
 import api, { API_BASE } from "../../services/api"
 import { uploadImageFile } from "../../services/uploadImage"
+import { uploadAudioFile, AUDIO_ACCEPT } from "../../services/uploadAudio"
 import { Mic } from "lucide-react"
 import RefPickerTrigger from "./RefPickerTrigger"
 import PromptRefChips from "./PromptRefChips"
 import PromptBarShell from "./PromptBarShell"
+import PromptExpandCard from "./PromptExpandCard"
 import { closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import useRefAssetEntries from "../../hooks/canvas/useRefAssetEntries"
-import { getPromptExpanded, setPromptExpanded } from "../../utils/canvas/promptBarPrefs"
 import {
   buildRefItem,
   getReferenceImagesList,
@@ -27,7 +28,10 @@ import {
   appendReferenceImage,
   getImageNodeImages,
   MAX_REFERENCE_IMAGES,
+  resolveReferenceImageUrl,
+  resolveRefDisplayUrl,
 } from "./videoReferenceHelpers"
+import { ensureMediaUrl } from "../../utils/mediaTicket"
 import useModelCapabilities from "../../hooks/useModelCapabilities"
 import {
   mergeMentionRefsIntoFreeRefs,
@@ -41,18 +45,26 @@ import { TEXT_MODES } from "../../utils/canvas/nodeHelpers"
 import { TEXT_CLASSIFY_MIN } from "../../utils/canvas/promptIntentConfig"
 import { usePromptIntentGate } from "./PromptIntentGateContext"
 import { useLocale } from "../../utils/locale"
+import { IMAGE_ACCEPT } from "../../utils/uploadFileKind"
 import { appendStyleReferenceToDescription } from "../../utils/canvas/styleReferenceFormat"
 import { findScriptTableNode, resolveImageQualityPresetId } from "../../utils/canvas/scriptTableNode"
 import { ModelDropupItem } from "./CanvasModelDropup"
 import {
   T2V_ONLY,
   I2V_ONLY,
+  defaultVidAudioForModel,
   isVideoModelCompatible,
   preferredModelForMode,
   reconcileVideoModelAndMode,
   referenceModeForVidMode,
   vidModeFromReferenceMode,
+  videoModesForCatalog,
 } from "../../utils/canvas/videoModelCompat"
+import {
+  isModelRecommended,
+  pickDefaultModel,
+  sortModelsForDisplay,
+} from "../../utils/canvas/modelCatalog"
 import { sizeForAspectRatio, cardDisplayRatio } from "../../utils/canvas/aspectRatioLayout"
 import "./NodeBanner.css"
 import "./PromptRefChips.css"
@@ -76,6 +88,79 @@ const VIDEO_RATIOS  = [
 ]
 const VIDEO_QUALITIES = ["480P", "720P", "1080P"]
 const VIDEO_AUDIOS    = ["开启", "关闭"]
+const DEFAULT_VIDEO_DURATIONS = [5, 10, 15]
+
+function getVideoQualityOptions(capabilities) {
+  return (capabilities?.resolutions?.length ? capabilities.resolutions : VIDEO_QUALITIES)
+    .map((q) => normalizeClarity(q))
+}
+
+function getVideoDurationOptions(capabilities) {
+  const durations = capabilities?.durations?.length
+    ? capabilities.durations
+    : DEFAULT_VIDEO_DURATIONS
+  return durations.map((d) => `${d}s`)
+}
+
+function getVideoAspectRatioOptions(capabilities) {
+  const keys = capabilities?.aspect_ratios?.length
+    ? capabilities.aspect_ratios
+    : VIDEO_RATIOS.map((r) => r.key)
+  return keys.map(resolveRatioMeta)
+}
+
+function inferVideoBackend(modelId, capabilities) {
+  const fromCaps = String(capabilities?.video_backend || "").toLowerCase()
+  if (fromCaps) return fromCaps
+  const id = String(modelId || "").toLowerCase()
+  if (id.includes("ltx23")) return "ltx23"
+  if (id.includes("ltx2")) return "ltx2"
+  return ""
+}
+
+function videoSupportsAudio(modelId, capabilities) {
+  if (capabilities?.supports_audio != null) return Boolean(capabilities.supports_audio)
+  const backend = inferVideoBackend(modelId, capabilities)
+  return backend === "ltx2" || backend === "ltx23"
+}
+
+function buildVideoParamSummary({
+  vidMode,
+  vidRatio,
+  vidQuality,
+  vidDuration,
+  vidAudio,
+  vidAudioUrl,
+  vidModel,
+  vidCapabilities,
+  t,
+}) {
+  const backend = inferVideoBackend(vidModel, vidCapabilities)
+  const modeLabel =
+    vidMode === "文生"
+      ? t("canvas.prompt.t2v")
+      : vidMode === "参考"
+        ? t("canvas.prompt.freeref")
+        : t("canvas.prompt.keyframe")
+  const parts = [
+    modeLabel,
+    vidRatio,
+    formatClarityLabel(normalizeClarity(vidQuality)),
+    vidDuration,
+  ]
+  if (videoSupportsAudio(vidModel, vidCapabilities)) {
+    if (backend === "ltx2") {
+      parts.push(vidAudio === "开启" ? t("canvas.prompt.audioOn") : t("canvas.prompt.audioOff"))
+    } else if (backend === "ltx23") {
+      parts.push(
+        vidAudioUrl
+          ? t("canvas.prompt.audioUploaded")
+          : t("canvas.prompt.audioOptionalNone")
+      )
+    }
+  }
+  return parts.filter(Boolean).join(" · ")
+}
 
 /** 归一化图像/视频清晰度到 480P|720P|1080P */
 function normalizeClarity(value, fallback = "720P") {
@@ -312,6 +397,7 @@ function VideoPanelContent({
   capabilities,
   loading,
   modelId,
+  videoModels,
   vidMode,
   setVidMode,
   vidRatio,
@@ -322,6 +408,10 @@ function VideoPanelContent({
   setVidDuration,
   vidAudio,
   setVidAudio,
+  vidAudioUrl,
+  setVidAudioUrl,
+  audioUploading,
+  onAudioFileSelect,
 }) {
   const { t } = useLocale()
   const panelRef = useRef(null)
@@ -351,14 +441,18 @@ function VideoPanelContent({
   }
 
   const aspectKeys = capabilities?.aspect_ratios ?? []
-  const ratioOptions = aspectKeys.map(resolveRatioMeta)
-  const durationOptions = (capabilities?.durations ?? []).map((d) => `${d}s`)
-  const qualityOptions = (capabilities?.resolutions?.length
-    ? capabilities.resolutions
-    : VIDEO_QUALITIES
-  ).map((q) => normalizeClarity(q))
-  const modeOptions = VIDEO_MODES.filter((mode) => isVideoModelCompatible(modelId, mode))
-  const showAudio = Boolean(capabilities?.supports_audio)
+  const ratioOptions = aspectKeys.length > 0
+    ? aspectKeys.map(resolveRatioMeta)
+    : getVideoAspectRatioOptions(capabilities)
+  const durationOptions = getVideoDurationOptions(capabilities)
+  const qualityOptions = getVideoQualityOptions(capabilities)
+  const modeOptions = videoModesForCatalog(videoModels)
+  const videoBackend = inferVideoBackend(modelId, capabilities)
+  const showGenerateAudio =
+    videoSupportsAudio(modelId, capabilities) && videoBackend === "ltx2"
+  const showUploadAudio =
+    videoSupportsAudio(modelId, capabilities) && videoBackend === "ltx23"
+  const audioUploadInputRef = useRef(null)
 
   return (
     <div ref={panelRef} className="nb-panel" onPointerDown={sp}>
@@ -409,15 +503,59 @@ function VideoPanelContent({
           <SegmentGroup options={durationOptions} value={vidDuration} onChange={setVidDuration} />
         </>
       )}
-      {showAudio && (
+      {showGenerateAudio && (
         <>
           <div className="nb-panel-label" style={{ marginTop: 8 }}>{t("canvas.prompt.audio")}<InfoIcon /></div>
           <SegmentGroup
             options={VIDEO_AUDIOS}
-            value={vidAudio}
+            value={vidAudio === "关闭" ? "关闭" : "开启"}
             onChange={setVidAudio}
             renderLabel={renderAudioLabel}
           />
+        </>
+      )}
+      {showUploadAudio && (
+        <>
+          <div className="nb-panel-label" style={{ marginTop: 8 }}>{t("canvas.prompt.uploadAudioOptional")}</div>
+          <div className="nb-audio-upload-row">
+            <button
+              type="button"
+              className="nb-audio-upload-btn nodrag"
+              disabled={audioUploading}
+              onPointerDown={sp}
+              onClick={(e) => {
+                sp(e)
+                audioUploadInputRef.current?.click()
+              }}
+            >
+              {audioUploading
+                ? t("canvas.prompt.uploadingAudio")
+                : (vidAudioUrl ? t("canvas.prompt.replaceAudio") : t("canvas.prompt.selectAudio"))}
+            </button>
+            {vidAudioUrl ? (
+              <button
+                type="button"
+                className="nb-audio-upload-clear nodrag"
+                onPointerDown={sp}
+                onClick={(e) => {
+                  sp(e)
+                  setVidAudioUrl(null)
+                }}
+              >
+                {t("canvas.common.clear")}
+              </button>
+            ) : null}
+          </div>
+          <input
+            ref={audioUploadInputRef}
+            type="file"
+            accept={AUDIO_ACCEPT}
+            hidden
+            onChange={onAudioFileSelect}
+          />
+          {!vidAudioUrl ? (
+            <p className="nb-audio-upload-hint">{t("canvas.prompt.audioSilentWithoutUpload")}</p>
+          ) : null}
         </>
       )}
     </div>
@@ -433,7 +571,7 @@ export default function CanvasPromptBar({
   readOnly = false,
 }) {
   const { getNode, getNodes } = useReactFlow()
-  const transform   = useStore((s) => s.transform)
+  const storeApi = useStoreApi()
   const textModels  = useModelStore((s) => s.textModels)
   const imageModels = useModelStore((s) => s.imageModels)
   const videoModels = useModelStore((s) => s.videoModels)
@@ -482,20 +620,42 @@ export default function CanvasPromptBar({
   const [vidRatio,      setVidRatio]      = useState("16:9")
   const [vidQuality,    setVidQuality]    = useState("720P")
   const [vidDuration,   setVidDuration]   = useState("5s")
-  const [vidAudio,      setVidAudio]      = useState("开启")
+  const [vidAudio,      setVidAudio]      = useState("关闭")
+  const [vidAudioUrl,   setVidAudioUrl]   = useState(null)
+  const [audioUploading, setAudioUploading] = useState(false)
   const [vidPanelOpen,  setVidPanelOpen]  = useState(false)
   const [referenceSlotsExpanded, setReferenceSlotsExpanded] = useState(false)
   const [enhanceBridgeTick, setEnhanceBridgeTick] = useState(0)
   const [atMentionOpen, setAtMentionOpen]   = useState(false)
   const [atMentionQuery, setAtMentionQuery] = useState("")
   const [atMentionAnchor, setAtMentionAnchor] = useState(null)
-  const [isExpanded,    setIsExpanded]    = useState(false)
+  const [expandCardOpen, setExpandCardOpen] = useState(false)
   const [textMode,      setTextMode]      = useState(TEXT_MODES.CHAT)
 
+  const sortedTextModels = useMemo(
+    () => sortModelsForDisplay(textModels),
+    [textModels],
+  )
+  const sortedImageModels = useMemo(
+    () => sortModelsForDisplay(imageModels),
+    [imageModels],
+  )
+  const compatibleVideoModels = useMemo(
+    () => sortModelsForDisplay(
+      videoModels.filter((m) => isVideoModelCompatible(m.id, vidMode)),
+      { vidMode },
+    ),
+    [videoModels, vidMode],
+  )
+
   const hideTimerRef   = useRef(null)
+  const bannerRef = useRef(null)
   const refUploadInputRef = useRef(null)
   const textareaWrapRef = useRef(null)
   const mentionEditorRef = useRef(null)
+  const expandMentionEditorRef = useRef(null)
+  const expandTextareaRef = useRef(null)
+  const expandTextareaWrapRef = useRef(null)
   const recognitionRef = useRef(null)
 
   const bottombarRef = useRef(null)
@@ -553,6 +713,7 @@ export default function CanvasPromptBar({
     const handler = (e) => {
       if (e.target.closest?.(".video-at-mention")) return
       if (textareaWrapRef.current?.contains(e.target)) return
+      if (e.target.closest?.(".pec-overlay")) return
       setAtMentionOpen(false)
       setAtMentionQuery("")
       setAtMentionAnchor(null)
@@ -569,22 +730,14 @@ export default function CanvasPromptBar({
     } else {
       setVisible(false)
       setSubmitted(false)
-      setIsExpanded(false)
+      setExpandCardOpen(false)
       hideTimerRef.current = setTimeout(() => setMounted(false), 280)
     }
     return () => clearTimeout(hideTimerRef.current)
   }, [selectedNodeId])
 
   useEffect(() => {
-    const variant =
-      selectedNodeType === "text-note" || selectedNodeType === "text-response"
-        ? "text"
-        : selectedNodeType === "image-gen"
-          ? "image"
-          : selectedNodeType === "video-gen"
-            ? "video"
-            : null
-    setIsExpanded(variant ? getPromptExpanded(variant) : false)
+    setExpandCardOpen(false)
     setAtMentionOpen(false)
     setAtMentionQuery("")
     setTextModelOpen(false)
@@ -653,7 +806,9 @@ export default function CanvasPromptBar({
     const ar = vidCapabilities.aspect_ratios
     if (ar?.length && !ar.includes(vidRatio)) setVidRatio(ar[0])
     const durations = (vidCapabilities.durations ?? []).map((d) => `${d}s`)
-    if (durations.length && !durations.includes(vidDuration)) setVidDuration(durations[0])
+    if (durations.length && !durations.includes(vidDuration)) {
+      setVidDuration(durations.includes("5s") ? "5s" : durations[0])
+    }
     const qualities = (vidCapabilities.resolutions ?? []).map((q) => normalizeClarity(q))
     const nextQ = normalizeClarity(vidQuality, qualities[0] || "720P")
     if (qualities.length && !qualities.includes(nextQ)) {
@@ -664,7 +819,42 @@ export default function CanvasPromptBar({
     if (!vidCapabilities.supports_audio && vidAudio === "开启") {
       setVidAudio("关闭")
     }
-  }, [vidCapabilities, isVideo, vidRatio, vidDuration, vidQuality, vidAudio])
+    const backend = String(vidCapabilities.video_backend || "").toLowerCase()
+    const selectedNode = selectedNodeId ? getNode(selectedNodeId) : null
+    const modelForDefault = vidModel || selectedNode?.data?.modelId || ""
+    const dirtyPatch = {}
+
+    const defAudio = defaultVidAudioForModel(modelForDefault)
+    if (!selectedNode?.data?.vidAudio && vidAudio !== defAudio) {
+      setVidAudio(defAudio)
+      dirtyPatch.vidAudio = defAudio
+    } else if (backend !== "ltx2") {
+      if (vidAudio !== defAudio) {
+        setVidAudio(defAudio)
+        dirtyPatch.vidAudio = defAudio
+      }
+    }
+
+    if (backend !== "ltx23" && vidAudioUrl) {
+      setVidAudioUrl(null)
+      dirtyPatch.audioUrl = null
+    }
+
+    if (Object.keys(dirtyPatch).length > 0 && selectedNodeId && selectedNode?.data?.onUpdate) {
+      selectedNode.data.onUpdate(selectedNodeId, dirtyPatch)
+    }
+  }, [
+    vidCapabilities,
+    isVideo,
+    vidRatio,
+    vidDuration,
+    vidQuality,
+    vidAudio,
+    vidAudioUrl,
+    selectedNodeId,
+    getNode,
+    vidModel,
+  ])
 
   // 与节点 data.prompt 同步（含旧字段 content）
   useEffect(() => {
@@ -687,13 +877,10 @@ export default function CanvasPromptBar({
       if (isImage) setImgModel(n.data.modelId)
       else if (isText) setTextModel(n.data.modelId)
     }
-    if (isVideo) {
-      setCount(1)
-      if (n.data?.onUpdate && n.data.count !== 1) {
-        n.data.onUpdate(selectedNodeId, { count: 1, expectedCount: 1 })
-      }
-    } else if (typeof n.data?.count === "number" && n.data.count >= 1) {
+    if (typeof n.data?.count === "number" && n.data.count >= 1) {
       setCount(n.data.count)
+    } else {
+      setCount(1)
     }
     if (isText) {
       setTextMode(
@@ -712,8 +899,7 @@ export default function CanvasPromptBar({
       })
       const resolvedModel =
         reconciled.modelId
-        || preferredModelForMode(reconciled.vidMode, videoModels)
-        || videoModels[0]?.id
+        || pickDefaultModel(videoModels, { vidMode: reconciled.vidMode, category: "video" })
         || ""
       setVidMode(reconciled.vidMode)
       setVidModel(resolvedModel)
@@ -740,7 +926,8 @@ export default function CanvasPromptBar({
       if (n.data?.vidRatio) setVidRatio(n.data.vidRatio)
       if (n.data?.vidQuality) setVidQuality(normalizeClarity(n.data.vidQuality))
       if (n.data?.vidDuration) setVidDuration(n.data.vidDuration)
-      if (n.data?.vidAudio) setVidAudio(n.data.vidAudio)
+      setVidAudio(n.data?.vidAudio || defaultVidAudioForModel(resolvedModel))
+      setVidAudioUrl(n.data?.audioUrl || null)
     }
     if (isImage) {
       if (n.data?.imgQuality) setImgQuality(normalizeClarity(n.data.imgQuality))
@@ -796,11 +983,80 @@ export default function CanvasPromptBar({
 
   // Sync model selection when API data arrives or node type changes
   useEffect(() => {
-    if (isText && !textModel && textModels.length > 0) setTextModel(textModels[0].id)
-    if (isImage && !imgModel && imageModels.length > 0) setImgModel(imageModels[0].id)
+    if (isText && !textModel && textModels.length > 0) {
+      setTextModel(pickDefaultModel(textModels, { category: "text" }) || textModels[0].id)
+    }
+    if (isImage && !imgModel && imageModels.length > 0) {
+      setImgModel(pickDefaultModel(imageModels, { category: "image" }) || imageModels[0].id)
+    }
   }, [isText, isImage, textModels, imageModels, textModel, imgModel])
 
   const node = mounted ? getNode(selectedNodeId) : null
+  const nodePosKey = node
+    ? [
+        node.position?.x,
+        node.position?.y,
+        node.width,
+        node.height,
+        node.data?.cardWidth,
+        node.data?.cardHeight,
+        node.data?.cardDisplayRatio,
+        node.data?.vidRatio,
+        node.data?.imgRatio,
+      ].join(":")
+    : ""
+
+  useLayoutEffect(() => {
+    if (!mounted || !selectedNodeId || expandCardOpen) return undefined
+
+    let raf = 0
+    const apply = () => {
+      raf = 0
+      const el = bannerRef.current
+      if (!el) return
+      const n = getNode(selectedNodeId)
+      if (!n) return
+      const [vpX, vpY, zoom] = storeApi.getState().transform
+      const isImg = n.type === "image-gen"
+      const isVid = n.type === "video-gen"
+      const isTxt = n.type === "text-note" || n.type === "text-response"
+      const imageFallback = sizeForAspectRatio(cardDisplayRatio(n?.data, "image"), 280)
+      const videoFallback = sizeForAspectRatio(cardDisplayRatio(n?.data, "video"), 225)
+      const w = n.width ?? n.data?.cardWidth ?? (
+        isImg ? imageFallback.width
+          : isVid ? videoFallback.width
+            : isTxt ? 400 : 280
+      )
+      const h = n.height ?? n.data?.cardHeight ?? (
+        isImg ? imageFallback.height + 60
+          : isVid ? videoFallback.height + 60
+            : 340
+      )
+      const screenX = n.position.x * zoom + vpX
+      const screenY = n.position.y * zoom + vpY
+      const left = screenX + (w * zoom) / 2 - BANNER_WIDTH / 2
+      const top = screenY + h * zoom + BAR_OFFSET_Y
+      el.style.left = `${left}px`
+      el.style.top = `${top}px`
+    }
+
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(apply)
+    }
+
+    schedule()
+    let prev = storeApi.getState().transform
+    const unsub = storeApi.subscribe((state) => {
+      if (state.transform !== prev) {
+        prev = state.transform
+        schedule()
+      }
+    })
+    return () => {
+      unsub()
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [mounted, selectedNodeId, expandCardOpen, getNode, storeApi, nodePosKey])
 
   const scriptTableNode = useMemo(() => {
     if (!isImage || !node) return null
@@ -874,17 +1130,19 @@ export default function CanvasPromptBar({
       vidQuality: clarity,
       vidDuration,
       vidAudio,
+      audioUrl: vidAudioUrl || null,
     }
     if (
       node.data.vidRatio === patch.vidRatio
       && normalizeClarity(node.data.vidQuality) === patch.vidQuality
       && node.data.vidDuration === patch.vidDuration
       && node.data.vidAudio === patch.vidAudio
+      && (node.data.audioUrl || null) === patch.audioUrl
     ) {
       return
     }
     node.data.onUpdate(selectedNodeId, patch)
-  }, [isVideo, selectedNodeId, vidRatio, vidQuality, vidDuration, vidAudio, node, videoSyncTick])
+  }, [isVideo, selectedNodeId, vidRatio, vidQuality, vidDuration, vidAudio, vidAudioUrl, node, videoSyncTick])
 
   const handleVidModeChange = useCallback((mode) => {
     const reconciled = reconcileVideoModelAndMode({
@@ -903,6 +1161,22 @@ export default function CanvasPromptBar({
       ...(reconciled.modelId ? { modelId: reconciled.modelId } : {}),
     })
   }, [syncVideoNodePatch, vidModel, videoModels])
+
+  const handleAudioFileSelect = useCallback(async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setAudioUploading(true)
+    try {
+      const url = await uploadAudioFile(file)
+      setVidAudioUrl(url)
+    } catch (err) {
+      console.error("音频上传失败", err)
+      window.alert?.(err?.message || "音频上传失败")
+    } finally {
+      setAudioUploading(false)
+      e.target.value = ""
+    }
+  }, [])
 
   const handleTextModeChange = useCallback(
     (mode) => {
@@ -1210,6 +1484,7 @@ export default function CanvasPromptBar({
       vidQuality: normalizeClarity(vidQuality, "720P"),
       vidDuration: safeVidDuration,
       vidAudio,
+      audioUrl: vidAudioUrl || null,
       generationMode,
       referenceMode,
       referenceImage: refUrl || null,
@@ -1254,7 +1529,7 @@ export default function CanvasPromptBar({
     await runGenerate(finalPrompt, generateParams)
   }, [prompt, selectedNodeId, selectedNodeType, isText, isImage, isVideo, sending,
       textModel, imgModel, vidModel, count, imgQuality, imgRatio, imgResolution, imgSteps, imgCfg,
-      vidMode, vidRatio, vidQuality, vidDuration, vidAudio, mentions, vidCapabilities, textMode,
+      vidMode, vidRatio, vidQuality, vidDuration, vidAudio, vidAudioUrl, mentions, vidCapabilities, textMode,
       runGenerate, referenceImageUrl, referenceImages, getNode, node, requestIntentGate, syncPromptToNode, t])
 
   const handleMentionEditorChange = useCallback(({ text, mentions: nextMentions }) => {
@@ -1297,21 +1572,7 @@ export default function CanvasPromptBar({
     const items = []
     const seen = new Set()
 
-    if (isImage) {
-      referenceImages.forEach((ref, index) => {
-        const key = `ref:${ref.imageId || ref.imageUrl || index}`
-        if (seen.has(key)) return
-        seen.add(key)
-        items.push({
-          key,
-          label: ref.label || t("canvas.prompt.refImage"),
-          imageUrl: ref.imageUrl,
-          type: "referenceImage",
-          index,
-          removable: true,
-        })
-      })
-    }
+    // 图片参考图在顶栏展示；输入区 chips 仅保留 @ 引用
 
     if (isVideo && node?.data?.referenceMode === "freeref") {
       const freeRefs = Array.isArray(node.data.freeRefs) ? node.data.freeRefs : []
@@ -1322,9 +1583,10 @@ export default function CanvasPromptBar({
         items.push({
           key,
           label: ref.label || t("canvas.prompt.refImage"),
-          imageUrl: ref.imageUrl,
+          imageUrl: resolveRefDisplayUrl(ref, getNode),
           type: "freeRef",
           index,
+          nodeId: ref.nodeId,
           removable: true,
         })
       })
@@ -1345,7 +1607,9 @@ export default function CanvasPromptBar({
         let imageUrl = null
         if (refNode?.type === "image-gen" || refNode?.type === "image-upload") {
           const imgs = getImageNodeImages(refNode)
-          imageUrl = imgs[m.image_index ?? 0]?.url || imgs[0]?.url
+          imageUrl = ensureMediaUrl(
+            imgs[m.image_index ?? 0]?.imageUrl || imgs[0]?.imageUrl || null
+          )
         }
         seen.add(key)
         items.push({
@@ -1359,7 +1623,7 @@ export default function CanvasPromptBar({
       })
     }
 
-    return items
+    return items.filter((item) => item.imageUrl)
   }, [isImage, isVideo, referenceImages, mentions, node?.data?.referenceMode, node?.data?.freeRefs, getNode, t])
 
   const handlePromptChipRemove = useCallback(
@@ -1370,6 +1634,11 @@ export default function CanvasPromptBar({
       }
       if (item.type === "freeRef" && selectedNodeId && node?.data?.onUpdate) {
         const freeRefs = Array.isArray(node.data.freeRefs) ? node.data.freeRefs : []
+        const ref = freeRefs[item.index]
+        if (ref?.nodeId && node.data.onDisconnectIncomingFromSource) {
+          node.data.onDisconnectIncomingFromSource(selectedNodeId, ref.nodeId)
+          return
+        }
         node.data.onUpdate(selectedNodeId, {
           freeRefs: freeRefs.filter((_, i) => i !== item.index),
         })
@@ -1391,14 +1660,17 @@ export default function CanvasPromptBar({
   )
 
   const handleToggleExpand = useCallback(() => {
-    setIsExpanded((v) => {
-      const next = !v
-      const variant =
-        isText || isTextResponse ? "text" : isImage ? "image" : isVideo ? "video" : null
-      if (variant) setPromptExpanded(variant, next)
-      return next
-    })
-  }, [isText, isTextResponse, isImage, isVideo])
+    setExpandCardOpen((v) => !v)
+  }, [])
+
+  useEffect(() => {
+    if (!expandCardOpen) return undefined
+    const timer = window.setTimeout(() => {
+      if (isImage || isVideo) expandMentionEditorRef.current?.focus()
+      else expandTextareaRef.current?.focus()
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [expandCardOpen, isImage, isVideo])
 
   const handleMentionQuery = useCallback(({ active, query, anchorRect }) => {
     if (active) {
@@ -1413,11 +1685,12 @@ export default function CanvasPromptBar({
   }, [])
 
   const handleAtMentionSelect = useCallback((item) => {
-    mentionEditorRef.current?.insertMention(item)
+    const editor = expandCardOpen ? expandMentionEditorRef.current : mentionEditorRef.current
+    editor?.insertMention(item)
     setAtMentionOpen(false)
     setAtMentionQuery("")
     setAtMentionAnchor(null)
-  }, [])
+  }, [expandCardOpen])
 
   const toggleMic = useCallback((e) => {
     sp(e)
@@ -1443,7 +1716,6 @@ export default function CanvasPromptBar({
   const supportsPromptBar = isText || isTextResponse || isImage || isVideo
   if (!supportsPromptBar) return null
 
-  const [vpX, vpY, zoom] = transform
   const imageFallback = sizeForAspectRatio(cardDisplayRatio(node?.data, "image"), 280)
   const videoFallback = sizeForAspectRatio(cardDisplayRatio(node?.data, "video"), 225)
   const nodeW = node.width ?? node.data?.cardWidth ?? (
@@ -1456,11 +1728,6 @@ export default function CanvasPromptBar({
       : isVideo ? videoFallback.height + 60
         : 340
   )
-  const screenX     = node.position.x * zoom + vpX
-  const screenY     = node.position.y * zoom + vpY
-  const nodeCenterX = screenX + (nodeW * zoom) / 2
-  const left        = nodeCenterX - BANNER_WIDTH / 2
-  const top         = screenY + nodeH * zoom + BAR_OFFSET_Y
 
   // ── Shared sub-components ─────────────────────────────
   const MicBtn = () => (
@@ -1503,14 +1770,7 @@ export default function CanvasPromptBar({
 
   const imageHasParamPanel = isImage
 
-  const videoHasParamPanel = vidCapLoading || (
-    vidCapabilities && (
-      (vidCapabilities.aspect_ratios?.length > 0)
-      || (vidCapabilities.durations?.length > 0)
-      || (vidCapabilities.resolutions?.length > 0)
-      || Boolean(vidCapabilities.supports_audio)
-    )
-  )
+  const videoHasParamPanel = isVideo
 
   const ImagePanelWrapper = () => imgPanelOpen
     ? (
@@ -1535,6 +1795,7 @@ export default function CanvasPromptBar({
         capabilities={vidCapabilities}
         loading={vidCapLoading}
         modelId={vidModel}
+        videoModels={videoModels}
         vidMode={vidMode}
         setVidMode={handleVidModeChange}
         vidRatio={vidRatio}
@@ -1545,6 +1806,10 @@ export default function CanvasPromptBar({
         setVidDuration={setVidDuration}
         vidAudio={vidAudio}
         setVidAudio={setVidAudio}
+        vidAudioUrl={vidAudioUrl}
+        setVidAudioUrl={setVidAudioUrl}
+        audioUploading={audioUploading}
+        onAudioFileSelect={handleAudioFileSelect}
       />
     )
     : null
@@ -1554,20 +1819,51 @@ export default function CanvasPromptBar({
 
   const renderImageTopbar = () => (
     <div className="video-top-bar nodrag nopan">
-      <div className="add-ref-wrapper">
-        <RefPickerTrigger
-          label={t("canvas.prompt.addRef")}
-          labelWithCount={t("canvas.prompt.addRefWithCount")}
-          count={referenceImages.length}
-          max={MAX_REFERENCE_IMAGES}
-          disabled={refAtMax}
-          excludeNodeId={selectedNodeId}
-          assetEntries={assetEntries}
-          onAssetPick={handleAssetRefPick}
-          onQuickSelect={handleQuickRefSelect}
-          onCanvasPick={openReferencePicker}
-          onUpload={handleRefUploadFile}
-        />
+      <div className="image-ref-topbar-row nodrag nopan">
+        <div className="add-ref-wrapper">
+          <RefPickerTrigger
+            label={t("canvas.prompt.addRef")}
+            labelWithCount={t("canvas.prompt.addRefWithCount")}
+            count={referenceImages.length}
+            max={MAX_REFERENCE_IMAGES}
+            disabled={refAtMax}
+            excludeNodeId={selectedNodeId}
+            assetEntries={assetEntries}
+            onAssetPick={handleAssetRefPick}
+            onQuickSelect={handleQuickRefSelect}
+            onCanvasPick={openReferencePicker}
+            onUpload={handleRefUploadFile}
+          />
+        </div>
+        {referenceImages.length > 0 && (
+          <div className="image-ref-thumbs nodrag nopan" onPointerDown={sp}>
+            {referenceImages.map((ref, index) => (
+              <div
+                key={`${ref.imageId || ref.imageUrl || index}`}
+                className="image-ref-thumb nodrag nopan"
+                title={ref.label || t("canvas.prompt.refImage")}
+              >
+                <img
+                  src={resolveRefDisplayUrl(ref, getNode)}
+                  alt=""
+                  draggable={false}
+                />
+                <button
+                  type="button"
+                  className="image-ref-thumb-remove nodrag"
+                  onPointerDown={sp}
+                  onClick={(e) => {
+                    sp(e)
+                    removeReferenceImage(index)
+                  }}
+                  aria-label={t("common.delete")}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {projectId && (
         <>
@@ -1584,7 +1880,7 @@ export default function CanvasPromptBar({
       <input
         ref={refUploadInputRef}
         type="file"
-        accept="image/*"
+        accept={IMAGE_ACCEPT}
         hidden
         onChange={handleRefUpload}
       />
@@ -1630,13 +1926,14 @@ export default function CanvasPromptBar({
         </div>
         <div className="nb-bottom-sep" />
         <div className="nb-dropup-wrap">
-          {textModelOpen && textModels.length > 0 && (
+          {textModelOpen && sortedTextModels.length > 0 && (
             <div className="nb-dropup-menu" onPointerDown={sp}>
-              {textModels.map((m) => (
+              {sortedTextModels.map((m) => (
                 <ModelDropupItem
                   key={m.id}
                   model={m}
                   active={textModel === m.id}
+                  showRecommended={isModelRecommended(m)}
                   onSelect={(id) => {
                     setTextModel(id)
                     setTextModelOpen(false)
@@ -1646,8 +1943,8 @@ export default function CanvasPromptBar({
             </div>
           )}
           <button className="nb-model-btn-bare nodrag" onPointerDown={sp}
-            onClick={(e) => { sp(e); if (textModels.length > 0) setTextModelOpen((v) => !v) }}
-            disabled={textModels.length === 0}>
+            onClick={(e) => { sp(e); if (sortedTextModels.length > 0) setTextModelOpen((v) => !v) }}
+            disabled={sortedTextModels.length === 0}>
             <SparkleIcon /><span>{modelLabel(textModels, textModel, textModel)}</span>
           </button>
         </div>
@@ -1667,13 +1964,14 @@ export default function CanvasPromptBar({
         <div className="nb-bottombar">
           {/* Model */}
           <div className="nb-dropup-wrap">
-            {imgModelOpen && imageModels.length > 0 && (
+            {imgModelOpen && sortedImageModels.length > 0 && (
               <div className="nb-dropup-menu" onPointerDown={sp}>
-                {imageModels.map((m) => (
+                {sortedImageModels.map((m) => (
                   <ModelDropupItem
                     key={m.id}
                     model={m}
                     active={imgModel === m.id}
+                    showRecommended={isModelRecommended(m)}
                     onSelect={(id) => {
                       setImgModel(id)
                       setImgModelOpen(false)
@@ -1683,8 +1981,8 @@ export default function CanvasPromptBar({
               </div>
             )}
             <button className="nb-model-btn-bare nodrag" onPointerDown={sp}
-              onClick={(e) => { sp(e); if (imageModels.length > 0) setImgModelOpen((v) => !v) }}
-              disabled={imageModels.length === 0}>
+              onClick={(e) => { sp(e); if (sortedImageModels.length > 0) setImgModelOpen((v) => !v) }}
+              disabled={sortedImageModels.length === 0}>
               <BarChartIcon /><span>{modelLabel(imageModels, imgModel, imgModel)}</span>
             </button>
           </div>
@@ -1716,22 +2014,30 @@ export default function CanvasPromptBar({
     }
 
     // video
+    const videoParamSummary = buildVideoParamSummary({
+      vidMode,
+      vidRatio,
+      vidQuality,
+      vidDuration,
+      vidAudio,
+      vidAudioUrl,
+      vidModel,
+      vidCapabilities,
+      t,
+    })
     return wrapBottombar(
       <div className="nb-bottombar">
         {/* Model */}
         <div className="nb-dropup-wrap">
-          {vidModelOpen && videoModels.length > 0 && (
+          {vidModelOpen && compatibleVideoModels.length > 0 && (
             <div className="nb-dropup-menu" onPointerDown={sp}>
-              {videoModels.map((m) => {
-                const incompatible = !isVideoModelCompatible(m.id, vidMode)
-                return (
-                  <ModelDropupItem
-                    key={m.id}
-                    model={m}
-                    active={vidModel === m.id}
-                    disabled={incompatible}
-                    disabledHint="当前模式不可用"
-                    onSelect={(id) => {
+              {compatibleVideoModels.map((m) => (
+                <ModelDropupItem
+                  key={m.id}
+                  model={m}
+                  active={vidModel === m.id}
+                  showRecommended={isModelRecommended(m, { vidMode })}
+                  onSelect={(id) => {
                       setVidModelOpen(false)
                       if (id === "wan-fun-inpaint") {
                         setVidModel(id)
@@ -1755,39 +2061,27 @@ export default function CanvasPromptBar({
                         })
                         return
                       }
-                      if (I2V_ONLY.has(id) && vidMode === "文生") {
-                        setVidModel(id)
-                        setVidMode("参考")
-                        syncVideoNodePatch({
-                          modelId: id,
-                          referenceMode: "freeref",
-                          panelMode: "freeref",
-                          vidMode: "参考",
-                        })
-                        return
-                      }
-                      if (id === "ltx2-fp4" && vidMode === "首尾帧") {
-                        setVidModel(id)
-                        setVidMode("参考")
-                        syncVideoNodePatch({
-                          modelId: id,
-                          referenceMode: "freeref",
-                          panelMode: "freeref",
-                          vidMode: "参考",
-                        })
-                        return
-                      }
-                      setVidModel(id)
-                      syncVideoNodePatch({ modelId: id })
+                      const reconciled = reconcileVideoModelAndMode({
+                        modelId: id,
+                        vidMode,
+                        models: videoModels,
+                      })
+                      setVidModel(reconciled.modelId)
+                      setVidMode(reconciled.vidMode)
+                      syncVideoNodePatch({
+                        modelId: reconciled.modelId,
+                        vidMode: reconciled.vidMode,
+                        referenceMode: referenceModeForVidMode(reconciled.vidMode),
+                        panelMode: referenceModeForVidMode(reconciled.vidMode),
+                      })
                     }}
-                  />
-                )
-              })}
+                />
+              ))}
             </div>
           )}
           <button className="nb-model-btn-bare nodrag" onPointerDown={sp}
-            onClick={(e) => { sp(e); if (videoModels.length > 0) setVidModelOpen((v) => !v) }}
-            disabled={videoModels.length === 0}>
+            onClick={(e) => { sp(e); if (compatibleVideoModels.length > 0) setVidModelOpen((v) => !v) }}
+            disabled={compatibleVideoModels.length === 0}>
               <SpinIcon /><span>{modelLabel(videoModels, vidModel, vidModel)}</span>
           </button>
         </div>
@@ -1803,23 +2097,7 @@ export default function CanvasPromptBar({
                 disabled={vidCapLoading}
                 onClick={(e) => { sp(e); if (!vidCapLoading) setVidPanelOpen((v) => !v) }}
               >
-                <span>
-                  {[
-                    vidMode === "文生"
-                      ? t("canvas.prompt.t2v")
-                      : vidMode === "参考"
-                        ? t("canvas.prompt.freeref")
-                        : t("canvas.prompt.keyframe"),
-                    vidCapabilities?.aspect_ratios?.length ? vidRatio : null,
-                    (vidCapabilities?.resolutions?.length
-                      ? formatClarityLabel(normalizeClarity(vidQuality))
-                      : null),
-                    vidCapabilities?.durations?.length ? vidDuration : null,
-                    vidCapabilities?.supports_audio
-                      ? (vidAudio === "开启" ? "有声" : "静音")
-                      : null,
-                  ].filter(Boolean).join(" · ")}
-                </span>
+                <span>{videoParamSummary}</span>
                 <SoundIcon />
               </button>
             </div>
@@ -1827,6 +2105,8 @@ export default function CanvasPromptBar({
         )}
         <div style={{flex:1}} />
         <MicBtn />
+        <div className="nb-bottom-sep" />
+        <CountDropup />
         <CreditSend credits="75~225" />
       </div>
     )
@@ -1835,6 +2115,66 @@ export default function CanvasPromptBar({
   if (isRefSource) return null
 
   const promptVariant = isText || isTextResponse ? "text" : isImage ? "image" : isVideo ? "video" : null
+
+  const renderPromptInput = ({ inCard = false } = {}) => {
+    const mentionRef = inCard ? expandMentionEditorRef : mentionEditorRef
+    const mentionList = (isImage || isVideo) && (
+      <VideoAtMentionList
+        open={atMentionOpen}
+        query={atMentionQuery}
+        anchorRect={atMentionAnchor}
+        excludeNodeId={null}
+        compact={!inCard}
+        onSelect={handleAtMentionSelect}
+        onClose={() => { setAtMentionOpen(false); setAtMentionQuery(""); setAtMentionAnchor(null) }}
+      />
+    )
+    const chips = (isImage || isVideo) && promptRefChipItems.length > 0 && (
+      <PromptRefChips items={promptRefChipItems} onRemove={handlePromptChipRemove} />
+    )
+
+    if (isImage || isVideo) {
+      return (
+        <>
+          {chips}
+          {mentionList}
+          <MentionTextarea
+            ref={mentionRef}
+            expanded={inCard}
+            placeholder={
+              isImage
+                ? t("canvas.prompt.placeholderImage")
+                : t("canvas.prompt.placeholderVideo")
+            }
+            value={prompt}
+            mentions={mentions}
+            onChange={handleMentionEditorChange}
+            onMentionQuery={handleMentionQuery}
+            onPointerDown={(e) => { sp(e); exitPickerIfActive() }}
+            onMouseDown={(e) => { sp(e); exitPickerIfActive() }}
+            onFocus={(e) => { sp(e); exitPickerIfActive() }}
+            onClick={(e) => { sp(e); exitPickerIfActive() }}
+            onKeyDown={(e) => { sp(e); if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend() }}
+          />
+        </>
+      )
+    }
+
+    return (
+      <textarea
+        ref={inCard ? expandTextareaRef : undefined}
+        className="nb-textarea nodrag nowheel"
+        placeholder={isTextResponse ? t("canvas.prompt.placeholder") : t("canvas.prompt.placeholder")}
+        value={prompt}
+        onChange={(e) => syncPromptToNode(e.target.value, [])}
+        onPointerDown={(e) => { sp(e); exitPickerIfActive() }}
+        onMouseDown={(e) => { sp(e); exitPickerIfActive() }}
+        onFocus={(e) => { sp(e); exitPickerIfActive() }}
+        onClick={(e) => { sp(e); exitPickerIfActive() }}
+        onKeyDown={(e) => { sp(e); if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend() }}
+      />
+    )
+  }
 
   const videoEnhanceBridge = isVideo && selectedNodeId
     ? getVideoEnhanceBridge(selectedNodeId)
@@ -1861,6 +2201,11 @@ export default function CanvasPromptBar({
         videoEnhanceBridge?.colorCorrection ?? node?.data?.enhanceColorCorrection ?? "lab"
       }
       modelSize={videoEnhanceBridge?.modelSize ?? node?.data?.enhanceModelSize ?? "7b"}
+      availableModelSizes={
+        videoEnhanceBridge?.availableModelSizes?.length
+          ? videoEnhanceBridge.availableModelSizes
+          : ["3b", "7b"]
+      }
       error={videoEnhanceBridge?.error ?? node?.data?.enhanceError ?? null}
       onManualModeChange={videoEnhanceBridge?.onManualModeChange}
       onAdvancedOpenChange={videoEnhanceBridge?.onAdvancedOpenChange}
@@ -1874,16 +2219,22 @@ export default function CanvasPromptBar({
     />
   )
 
-  return (
+  const renderPromptBarShell = ({ modal = false } = {}) => (
     <PromptBarShell
-      visible={visible}
+      visible={modal || visible}
       compact
+      modal={modal}
       promptVariant={promptVariant}
       videoTopbarLayout={isVideo || isImage}
-      style={{ position: "absolute", left, top, width: BANNER_WIDTH, marginLeft: 0 }}
+      style={
+        modal
+          ? undefined
+          : { position: "absolute", left: 0, top: 0, width: BANNER_WIDTH, marginLeft: 0 }
+      }
       onBannerPointerDown={(e) => { sp(e); exitPickerIfActive() }}
       showTopbar={isImage || isVideo}
-      expandInField={isText || isVideo}
+      expandInField={isText || isTextResponse || isVideo}
+      bannerRef={modal ? undefined : bannerRef}
       topbarSlot={
         isImage ? renderImageTopbar() : (
           isVideo && selectedNodeId && node ? (
@@ -1900,65 +2251,27 @@ export default function CanvasPromptBar({
           ) : null
         )
       }
-      mediaSlot={
-        isVideo ? null : null
-      }
-      isExpanded={isExpanded}
-      onToggleExpand={handleToggleExpand}
+      mediaSlot={null}
+      expandCardOpen={modal}
+      onToggleExpand={modal ? () => setExpandCardOpen(false) : handleToggleExpand}
+      showExpandButton={!modal}
       expandTitle={t("canvas.prompt.expand")}
       collapseTitle={t("canvas.prompt.collapse")}
-      textareaWrapRef={textareaWrapRef}
-      textareaSlot={
-        <>
-          {(isImage || isVideo) && promptRefChipItems.length > 0 && (
-            <PromptRefChips items={promptRefChipItems} onRemove={handlePromptChipRemove} />
-          )}
-          {(isImage || isVideo) && (
-            <VideoAtMentionList
-              open={atMentionOpen}
-              query={atMentionQuery}
-              anchorRect={atMentionAnchor}
-              excludeNodeId={null}
-              compact
-              onSelect={handleAtMentionSelect}
-              onClose={() => { setAtMentionOpen(false); setAtMentionQuery(""); setAtMentionAnchor(null) }}
-            />
-          )}
-          {(isImage || isVideo) ? (
-            <MentionTextarea
-              ref={mentionEditorRef}
-              expanded={isExpanded}
-              placeholder={
-                isImage
-                  ? t("canvas.prompt.placeholderImage")
-                  : t("canvas.prompt.placeholderVideo")
-              }
-              value={prompt}
-              mentions={mentions}
-              onChange={handleMentionEditorChange}
-              onMentionQuery={handleMentionQuery}
-              onPointerDown={(e) => { sp(e); exitPickerIfActive() }}
-              onMouseDown={(e) => { sp(e); exitPickerIfActive() }}
-              onFocus={(e) => { sp(e); exitPickerIfActive() }}
-              onClick={(e) => { sp(e); exitPickerIfActive() }}
-              onKeyDown={(e) => { sp(e); if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend() }}
-            />
-          ) : (
-            <textarea
-              className={`nb-textarea nodrag nowheel${isExpanded ? " nb-textarea--expanded" : ""}`}
-              placeholder={isTextResponse ? t("canvas.prompt.placeholder") : t("canvas.prompt.placeholder")}
-              value={prompt}
-              onChange={(e) => syncPromptToNode(e.target.value, [])}
-              onPointerDown={(e) => { sp(e); exitPickerIfActive() }}
-              onMouseDown={(e) => { sp(e); exitPickerIfActive() }}
-              onFocus={(e) => { sp(e); exitPickerIfActive() }}
-              onClick={(e) => { sp(e); exitPickerIfActive() }}
-              onKeyDown={(e) => { sp(e); if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend() }}
-            />
-          )}
-        </>
-      }
+      textareaWrapRef={modal ? expandTextareaWrapRef : textareaWrapRef}
+      textareaSlot={renderPromptInput({ inCard: modal })}
       bottombarSlot={renderBottombar()}
     />
+  )
+
+  return (
+    <>
+      {!expandCardOpen && renderPromptBarShell()}
+      <PromptExpandCard
+        open={expandCardOpen}
+        onClose={() => setExpandCardOpen(false)}
+      >
+        {renderPromptBarShell({ modal: true })}
+      </PromptExpandCard>
+    </>
   )
 }

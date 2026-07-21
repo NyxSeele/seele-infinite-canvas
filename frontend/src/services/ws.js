@@ -1,4 +1,5 @@
-import { API_BASE } from "./api"
+import { getWsBase } from "./api"
+import { safeCloseWebSocket } from "../utils/wsSafeClose"
 
 class WebSocketManager {
   constructor() {
@@ -10,6 +11,13 @@ class WebSocketManager {
     this.listeners = new Set()
     this.reconnectTimer = null
     this.shouldConnect = false
+    this.connectGeneration = 0
+  }
+
+  _dropSocket() {
+    if (!this.ws) return
+    safeCloseWebSocket(this.ws)
+    this.ws = null
   }
 
   connect() {
@@ -19,12 +27,21 @@ class WebSocketManager {
     if (this.ws?.readyState === WebSocket.OPEN) return
     if (this.ws?.readyState === WebSocket.CONNECTING) return
 
-    const wsBase = API_BASE.replace(/^http/, "ws")
-    this.ws = new WebSocket(
-      `${wsBase}/ws?clientId=${encodeURIComponent(this.clientId)}&token=${encodeURIComponent(token)}`
-    )
+    this._dropSocket()
+    const generation = ++this.connectGeneration
+    const wsBase = getWsBase()
+    const url = `${wsBase}/ws?clientId=${encodeURIComponent(this.clientId)}&token=${encodeURIComponent(token)}`
+    let ws
+    try {
+      ws = new WebSocket(url)
+    } catch (err) {
+      console.warn("task WebSocket connect failed", err)
+      return
+    }
+    this.ws = ws
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (generation !== this.connectGeneration || this.ws !== ws) return
       try {
         const data = JSON.parse(event.data)
         this.listeners.forEach((fn) => fn(data))
@@ -33,15 +50,17 @@ class WebSocketManager {
       }
     }
 
-    this.ws.onclose = () => {
-      this.ws = null
+    ws.onclose = () => {
+      if (this.ws === ws) this.ws = null
+      if (generation !== this.connectGeneration) return
       if (this.shouldConnect) {
         this.reconnectTimer = setTimeout(() => this.connect(), 3000)
       }
     }
 
-    this.ws.onerror = () => {
-      this.ws?.close()
+    ws.onerror = () => {
+      if (generation !== this.connectGeneration || this.ws !== ws) return
+      safeCloseWebSocket(ws)
     }
   }
 
@@ -52,12 +71,22 @@ class WebSocketManager {
 
   disconnect() {
     this.shouldConnect = false
+    this.connectGeneration += 1
     clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
-    if (this.ws) {
-      this.ws.onclose = null
-      this.ws.close()
-      this.ws = null
+    this._dropSocket()
+  }
+
+  /** token 刷新后强制用新 token 重连 */
+  reconnect() {
+    const keep = this.shouldConnect
+    this.connectGeneration += 1
+    clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+    this._dropSocket()
+    if (keep) {
+      this.shouldConnect = true
+      this.connect()
     }
   }
 

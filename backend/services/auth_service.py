@@ -262,6 +262,10 @@ def _normalize_avatar_url(url: str | None) -> str | None:
     if "?" in raw:
         raw = raw.split("?", 1)[0]
     if raw.startswith("http://") or raw.startswith("https://"):
+        from services.r2 import ensure_encoded_r2_public_url, is_r2_public_asset_url
+
+        if is_r2_public_asset_url(raw):
+            return ensure_encoded_r2_public_url(raw)
         from urllib.parse import urlparse
 
         parsed = urlparse(raw)

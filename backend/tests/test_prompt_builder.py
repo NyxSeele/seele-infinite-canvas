@@ -1,17 +1,30 @@
 import pytest
 
 from services.prompt_builder import (
+    DEFAULT_NEGATIVE_EN,
     DEFAULT_NEGATIVE_ZH,
     FLUX_QUALITY_SUFFIX,
+    LTX2_PERSON_SUFFIX,
     apply_flux_positive_suffixes,
-    build_hunyuan_prompt,
+    build_ltx2_prompt,
+    build_ltx23_prompt,
     build_prompt,
     build_prompt_from_fields,
     build_script_shot_prompt,
     infer_fields_from_description_rule,
+    merge_ltx2_negative,
+    merge_ltx23_negative,
     normalize_workflow_type,
     resolve_style_en_tags,
 )
+
+
+def test_qwen_image_system_prompt_distinct_from_flux():
+    from comfyui.llm import FLUX_SYSTEM_PROMPT, QWEN_IMAGE_SYSTEM_PROMPT
+
+    assert QWEN_IMAGE_SYSTEM_PROMPT != FLUX_SYSTEM_PROMPT
+    assert "保留参考图的构图和主体" in QWEN_IMAGE_SYSTEM_PROMPT
+    assert "保留参考图的构图和主体" not in FLUX_SYSTEM_PROMPT
 
 
 def test_flux_no_negative():
@@ -29,6 +42,7 @@ def test_sd_includes_negative():
         {"description": "sunset beach"},
         "sd15",
     )
+    assert built.negative == DEFAULT_NEGATIVE_EN
     assert built.negative == DEFAULT_NEGATIVE_ZH
     assert "sunset beach" in built.positive
 
@@ -211,16 +225,28 @@ def test_apply_flux_positive_suffixes_person():
     assert "proper hand anatomy" in out
 
 
-def test_build_hunyuan_prompt_person():
-    out = build_hunyuan_prompt("a girl walking in rain")
-    assert "cinematic quality" in out
-    assert "proper hand anatomy" in out
-
-
-def test_build_hunyuan_prompt_landscape():
-    out = build_hunyuan_prompt("mountain sunrise")
-    assert "cinematic quality" in out
+def test_apply_flux_positive_suffixes_landscape_no_person():
+    out = apply_flux_positive_suffixes("sunset beach landscape")
+    assert "sharp focus" in out
     assert "proper hand anatomy" not in out
+
+
+def test_build_ltx2_prompt_person_and_negative():
+    out = build_ltx2_prompt("a man punches a wooden dummy")
+    assert "consistent identity" in out
+    assert LTX2_PERSON_SUFFIX.split(",")[0] in out
+    neg = merge_ltx2_negative("blurry")
+    assert "neon signs" in neg
+    assert "blurry" in neg
+
+
+def test_build_ltx23_prompt_reuses_ltx2_family():
+    ltx2 = build_ltx2_prompt("a woman turns in neon rain")
+    ltx23 = build_ltx23_prompt("a woman turns in neon rain")
+    assert ltx23 == ltx2
+    neg = merge_ltx23_negative("blurry")
+    assert neg == merge_ltx2_negative("blurry")
+    assert "neon signs" in neg
 
 
 def test_compile_prompt_wan_i2v():
@@ -232,8 +258,9 @@ def test_compile_prompt_wan_i2v():
     )
     assert "camera slowly" in result.positive_prompt
     assert result.negative_prompt
-    assert result.model_params.get("steps") == 4
-    assert result.model_params.get("width") == 640
+    assert result.model_params.get("steps") == 8
+    assert result.model_params.get("width") == 1280
+    assert result.model_params.get("height") == 720
 
 
 def test_g31_wan_prepend_movement_from_labels():

@@ -152,6 +152,8 @@ def remux_frames_with_audio(
         "-c:a",
         "aac",
         "-shortest",
+        "-movflags",
+        "+faststart",
         str(output_path),
     ]
     try:

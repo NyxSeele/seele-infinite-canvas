@@ -21,6 +21,7 @@ from services.media_access import (
     issue_media_ticket,
     normalize_media_reference_url,
 )
+from services.storage_routing import build_media_public_url
 from services.r2 import (
     R2NotConfiguredError,
     generate_presigned_download_url,
@@ -45,6 +46,7 @@ _DOC_EXTS = {
 SOURCE_LABELS = {
     "upload": "本地上传",
     "r2": "团队文件",
+    "r2_local": "本地团队",
     "generation": "AI 生成",
     "asset": "资产库",
     "export": "剧本导出",
@@ -201,10 +203,16 @@ def _fetch_r2_files(
     rows = query.order_by(R2File.uploaded_at.desc()).limit(MAX_PER_SOURCE).all()
     items: list[dict[str, Any]] = []
     for row, user in rows:
+        storage = getattr(row, "storage_backend", "r2") or "r2"
+        source = "r2_local" if storage == "local" else "r2"
+        if storage == "local" and row.local_rel_path:
+            url = build_media_public_url(f"/api/uploads/{row.local_rel_path}")
+        else:
+            url = _r2_public_url(row.key) or f"/api/r2/files/{row.id}/download"
         items.append(
             {
                 "id": f"r2:{row.id}",
-                "source": "r2",
+                "source": source,
                 "source_id": str(row.id),
                 "user_id": row.uploader_id,
                 "username": user.username,
@@ -212,10 +220,14 @@ def _fetch_r2_files(
                 "category": file_category(row.content_type, row.filename),
                 "content_type": row.content_type,
                 "size_bytes": row.size_bytes,
-                "url": _r2_public_url(row.key) or f"/api/r2/files/{row.id}/download",
+                "url": url,
                 "created_at": to_utc_iso(row.uploaded_at),
                 "description": row.description,
-                "meta": {"key": row.key},
+                "meta": {
+                    "key": row.key,
+                    "storage_backend": storage,
+                    "local_rel_path": row.local_rel_path,
+                },
             }
         )
     return items
@@ -422,11 +434,16 @@ def enrich_admin_file_item(item: dict[str, Any], admin_user_id: int) -> dict[str
 
     preview_url: str | None = None
     thumbnail_url: str | None = None
-    if source == "r2":
+    if source == "r2" or source == "r2_local":
         key = (item.get("meta") or {}).get("key")
-        preview_url = _r2_public_url(key) if key else None
-        if not preview_url:
-            preview_url = _r2_presigned_url(key)
+        storage = (item.get("meta") or {}).get("storage_backend") or "r2"
+        local_rel = (item.get("meta") or {}).get("local_rel_path")
+        if storage == "local" and local_rel:
+            preview_url = admin_media_url(f"/api/uploads/{local_rel}", admin_user_id)
+        else:
+            preview_url = _r2_public_url(key) if key else None
+            if not preview_url:
+                preview_url = _r2_presigned_url(key)
     else:
         preview_url = admin_media_url(raw_url, admin_user_id)
         if not preview_url and raw_url.startswith(("http://", "https://")):
@@ -505,10 +522,12 @@ def resolve_admin_file_local_path(file_id: str, db: Session) -> tuple[Path, str]
             return resolve_admin_upload_path(rel), row.name or _filename_from_url(image_url)
         raise HTTPException(status_code=404, detail="该资产需通过外链或媒体代理下载")
 
-    if source == "r2":
+    if source == "r2" or source == "r2_local":
         row = db.get(R2File, int(source_id))
         if not row:
-            raise HTTPException(status_code=404, detail="R2 文件不存在")
+            raise HTTPException(status_code=404, detail="团队文件不存在")
+        if getattr(row, "storage_backend", "r2") == "local" and row.local_rel_path:
+            return resolve_admin_upload_path(row.local_rel_path), row.filename
         raise HTTPException(status_code=404, detail="R2 文件请使用预签名链接下载")
 
     raise HTTPException(status_code=400, detail="不支持的文件类型")
@@ -518,10 +537,13 @@ def resolve_admin_file_remote_url(file_id: str, db: Session) -> tuple[str, str]:
     """返回 (远程 URL, 下载文件名) — 用于 R2 / 外链 / Comfy 代理。"""
     source, source_id = parse_admin_file_id(file_id)
 
-    if source == "r2":
+    if source == "r2" or source == "r2_local":
         row = db.get(R2File, int(source_id))
         if not row:
-            raise HTTPException(status_code=404, detail="R2 文件不存在")
+            raise HTTPException(status_code=404, detail="团队文件不存在")
+        if getattr(row, "storage_backend", "r2") == "local" and row.local_rel_path:
+            path = resolve_admin_upload_path(row.local_rel_path)
+            return f"file://{path}", row.filename
         url = _r2_public_url(row.key) or _r2_presigned_url(row.key)
         if not url:
             raise HTTPException(status_code=503, detail="R2 下载链接不可用")
@@ -679,14 +701,22 @@ def admin_files_stats(db: Session) -> dict[str, Any]:
         if size:
             upload_bytes += size
 
-    r2_bytes = db.query(R2File.size_bytes).all()
-    r2_total = sum(int(r[0] or 0) for r in r2_bytes)
+    local_team_bytes = 0
+    r2_remote_bytes = 0
+    for row in db.query(R2File.storage_backend, R2File.size_bytes, R2File.local_rel_path).all():
+        storage, size_bytes, local_rel = row[0], int(row[1] or 0), row[2]
+        if (storage or "r2") == "local":
+            disk_size = _local_file_size(local_rel) if local_rel else None
+            local_team_bytes += disk_size if disk_size is not None else size_bytes
+        else:
+            r2_remote_bytes += size_bytes
 
     return {
         "total": total,
         "by_source": by_source,
         "storage_bytes": {
-            "upload": upload_bytes,
-            "r2": r2_total,
+            "upload": upload_bytes + local_team_bytes,
+            "r2": r2_remote_bytes,
+            "local_team": local_team_bytes,
         },
     }

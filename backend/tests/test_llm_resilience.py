@@ -29,3 +29,16 @@ def test_retry_delay_backoff():
     assert retry_delay_seconds(0, 1.0, rate_limited=False) == 1.0
     assert retry_delay_seconds(1, 1.0, rate_limited=False) == 2.0
     assert retry_delay_seconds(0, 1.0, rate_limited=True) >= 3.0
+
+
+def test_is_llm_quota_exhausted_error_detects_quota_and_429():
+    from services.llm_resilience import is_llm_quota_exhausted_error
+
+    exc_429 = Exception("429 Too Many Requests")
+    exc_429.status_code = 429
+    assert is_llm_quota_exhausted_error(exc_429)
+
+    assert is_llm_quota_exhausted_error(Exception("免费额度已用尽"))
+    assert is_llm_quota_exhausted_error(Exception("AllocationQuota exceeded"))
+
+    assert not is_llm_quota_exhausted_error(Exception("401 Unauthorized"))

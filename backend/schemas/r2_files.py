@@ -38,6 +38,8 @@ class R2FileOut(BaseModel):
     description: str | None = None
     category: str = "other"
     public_url: str | None = None
+    storage_backend: str = "r2"
+    local_rel_path: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -65,3 +67,15 @@ class AddToAssetsRequest(BaseModel):
 
 class UpdateR2AccessRequest(BaseModel):
     r2_access: bool
+
+
+class ImportVideoRequest(BaseModel):
+    source_url: str = Field(..., min_length=1, max_length=2048)
+    description: str | None = Field(None, max_length=2000)
+    team_id: str | None = Field(None, max_length=36)
+
+
+class ImportVideoResponse(BaseModel):
+    file: R2FileOut
+    rehosted: bool = False
+    skipped: bool = False

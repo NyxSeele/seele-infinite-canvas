@@ -1,19 +1,54 @@
 import { useState } from "react"
 import { LineIcon } from "../icons/LineIcons"
 import { ensureMediaUrl } from "../../utils/mediaTicket"
-export { formatProjectDate, parseUpdatedAt, parseServerTimestamp } from "../../utils/datetime"
+export {
+  formatProjectDate,
+  formatProjectActivityTime,
+  parseUpdatedAt,
+  parseServerTimestamp,
+} from "../../utils/datetime"
 
-export function ProjectThumb({ previewUrl, empty }) {
+const ACCENT_PALETTES = [
+  { from: "#7B68EE", to: "#B8A9FF", tone: "purple" },
+  { from: "#4F8CFF", to: "#7EC8FF", tone: "blue" },
+  { from: "#FF8A4C", to: "#FFC27A", tone: "orange" },
+  { from: "#9B59F5", to: "#E0B0FF", tone: "violet" },
+  { from: "#2EC4B6", to: "#7ADFE6", tone: "teal" },
+]
+
+/** 按项目 id 生成差异化渐变封面色 */
+export function hashProjectAccent(projectId) {
+  if (!projectId) return ACCENT_PALETTES[0]
+  let hash = 0
+  for (let i = 0; i < projectId.length; i += 1) {
+    hash = (hash * 31 + projectId.charCodeAt(i)) >>> 0
+  }
+  return ACCENT_PALETTES[hash % ACCENT_PALETTES.length]
+}
+
+export function ProjectThumb({ previewUrl, coverMediaType, empty, projectId, compact }) {
   const [broken, setBroken] = useState(false)
   if (!previewUrl || broken) {
+    if (empty) {
+      return (
+        <span className="ws-project-thumb-placeholder ws-project-thumb-placeholder--new">
+          <LineIcon name="plus" size={compact ? 18 : 28} />
+        </span>
+      )
+    }
+    const accent = hashProjectAccent(projectId)
     return (
-      <span className="ws-project-thumb-placeholder">
-        <LineIcon name={empty ? "plus" : "thumb"} size={28} />
-      </span>
+      <span
+        className="ws-project-thumb-placeholder ws-project-thumb-placeholder--accent"
+        style={{
+          "--ws-thumb-from": accent.from,
+          "--ws-thumb-to": accent.to,
+        }}
+      />
     )
   }
   const url = ensureMediaUrl(previewUrl)
-  const isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(url)
+  const isVideo = coverMediaType === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(url)
   if (isVideo) {
     return (
       <video
@@ -82,4 +117,16 @@ export function getRatioOptions(t) {
     { value: "4:3", label: "4:3", icon: <RatioShape w={4} h={3} /> },
     { value: "1:1", label: "1:1", icon: <RatioShape w={1} h={1} /> },
   ]
+}
+
+export function getProjectActivityLabels(t) {
+  return {
+    neverEdited: t("ws.project.neverEdited"),
+    justNow: t("ws.time.justNow"),
+    minutesAgo: (n) => t("ws.time.minutesAgo", { n }),
+    hoursAgo: (n) => t("ws.time.hoursAgo", { n }),
+    todayAt: (hm) => t("ws.time.todayAt", { time: hm }),
+    daysAgo: (n) => t("ws.time.daysAgo", { n }),
+    weeksAgo: (n) => t("ws.time.weeksAgo", { n }),
+  }
 }

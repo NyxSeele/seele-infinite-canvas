@@ -2396,6 +2396,7 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
   border-radius: 28px;
   z-index: 90;
   box-shadow: var(--tl-card-shadow);
+  overflow: visible;
 }
 
 .clt-top {
@@ -2409,12 +2410,13 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-bottom: 0;
+  padding-bottom: 2px;
   margin-top: 12px;
   padding-top: 10px;
   border-top: none;
   position: relative;
   width: 100%;
+  overflow: visible;
 }
 
 .clt-bottom::before {
@@ -2559,6 +2561,8 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
 .clt-avatar-btn {
   width: 30px;
   height: 30px;
+  min-width: 30px;
+  min-height: 30px;
   border-radius: 50%;
   background: linear-gradient(135deg, #a78bfa, #38bdf8);
   border: none;
@@ -2573,13 +2577,15 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
   font-family: inherit;
   margin-top: 4px;
   box-shadow: none;
+  padding: 0;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 .clt-avatar-btn:hover { opacity: 0.85; }
 .clt-avatar-btn--open {
   box-shadow:
     0 0 0 2px #93c5fd,
-    0 0 0 4px color-mix(in srgb, #93c5fd 32%, transparent),
-    0 0 14px color-mix(in srgb, #93c5fd 38%, transparent);
+    0 0 0 3px color-mix(in srgb, #93c5fd 28%, transparent);
 }
 
 /* Add-node card menu */
@@ -2875,6 +2881,9 @@ body:has(.rf-page--light) .ctb-share-menu-icon {
   border-radius: 50%;
   background-size: cover;
   background-position: center;
+  background-repeat: no-repeat;
+  object-fit: cover;
+  object-position: center;
 }
 
 .clt-menu-foot {

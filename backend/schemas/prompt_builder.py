@@ -76,6 +76,18 @@ class BuildScriptShotRequest(BaseModel):
         ge=0,
         description="compile 阶段传入的角色引用数量（供 L0 trace 日志）",
     )
+    cast_library: list[dict] = Field(
+        default_factory=list,
+        description="分镜表角色库（identity 门禁用）",
+    )
+    identity_ids: list[str] = Field(
+        default_factory=list,
+        description="本镜绑定的 identityId 列表",
+    )
+    row: Optional[dict] = Field(
+        default=None,
+        description="分镜行快照（含 identityIds / promptMentions）",
+    )
 
 
 class ShotLinkingMeta(BaseModel):

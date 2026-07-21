@@ -1,0 +1,46 @@
+.canvas-error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 100vh;
+  padding: 24px;
+  background: #0f0f12;
+  color: rgba(255, 255, 255, 0.88);
+  text-align: center;
+}
+
+.canvas-error-boundary__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.canvas-error-boundary__detail {
+  margin: 0;
+  max-width: 480px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.55);
+  word-break: break-word;
+}
+
+.canvas-error-boundary__retry {
+  margin-top: 8px;
+  padding: 8px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.canvas-error-boundary__retry:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.canvas-error-boundary__content {
+  min-height: 100%;
+}

@@ -1,5 +1,5 @@
 .tim-backdrop {
-  position: fixed;
+  position: fixed !important;
   inset: 0;
   z-index: 6100;
   background: rgba(0, 0, 0, 0.55);

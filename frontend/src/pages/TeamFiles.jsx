@@ -7,12 +7,16 @@ import WorkspaceTopbar from "../components/workspace/WorkspaceTopbar"
 import {
   addTeamFileToAssets,
   deleteTeamFile,
-  getTeamFileDownloadUrl,
+  downloadTeamFile,
+  importTeamVideoFromUrl,
   listTeamFiles,
-  presignTeamFileUpload,
-  registerTeamFile,
-  uploadToPresignedUrl,
+  uploadTeamFile,
 } from "../services/teamFilesApi"
+import { getUploadCapabilities } from "../services/mediaApi"
+import { ensureMediaUrl } from "../utils/mediaTicket"
+import GenHistoryVideoPicker, {
+  loadVideoHistoryItems,
+} from "../components/review/GenHistoryVideoPicker"
 import { goBackOr } from "../utils/navReturn"
 import "./Workspace.css"
 import "./TeamFiles.css"
@@ -54,7 +58,7 @@ function formatTime(iso) {
 function FilePreview({ file }) {
   const [broken, setBroken] = useState(false)
   const cat = file.category || "other"
-  const url = file.public_url
+  const url = ensureMediaUrl(file.public_url)
 
   if (!broken && url && cat === "image") {
     return (
@@ -94,12 +98,28 @@ export default function TeamFiles() {
   const { user } = useAuth()
   const theme = useCanvasStore((s) => s.theme)
   const activeTeamId = useTeamStore((s) => s.activeTeamId)
+  const ownedTeam = useTeamStore((s) => s.ownedTeam)
+  const joinedTeams = useTeamStore((s) => s.joinedTeams)
+  const ensureTeamsLoaded = useTeamStore((s) => s.ensureTeamsLoaded)
 
-  const hasAccess = user?.role === "admin" || user?.r2_access === true
+  const [teamBackendLocal, setTeamBackendLocal] = useState(false)
+
+  const isTeamEditor = useMemo(() => {
+    const editRoles = new Set(["owner", "admin", "editor"])
+    if (ownedTeam?.my_role && editRoles.has(ownedTeam.my_role)) return true
+    return joinedTeams.some((t) => editRoles.has(t.my_role))
+  }, [ownedTeam, joinedTeams])
+
+  const hasAccess =
+    user?.role === "admin"
+    || user?.r2_access === true
+    || (teamBackendLocal && isTeamEditor)
   const isAdmin = user?.role === "admin"
 
   const [files, setFiles] = useState([])
+  const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
   const [category, setCategory] = useState("all")
@@ -109,7 +129,22 @@ export default function TeamFiles() {
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [assetTarget, setAssetTarget] = useState(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyScope, setHistoryScope] = useState("mine")
+  const [historySelectedId, setHistorySelectedId] = useState(null)
+  const [importingHistory, setImportingHistory] = useState(false)
+  const [batchImporting, setBatchImporting] = useState(false)
+  const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0, failed: 0 })
   const fileInputRef = useRef(null)
+
+  const PAGE_SIZE = 200
+
+  useEffect(() => {
+    getUploadCapabilities().then((caps) => {
+      setTeamBackendLocal(caps?.team?.backend === "local")
+    })
+    ensureTeamsLoaded()
+  }, [ensureTeamsLoaded])
 
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput.trim()), 300)
@@ -123,16 +158,37 @@ export default function TeamFiles() {
     }
     setLoading(true)
     try {
-      const data = await listTeamFiles({ q: search || undefined })
+      const data = await listTeamFiles({ q: search || undefined, limit: PAGE_SIZE, offset: 0 })
       setFiles(data.items || [])
+      setTotalCount(data.total ?? (data.items || []).length)
     } catch (err) {
       console.error(err)
       message.error(err.response?.data?.detail || "加载文件列表失败")
       setFiles([])
+      setTotalCount(0)
     } finally {
       setLoading(false)
     }
   }, [hasAccess, search])
+
+  const loadMore = async () => {
+    if (loadingMore || files.length >= totalCount) return
+    setLoadingMore(true)
+    try {
+      const data = await listTeamFiles({
+        q: search || undefined,
+        limit: PAGE_SIZE,
+        offset: files.length,
+      })
+      const next = data.items || []
+      setFiles((prev) => [...prev, ...next])
+      setTotalCount(data.total ?? files.length + next.length)
+    } catch (err) {
+      message.error(err.response?.data?.detail || "加载更多失败")
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   useEffect(() => {
     refresh()
@@ -167,25 +223,10 @@ export default function TeamFiles() {
     setUploading(true)
     setProgress(0)
     try {
-      const contentType = pendingFile.type || "application/octet-stream"
-      const presign = await presignTeamFileUpload({
-        filename: pendingFile.name,
-        content_type: contentType,
-        size_bytes: pendingFile.size,
+      await uploadTeamFile(pendingFile, {
         description: description.trim() || null,
-      })
-      await uploadToPresignedUrl(
-        presign.upload_url,
-        pendingFile,
-        presign.content_type || contentType,
-        setProgress,
-      )
-      await registerTeamFile({
-        key: presign.key,
-        filename: pendingFile.name,
-        content_type: contentType,
-        size_bytes: pendingFile.size,
-        description: description.trim() || null,
+        teamId: activeTeamId || undefined,
+        onProgress: setProgress,
       })
       message.success("上传成功")
       setUploadOpen(false)
@@ -199,12 +240,84 @@ export default function TeamFiles() {
     }
   }
 
+  const onHistorySelect = async (item) => {
+    if (!item?.mediaUrl || importingHistory || batchImporting) return
+    setHistorySelectedId(item.id)
+    setImportingHistory(true)
+    try {
+      const result = await importTeamVideoFromUrl(item.mediaUrl, {
+        description: (item.title || item.prompt || "").trim() || null,
+        teamId: activeTeamId || undefined,
+      })
+      if (result.skipped) {
+        message.info("该视频已在团队文件中")
+      } else {
+        message.success(result.rehosted ? "已从生成历史转存" : "已导入")
+      }
+      setHistoryOpen(false)
+      setHistorySelectedId(null)
+      await refresh()
+    } catch (err) {
+      setHistorySelectedId(null)
+      message.error(err.response?.data?.detail || err.message || "导入失败")
+    } finally {
+      setImportingHistory(false)
+    }
+  }
+
+  const importAllHistory = async () => {
+    if (importingHistory || batchImporting) return
+    setBatchImporting(true)
+    setBatchProgress({ done: 0, total: 0, failed: 0 })
+    const CONCURRENCY = 3
+    try {
+      const items = await loadVideoHistoryItems(historyScope, activeTeamId)
+      if (!items.length) {
+        message.warning(historyScope === "team" ? "暂无团队视频生成记录" : "暂无个人视频生成历史")
+        return
+      }
+      setBatchProgress({ done: 0, total: items.length, failed: 0 })
+      let failed = 0
+      let done = 0
+      const queue = [...items]
+      const worker = async () => {
+        while (queue.length) {
+          const item = queue.shift()
+          if (!item) break
+          try {
+            await importTeamVideoFromUrl(item.mediaUrl, {
+              description: (item.title || item.prompt || "").trim() || null,
+              teamId: activeTeamId || undefined,
+            })
+          } catch (err) {
+            failed += 1
+            console.error(err)
+          }
+          done += 1
+          setBatchProgress({ done, total: items.length, failed })
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => worker()))
+      if (failed === 0) {
+        message.success(`已导入 ${items.length} 个视频`)
+      } else {
+        message.warning(`完成 ${items.length - failed}/${items.length}，${failed} 个失败`)
+      }
+      setHistoryOpen(false)
+      await refresh()
+    } catch (err) {
+      message.error(err.response?.data?.detail || err.message || "批量导入失败")
+    } finally {
+      setBatchImporting(false)
+      setBatchProgress({ done: 0, total: 0, failed: 0 })
+    }
+  }
+
   const handleDownload = async (file) => {
     try {
-      const data = await getTeamFileDownloadUrl(file.id)
-      window.open(data.download_url, "_blank", "noopener,noreferrer")
+      await downloadTeamFile(file)
     } catch (err) {
-      message.error(err.response?.data?.detail || "获取下载链接失败")
+      message.error(err.response?.data?.detail || err.message || "下载失败")
     }
   }
 
@@ -263,6 +376,16 @@ export default function TeamFiles() {
                 onClick={() => fileInputRef.current?.click()}
               >
                 上传文件
+              </button>
+              <button
+                type="button"
+                className="tf-btn"
+                onClick={() => {
+                  setHistorySelectedId(null)
+                  setHistoryOpen(true)
+                }}
+              >
+                从生成历史导入
               </button>
               <input
                 ref={fileInputRef}
@@ -341,6 +464,19 @@ export default function TeamFiles() {
                 ))}
               </div>
             )}
+
+            {!loading && files.length < totalCount && (
+              <div className="tf-load-more">
+                <button
+                  type="button"
+                  className="tf-btn"
+                  disabled={loadingMore}
+                  onClick={loadMore}
+                >
+                  {loadingMore ? "加载中…" : `加载更多（${files.length}/${totalCount}）`}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -384,6 +520,59 @@ export default function TeamFiles() {
                 onClick={startUpload}
               >
                 {uploading ? "上传中…" : "开始上传"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {historyOpen && (
+        <div
+          className="tf-modal-overlay"
+          onClick={() => !importingHistory && !batchImporting && setHistoryOpen(false)}
+        >
+          <div className="tf-modal tf-modal--wide" onClick={(e) => e.stopPropagation()}>
+            <h3>从生成历史导入视频</h3>
+            <p className="tf-hint">选择单个视频导入，或一键导入当前列表中的全部视频到团队文件空间。</p>
+            <GenHistoryVideoPicker
+              selectedId={historySelectedId}
+              onSelect={onHistorySelect}
+              disabled={importingHistory || batchImporting}
+              scope={historyScope}
+              onScopeChange={setHistoryScope}
+            />
+            {batchImporting && batchProgress.total > 0 && (
+              <div className="tf-progress">
+                <div className="tf-progress-track">
+                  <div
+                    className="tf-progress-bar"
+                    style={{
+                      width: `${Math.round((batchProgress.done / batchProgress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+                <span>
+                  {batchProgress.done}/{batchProgress.total}
+                  {batchProgress.failed > 0 ? ` · ${batchProgress.failed} 失败` : ""}
+                </span>
+              </div>
+            )}
+            <div className="tf-modal-footer">
+              <button
+                type="button"
+                className="tf-btn"
+                disabled={importingHistory || batchImporting}
+                onClick={() => setHistoryOpen(false)}
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                className="tf-btn tf-btn--primary"
+                disabled={importingHistory || batchImporting}
+                onClick={importAllHistory}
+              >
+                {batchImporting ? "批量导入中…" : "导入全部（当前列表）"}
               </button>
             </div>
           </div>

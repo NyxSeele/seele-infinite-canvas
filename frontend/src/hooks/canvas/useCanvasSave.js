@@ -3,7 +3,8 @@ import api from "../../services/api"
 import { loadCanvasProject, loadCanvasShare, saveCanvasProject } from "../../services/canvasApi"
 import { useCanvasStore } from "../../stores"
 import { getActiveTeamId } from "../../utils/teamContext"
-import { hydrateNodeMediaFields, refreshMediaTicket } from "../../utils/mediaTicket"
+import { hydrateNodeMediaFields, refreshMediaTicket, getMediaTicket } from "../../utils/mediaTicket"
+import { fetchR2PublicBase } from "../../utils/r2MediaUrl"
 import {
   sanitizeNodeDataForPersist,
   resetStaleGenerationState,
@@ -23,12 +24,85 @@ import { parseServerTimestamp } from "../../utils/datetime"
 
 const LAST_MOD_KEY = "canvas-last-modified"
 
+const VOLATILE_SNAPSHOT_DATA_KEYS = new Set([
+  "progress",
+  "enhanceStatus",
+  "lutStatus",
+])
+
+function stripVolatileNodeData(data) {
+  if (!data || typeof data !== "object") return data
+  const next = { ...data }
+  for (const key of VOLATILE_SNAPSHOT_DATA_KEYS) {
+    delete next[key]
+  }
+  return next
+}
+
 function lastModKey(projectId) {
   return projectId ? `${LAST_MOD_KEY}-${projectId}` : LAST_MOD_KEY
 }
 
 function draftKey(projectId) {
   return projectId ? `canvas-local-draft-${projectId}` : "canvas-local-draft"
+}
+
+function readDraft(projectId) {
+  try {
+    const raw = localStorage.getItem(draftKey(projectId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (parsed?.nodes && Array.isArray(parsed.nodes)) {
+      return { savedAt: 0, payload: parsed }
+    }
+    if (parsed?.payload?.nodes) {
+      return {
+        savedAt: Number(parsed.savedAt) || 0,
+        payload: parsed.payload,
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function writeDraft(projectId, payload) {
+  try {
+    const incomingNodes = payload?.nodes
+    // 禁止用空草稿覆盖已有非空草稿（加载失败/误清空时保住最后一份）
+    if (Array.isArray(incomingNodes) && incomingNodes.length === 0) {
+      const existing = readDraft(projectId)
+      if ((existing?.payload?.nodes?.length || 0) > 0) {
+        return
+      }
+    }
+    localStorage.setItem(
+      draftKey(projectId),
+      JSON.stringify({ savedAt: Date.now(), payload })
+    )
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearDraft(projectId) {
+  try {
+    localStorage.removeItem(draftKey(projectId))
+  } catch {
+    /* ignore */
+  }
+}
+
+function shouldApplyDraft(projectId, draft, serverUpdatedAt) {
+  const apiTs = parseServerTimestamp(serverUpdatedAt)
+  const draftTs = draft.savedAt || 0
+  if (draftTs <= 0) return false
+  if (apiTs != null && draftTs <= apiTs) {
+    clearDraft(projectId)
+    return false
+  }
+  return true
 }
 
 function readLastModified(projectId) {
@@ -48,6 +122,44 @@ function writeLastModified(projectId, ts) {
   }
 }
 
+function normalizeViewport(vp) {
+  if (!vp || typeof vp !== "object") return null
+  const x = Number(vp.x)
+  const y = Number(vp.y)
+  const zoom = Number(vp.zoom)
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoom) || zoom <= 0) {
+    return null
+  }
+  return { x, y, zoom }
+}
+
+function localViewportKey(projectId) {
+  return projectId ? `canvas-viewport-${projectId}` : null
+}
+
+function readLocalViewport(projectId) {
+  const key = localViewportKey(projectId)
+  if (!key) return null
+  try {
+    return normalizeViewport(JSON.parse(localStorage.getItem(key) || "null"))
+  } catch {
+    return null
+  }
+}
+
+function writeLocalViewport(projectId, vp) {
+  const key = localViewportKey(projectId)
+  const normalized = normalizeViewport(vp)
+  if (!key || !normalized) return
+  try {
+    localStorage.setItem(key, JSON.stringify(normalized))
+  } catch {
+    /* ignore */
+  }
+}
+
+export { normalizeViewport, readLocalViewport, writeLocalViewport }
+
 export function useCanvasSave({
   projectId = null,
   nodes,
@@ -65,8 +177,11 @@ export function useCanvasSave({
   onProjectLoaded,
   onVersionConflict,
   savePauseRef = null,
+  viewportSnapshot = null,
+  onViewportRestore = null,
 }) {
   const saveTimeoutRef = useRef(null)
+  const draftTimeoutRef = useRef(null)
   const shareLoadedRef = useRef(false)
   const loadedProjectRef = useRef(null)
   const setSaveStatus = useCanvasStore((s) => s.setSaveStatus)
@@ -76,21 +191,65 @@ export function useCanvasSave({
   const setProjectVersion = useCanvasStore((s) => s.setProjectVersion)
   const setProjectTeamId = useCanvasStore((s) => s.setProjectTeamId)
   const prevSnapshotRef = useRef(null)
+  const prevDraftSnapshotRef = useRef(null)
+  const viewportRef = useRef(null)
+  const saveInFlightRef = useRef(false)
+  const saveQueuedRef = useRef(false)
+  const canvasLoadedRef = useRef(false)
+  /** 最近一次成功加载时服务端节点数；>0 时禁止自动保存空画布 */
+  const serverNodeCountRef = useRef(0)
+  const nodesRef = useRef(nodes)
+  const edgesRef = useRef(edges)
+
+  useEffect(() => {
+    nodesRef.current = nodes
+  }, [nodes])
+
+  useEffect(() => {
+    edgesRef.current = edges
+  }, [edges])
+
+  useEffect(() => {
+    const vp = normalizeViewport(viewportSnapshot)
+    if (vp) viewportRef.current = vp
+  }, [viewportSnapshot])
+
+  useEffect(() => {
+    viewportRef.current = null
+  }, [projectId, shareToken])
 
   const buildPersistPayload = useCallback((nodeList, edgeList) => {
     const serializableNodes = nodeList.map((n) => {
       const { onUpdate, onDelete, ...restData } = n.data
       return normalizeTextResponseNode({
         ...n,
-        data: sanitizeNodeDataForPersist(restData),
+        // draft/save 均去掉 progress 等瞬时字段，避免生成中每 2s 全量写 localStorage
+        data: sanitizeNodeDataForPersist(stripVolatileNodeData(restData)),
       })
     })
-    return { nodes: serializableNodes, edges: edgeList }
-  }, [])
+    const payload = { nodes: serializableNodes, edges: edgeList }
+    const vp = normalizeViewport(viewportRef.current) || normalizeViewport(viewportSnapshot)
+    if (vp) payload.viewport = vp
+    return payload
+  }, [viewportSnapshot])
+
+  const buildSnapshotComparePayload = useCallback((nodeList, edgeList) => {
+    const serializableNodes = nodeList.map((n) => {
+      const { onUpdate, onDelete, ...restData } = n.data
+      return normalizeTextResponseNode({
+        ...n,
+        data: sanitizeNodeDataForPersist(stripVolatileNodeData(restData)),
+      })
+    })
+    const payload = { nodes: serializableNodes, edges: edgeList }
+    const vp = normalizeViewport(viewportRef.current) || normalizeViewport(viewportSnapshot)
+    if (vp) payload.viewport = vp
+    return payload
+  }, [viewportSnapshot])
 
   const snapshotKey = useCallback(
-    (nodeList, edgeList) => JSON.stringify(buildPersistPayload(nodeList, edgeList)),
-    [buildPersistPayload]
+    (nodeList, edgeList) => JSON.stringify(buildSnapshotComparePayload(nodeList, edgeList)),
+    [buildSnapshotComparePayload]
   )
 
   const applyCanvasData = useCallback(
@@ -170,7 +329,16 @@ export function useCanvasSave({
       if (meta.last_modified_by) {
         setLastModifiedBy(meta.last_modified_by)
       }
+      // Resolve viewport before snapshot so subsequent saves never omit a known viewport
+      const restoredViewport =
+        normalizeViewport(canvasData?.viewport)
+        || readLocalViewport(projectId)
+      if (restoredViewport) {
+        viewportRef.current = restoredViewport
+        writeLocalViewport(projectId, restoredViewport)
+      }
       prevSnapshotRef.current = snapshotKey(restoredNodes, edgesToRestore)
+      onViewportRestore?.(restoredViewport)
     },
     [
       buildData,
@@ -186,6 +354,7 @@ export function useCanvasSave({
       snapshotKey,
       textRetryRef,
       zIndexCounterRef,
+      onViewportRestore,
     ]
   )
 
@@ -199,20 +368,45 @@ export function useCanvasSave({
     shareLoadedRef.current = false
     loadedProjectRef.current = null
     prevSnapshotRef.current = null
+    prevDraftSnapshotRef.current = null
+    canvasLoadedRef.current = false
+    serverNodeCountRef.current = 0
   }, [projectId, shareToken])
+
+  const markLoaded = useCallback((res, appliedPayload) => {
+    const fromServer = Array.isArray(res?.canvas_data?.nodes)
+      ? res.canvas_data.nodes.length
+      : Number(res?.node_count) || 0
+    const fromApplied = Array.isArray(appliedPayload?.nodes)
+      ? appliedPayload.nodes.length
+      : fromServer
+    serverNodeCountRef.current = Math.max(fromServer, fromApplied)
+    canvasLoadedRef.current = true
+  }, [])
 
   useEffect(() => {
     reloadFromServerRef.current = async () => {
       if (!projectId || shareToken) return null
       try {
         await refreshMediaTicket(api)
+        await fetchR2PublicBase(api)
       } catch {
         /* ignore */
       }
       const res = await loadCanvasProject(projectId)
       loadedProjectRef.current = projectId
-      applyCanvasData(res.canvas_data || { nodes: [], edges: [] }, res)
+      const draft = readDraft(projectId)
+      if (draft && shouldApplyDraft(projectId, draft, res.updated_at)) {
+        applyCanvasData(draft.payload, res)
+        onProjectLoaded?.(res)
+        markLoaded(res, draft.payload)
+        setSaveStatus("idle")
+        return res
+      }
+      const payload = res.canvas_data || { nodes: [], edges: [] }
+      applyCanvasData(payload, res)
       onProjectLoaded?.(res)
+      markLoaded(res, payload)
       setSaveStatus("idle")
       return res
     }
@@ -223,10 +417,12 @@ export function useCanvasSave({
           if (shareLoadedRef.current) return
           const shared = await loadCanvasShare(shareToken)
           shareLoadedRef.current = true
-          applyCanvasData(shared.canvas_data || { nodes: [], edges: [] }, {
+          const payload = shared.canvas_data || { nodes: [], edges: [] }
+          applyCanvasData(payload, {
             name: shared.project_name,
           })
           onShareLoaded?.(shared.project_name)
+          markLoaded({ canvas_data: payload }, payload)
           setSaveStatus("idle")
           return
         }
@@ -234,16 +430,28 @@ export function useCanvasSave({
         if (!projectId) return
         if (loadedProjectRef.current === projectId) return
 
-        try {
-          await refreshMediaTicket(api)
-        } catch {
-          /* 未登录时跳过 */
+        // ticket/R2 与项目加载并行；已有有效 ticket 则跳过刷新
+        const prep = []
+        if (!getMediaTicket()) {
+          prep.push(refreshMediaTicket(api).catch(() => {}))
         }
-
-        const res = await loadCanvasProject(projectId)
+        prep.push(fetchR2PublicBase(api).catch(() => {}))
+        const projectPromise = loadCanvasProject(projectId)
+        await Promise.all(prep)
+        const res = await projectPromise
         loadedProjectRef.current = projectId
-        applyCanvasData(res.canvas_data || { nodes: [], edges: [] }, res)
+        const draft = readDraft(projectId)
+        if (draft && shouldApplyDraft(projectId, draft, res.updated_at)) {
+          applyCanvasData(draft.payload, res)
+          onProjectLoaded?.(res)
+          markLoaded(res, draft.payload)
+          setSaveStatus("idle")
+          return
+        }
+        const payload = res.canvas_data || { nodes: [], edges: [] }
+        applyCanvasData(payload, res)
         onProjectLoaded?.(res)
+        markLoaded(res, payload)
         const stored = readLastModified(projectId)
         const apiTs = parseServerTimestamp(res.updated_at)
         if (apiTs != null) {
@@ -253,115 +461,150 @@ export function useCanvasSave({
         if (res.last_modified_by) setLastModifiedBy(res.last_modified_by)
         setSaveStatus("idle")
       } catch (e) {
-        console.log("画布加载失败或为空", e)
+        console.error("画布加载失败，已禁止自动保存以免写空", e)
+        canvasLoadedRef.current = false
         setSaveStatus("error")
       }
     }
     loadCanvas()
   }, [shareToken, projectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (readOnly || shareToken || !projectId) return undefined
-    if (savePauseRef?.current) return undefined
-    clearTimeout(saveTimeoutRef.current)
-    saveTimeoutRef.current = setTimeout(async () => {
-      if (savePauseRef?.current) return
+  const runSave = useCallback(async () => {
+    if (savePauseRef?.current) return
+    if (!canvasLoadedRef.current) return
+    if (saveInFlightRef.current) {
+      saveQueuedRef.current = true
+      return
+    }
 
-      const payload = buildPersistPayload(nodes, edges)
-      const snapshotStr = JSON.stringify(payload)
-      if (snapshotStr === prevSnapshotRef.current) {
-        return
+    const payload = buildPersistPayload(nodesRef.current, edgesRef.current)
+    const incomingCount = Array.isArray(payload.nodes) ? payload.nodes.length : 0
+    // 硬闸：服务端曾有内容时，禁止把空 nodes 自动写回（上次事故根因）
+    if (incomingCount === 0 && serverNodeCountRef.current > 0) {
+      console.warn(
+        "[canvas] skip empty overwrite save; serverNodeCount=",
+        serverNodeCountRef.current
+      )
+      setSaveStatus("idle")
+      return
+    }
+
+    const compareKey = JSON.stringify(
+      buildSnapshotComparePayload(nodesRef.current, edgesRef.current)
+    )
+    if (compareKey === prevSnapshotRef.current) {
+      return
+    }
+    const projectName = useCanvasStore.getState().projectName
+
+    const token = localStorage.getItem("access_token")
+    if (!token) {
+      writeDraft(projectId, payload)
+      const draftVp = normalizeViewport(payload.viewport)
+      if (draftVp) writeLocalViewport(projectId, draftVp)
+      setSaveStatus("idle")
+      return
+    }
+
+    saveInFlightRef.current = true
+    setSaveStatus("saving")
+    const version = useCanvasStore.getState().projectVersion
+    const sessionId = typeof getSessionId === "function" ? getSessionId() : null
+    try {
+      const res = await saveCanvasProject(projectId, {
+        canvas_data: payload,
+        name: projectName,
+        version,
+        session_id: sessionId,
+        display_name: readDisplayName(),
+      })
+      if (res.version != null) setProjectVersion(res.version)
+      const now = parseServerTimestamp(res.updated_at) ?? Date.now()
+      writeLastModified(projectId, now)
+      setLastModifiedAt(now)
+      if (res.last_modified_by) {
+        setLastModifiedBy(res.last_modified_by)
+      } else {
+        setLastModifiedBy(readDisplayName())
       }
-      const projectName = useCanvasStore.getState().projectName
-
-      const token = localStorage.getItem("access_token")
-      if (!token) {
-        try {
-          localStorage.setItem(draftKey(projectId), JSON.stringify(payload))
-        } catch {
-          /* ignore */
+      prevSnapshotRef.current = compareKey
+      if (incomingCount > 0) {
+        serverNodeCountRef.current = incomingCount
+        clearDraft(projectId)
+      }
+      const savedVp = normalizeViewport(payload.viewport)
+      if (savedVp) writeLocalViewport(projectId, savedVp)
+      window.dispatchEvent(
+        new CustomEvent("canvas-project-saved", {
+          detail: {
+            projectId,
+            updated_at: res.updated_at ?? null,
+            preview_url: res.preview_url ?? null,
+            cover_media_type: res.cover_media_type ?? null,
+            recent_collaborators: res.recent_collaborators ?? [],
+            collaborator_extra_count: res.collaborator_extra_count ?? 0,
+          },
+        })
+      )
+      setSaveStatus("saved")
+      setTimeout(() => {
+        if (useCanvasStore.getState().saveStatus === "saved") {
+          useCanvasStore.getState().setSaveStatus("idle")
         }
+      }, 2500)
+    } catch (err) {
+      const status = err?.response?.status
+      const detail = err?.response?.data?.detail
+      if (status === 401) {
+        writeDraft(projectId, payload)
         setSaveStatus("idle")
         return
       }
-
-      setSaveStatus("saving")
-      const version = useCanvasStore.getState().projectVersion
-      const sessionId = typeof getSessionId === "function" ? getSessionId() : null
-      try {
-        const res = await saveCanvasProject(projectId, {
-          canvas_data: payload,
-          name: projectName,
-          version,
-          session_id: sessionId,
-          display_name: readDisplayName(),
-        })
-        if (res.version != null) setProjectVersion(res.version)
-        const now = parseServerTimestamp(res.updated_at) ?? Date.now()
-        writeLastModified(projectId, now)
-        setLastModifiedAt(now)
-        if (res.last_modified_by) {
-          setLastModifiedBy(res.last_modified_by)
-        } else {
-          setLastModifiedBy(readDisplayName())
-        }
-        prevSnapshotRef.current = snapshotStr
-        window.dispatchEvent(
-          new CustomEvent("canvas-project-saved", {
-            detail: {
-              projectId,
-              updated_at: res.updated_at ?? null,
-              preview_url: res.preview_url ?? null,
-            },
+      if (status === 409) {
+        // 空覆盖被拒：用服务端数据恢复，勿清草稿
+        if (detail?.code === "empty_overwrite_blocked" && detail?.canvas_data) {
+          applyCanvasData(detail.canvas_data, {
+            version: detail.version,
+            name: detail.name,
           })
-        )
-        setSaveStatus("saved")
-        setTimeout(() => {
-          if (useCanvasStore.getState().saveStatus === "saved") {
-            useCanvasStore.getState().setSaveStatus("idle")
-          }
-        }, 2500)
-      } catch (err) {
-        const status = err?.response?.status
-        if (status === 401) {
-          try {
-            localStorage.setItem(draftKey(projectId), JSON.stringify(payload))
-          } catch {
-            /* ignore */
-          }
+          serverNodeCountRef.current =
+            Array.isArray(detail.canvas_data?.nodes)
+              ? detail.canvas_data.nodes.length
+              : Number(detail.node_count) || serverNodeCountRef.current
           setSaveStatus("idle")
+          onVersionConflict?.({ ...detail, merged: true })
           return
         }
-        if (status === 409) {
-          const detail = err?.response?.data?.detail
-          if (detail?.canvas_data) {
-            applyCanvasData(detail.canvas_data, {
-              version: detail.version,
-              name: detail.name,
-            })
-            setSaveStatus("idle")
-            onVersionConflict?.({ ...detail, merged: true })
-            return
-          }
-          if (detail?.version != null) setProjectVersion(detail.version)
-          onVersionConflict?.(detail)
-          setSaveStatus("error")
+        if (detail?.canvas_data) {
+          applyCanvasData(detail.canvas_data, {
+            version: detail.version,
+            name: detail.name,
+          })
+          setSaveStatus("idle")
+          onVersionConflict?.({ ...detail, merged: true })
           return
         }
-        if (status === 423) {
-          setSaveStatus("error")
-          return
-        }
+        if (detail?.version != null) setProjectVersion(detail.version)
+        onVersionConflict?.(detail)
         setSaveStatus("error")
+        return
       }
-    }, 2000)
-    return () => clearTimeout(saveTimeoutRef.current)
+      if (status === 423) {
+        setSaveStatus("error")
+        return
+      }
+      setSaveStatus("error")
+    } finally {
+      saveInFlightRef.current = false
+      if (saveQueuedRef.current) {
+        saveQueuedRef.current = false
+        void runSave()
+      }
+    }
   }, [
-    nodes,
-    edges,
     projectId,
-    readOnly,
-    shareToken,
+    buildPersistPayload,
+    buildSnapshotComparePayload,
     setSaveStatus,
     setLastModifiedAt,
     setLastModifiedBy,
@@ -370,9 +613,68 @@ export function useCanvasSave({
     onVersionConflict,
     savePauseRef,
     applyCanvasData,
+  ])
+
+  useEffect(() => {
+    if (readOnly || shareToken || !projectId) return undefined
+    clearTimeout(saveTimeoutRef.current)
+    saveTimeoutRef.current = setTimeout(() => {
+      void runSave()
+    }, 2000)
+    return () => clearTimeout(saveTimeoutRef.current)
+  }, [
+    nodes,
+    edges,
+    projectId,
+    readOnly,
+    shareToken,
+    runSave,
+  ])
+
+  useEffect(() => {
+    if (readOnly || shareToken || !projectId) return undefined
+    clearTimeout(draftTimeoutRef.current)
+    draftTimeoutRef.current = setTimeout(() => {
+      if (!canvasLoadedRef.current) return
+      const compareKey = snapshotKey(nodesRef.current, edgesRef.current)
+      if (compareKey === prevDraftSnapshotRef.current) return
+      prevDraftSnapshotRef.current = compareKey
+      const payload = buildPersistPayload(nodesRef.current, edgesRef.current)
+      writeDraft(projectId, payload)
+    }, 800)
+    return () => clearTimeout(draftTimeoutRef.current)
+  }, [
+    nodes,
+    edges,
+    projectId,
+    readOnly,
+    shareToken,
     buildPersistPayload,
     snapshotKey,
   ])
+
+  useEffect(() => {
+    if (readOnly || shareToken || !projectId) return undefined
+    const flushDraft = () => {
+      if (!canvasLoadedRef.current) return
+      const payload = buildPersistPayload(nodesRef.current, edgesRef.current)
+      writeDraft(projectId, payload)
+      const draftVp = normalizeViewport(payload.viewport)
+      if (draftVp) writeLocalViewport(projectId, draftVp)
+    }
+    const onPageHide = () => {
+      flushDraft()
+      clearTimeout(saveTimeoutRef.current)
+      clearTimeout(draftTimeoutRef.current)
+      void runSave()
+    }
+    window.addEventListener("pagehide", onPageHide)
+    window.addEventListener("beforeunload", flushDraft)
+    return () => {
+      window.removeEventListener("pagehide", onPageHide)
+      window.removeEventListener("beforeunload", flushDraft)
+    }
+  }, [projectId, readOnly, shareToken, buildPersistPayload, runSave])
 
   return { writeLastModified, setLastModifiedAt, setSaveStatus, reloadFromServer }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import api, { API_BASE } from "../../services/api"
+import { appendMediaTicket, stripMediaTicket } from "../../utils/mediaTicket"
 import { normalizeAdminModel } from "./modelUtils"
 import { formatApiError } from "./formatApiError"
 import "./FeedbackAnalysis.css"
@@ -57,8 +58,16 @@ function formatParamsSummary(params) {
 function mediaDisplayUrl(record) {
   const raw = record.result_url || record.result
   if (!raw) return ""
-  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw
-  return `${API_BASE}${raw.startsWith("/") ? raw : `/${raw}`}`
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    if (!raw.includes("/api/view") && !raw.includes("/api/uploads")) {
+      return raw
+    }
+  }
+  const stripped = stripMediaTicket(raw)
+  const relative = stripped.startsWith("/") ? stripped : `/${stripped}`
+  const base = API_BASE || ""
+  const target = base ? `${base}${relative}` : relative
+  return appendMediaTicket(target)
 }
 
 function TrendsChart({ series }) {

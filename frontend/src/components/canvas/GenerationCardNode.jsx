@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo, memo } from "react"
 import { createPortal } from "react-dom"
 import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
 import { Z_NODE_DOTS_MENU, Z_REF_HOVER } from "../../utils/zIndexLayers"
@@ -17,6 +17,7 @@ import GenerationStopButton from "./GenerationStopButton"
 import GenerationBrandLoader from "./GenerationBrandLoader"
 import TaskRatingBar from "./TaskRatingBar"
 import { cancelCanvasTask } from "../../services/cancelTask"
+import { isCanvasDebugEnabled } from "../../utils/canvas/canvasDebug"
 import {
   buildClearGenerationTaskPatch,
   buildRefItem,
@@ -27,15 +28,25 @@ import {
 } from "./videoReferenceHelpers"
 import { mergeMentionRefsIntoReferenceImages } from "./promptMentions"
 import useModelCapabilities from "../../hooks/useModelCapabilities"
+import { isNodePatchNoop } from "../../utils/canvas/nodePatch"
+import { isExploreNode, getExploreImageUrl } from "../../utils/canvas/exploreTrack"
+import {
+  getActiveScriptTable,
+  promoteExploreToStoryboard,
+  resolveStoryboardShotIndex,
+} from "../../utils/canvas/promoteExploreToStoryboard"
 import { createStaleProgressGuard } from "./taskPollTimeout"
+import { normalizeProgressPercent, capRunningProgress, mergeMonotonicProgress, isMediaTaskPreparing } from "./videoProgressSync"
 import { MENU_SUBMENU_CLOSE_MS } from "../../utils/menuFlyoutTiming"
 import { parseGenerationError, isNetworkError } from "./taskNetworkError"
+import { createRateLimitBackoffState } from "../../utils/canvas/rateLimitBackoff"
 import { getRetryPolicy } from "../../utils/canvas/generationRetryPolicy"
 import { markSuppressPaneMenu } from "../../utils/canvas/suppressPaneMenu"
 import { findScriptTableNode, resolveImageQualityPresetId } from "../../utils/canvas/scriptTableNode"
 import { BEAT_CARD_NODE_TYPE } from "../../utils/canvas/scriptBeatCard"
 import { collectConnectedCharacterFaceUrl } from "../../utils/canvas/entityRefs"
 import { uploadImageFileWithMeta, buildUploadedImageNodePatch } from "../../services/uploadImage"
+import { IMAGE_ACCEPT } from "../../utils/uploadFileKind"
 import { ensureMediaUrl, stripMediaTicket } from "../../utils/mediaTicket"
 import { useLocale } from "../../utils/locale"
 import { useCanvasNodeWheel } from "./canvasScrollHelpers"
@@ -50,7 +61,7 @@ import { isRealProjectId } from "../../utils/canvas/projectId"
 import "./CanvasShared.css"
 import "./GenerationCardNode.css"
 
-const POLL_INTERVAL_MS = 2000
+const POLL_INTERVAL_MS = 5000
 const PROGRESS_HINT_INTERVAL_MS = 5000
 
 function useProgressHints() {
@@ -92,6 +103,51 @@ function mediaUrlForDisplay(url) {
   return ensureMediaUrl(url)
 }
 
+const PULID_FACE_REQUIRED_MSG = "人物一致性模式需上传正脸参考图"
+
+function resolveImageRefContext(data, modelId, id, getNodes, getEdges, getNode) {
+  const mentionsList = Array.isArray(data.mentions) ? data.mentions : []
+  const merged = mergeMentionRefsIntoReferenceImages(
+    getReferenceImagesList(data),
+    mentionsList,
+    getNode
+  )
+  const refs = getResolvedReferenceImagesList(
+    { referenceImages: merged },
+    getNode
+  )
+  const refUrls = refs
+    .map((r) => r.imageUrl)
+    .filter((url) => url && !isInlineImageUrl(url))
+  const characterFaceUrl = collectConnectedCharacterFaceUrl(getNodes(), getEdges(), id)
+  const pulidFaceUrl = characterFaceUrl && !isInlineImageUrl(characterFaceUrl) ? characterFaceUrl : null
+  const rawRef = pulidFaceUrl || refUrls[0] || data.referenceImageUrl || data.referenceImage || null
+  const selectedModel = pulidFaceUrl ? "flux-pulid" : (data.modelId || modelId)
+  const hasPulidReference = Boolean(
+    pulidFaceUrl
+    || refUrls.length
+    || refs.some((r) => r.imageUrl && isInlineImageUrl(r.imageUrl))
+    || data.referenceImageUrl
+    || data.referenceImage
+  )
+  const hasFaceRef = Boolean(pulidFaceUrl || (selectedModel === "flux-pulid" && hasPulidReference))
+  const needsPulidFace = selectedModel === "flux-pulid" && !hasPulidReference
+  const useReactor = hasFaceRef
+    ? data.use_reactor !== false
+    : Boolean(data.use_reactor)
+  return {
+    refs,
+    refUrls,
+    pulidFaceUrl,
+    rawRef,
+    selectedModel,
+    hasPulidReference,
+    hasFaceRef,
+    needsPulidFace,
+    useReactor,
+  }
+}
+
 async function resolvePayloadReferenceUrls(payload) {
   const next = { ...payload }
   let single = next.reference_image
@@ -121,9 +177,10 @@ async function resolvePayloadReferenceUrls(payload) {
   return next
 }
 
-/** 宫格单格状态：waiting=排队等待 ComfyUI，generating=本格生成中，done=已完成 */
+/** 宫格单格状态：waiting=排队等待 ComfyUI，preparing=后台提交/L3，generating=本格生成中，done=已完成 */
 const SLOT_PHASE = {
   WAITING: "waiting",
+  PREPARING: "preparing",
   GENERATING: "generating",
   DONE: "done",
   FAILED: "failed",
@@ -133,6 +190,7 @@ function deriveSlotPhase(task) {
   if (!task) return SLOT_PHASE.WAITING
   if (task.status === "completed") return SLOT_PHASE.DONE
   if (task.status === "failed") return SLOT_PHASE.FAILED
+  if (isMediaTaskPreparing(task)) return SLOT_PHASE.PREPARING
   if (task.status === "running") return SLOT_PHASE.GENERATING
   const pct = Number(task.progress) || 0
   if (pct > 0) return SLOT_PHASE.GENERATING
@@ -140,6 +198,7 @@ function deriveSlotPhase(task) {
 }
 
 function logImageGen(step, detail) {
+  if (!isCanvasDebugEnabled()) return
   if (detail !== undefined) {
     console.log(`[image-gen] ${step}`, detail)
   } else {
@@ -219,9 +278,79 @@ function normalizeInitialImageStatus(raw) {
   return raw || "input"
 }
 
-export default function GenerationCardNode({ id, data, selected, isConnectable }) {
+function generationCardPropsAreEqual(prev, next) {
+  if (prev.id !== next.id || prev.selected !== next.selected) return false
+  if (prev.isConnectable !== next.isConnectable) return false
+  const p = prev.data
+  const n = next.data
+  if (p === n) return true
+  const keys = [
+    "status",
+    "taskId",
+    "uploadedImage",
+    "imageUrl",
+    "generatedImage",
+    "resultUrl",
+    "prompt",
+    "displayPrompt",
+    "userRating",
+    "ratingTags",
+    "ratingComment",
+    "error",
+    "expectedCount",
+    "label",
+    "aspectRatio",
+    "modelId",
+    "referenceImage",
+    "referenceImageUrl",
+    "pendingTrigger",
+  ]
+  for (const key of keys) {
+    if (p?.[key] !== n?.[key]) return false
+  }
+  const pResults = p?.results
+  const nResults = n?.results
+  if (pResults === nResults) return true
+  if (!Array.isArray(pResults) || !Array.isArray(nResults)) return false
+  if (pResults.length !== nResults.length) return false
+  for (let i = 0; i < pResults.length; i++) {
+    if (pResults[i] !== nResults[i]) return false
+  }
+  return true
+}
+
+function GenerationCardNode({ id, data, selected, isConnectable }) {
   const { t } = useLocale()
-  const { getNodes, getEdges, setNodes } = useReactFlow()
+  const readOnly = data.readOnly === true
+  const { getNodes, getEdges, setNodes, setEdges } = useReactFlow()
+  const allNodes = useStore((s) => Array.from(s.nodeInternals.values()))
+  const allEdges = useStore((s) => s.edges)
+  const showExploreBadge = useMemo(
+    () => isExploreNode({ id, type: "image-gen" }, allNodes, allEdges),
+    [id, allNodes, allEdges]
+  )
+  const scriptTable = useMemo(
+    () => getActiveScriptTable(allNodes, allEdges),
+    [allNodes, allEdges]
+  )
+  const storyboardRows = scriptTable?.data?.rows || []
+  const exploreImageUrl = useMemo(
+    () => getExploreImageUrl({ id, data, type: "image-gen" }),
+    [id, data]
+  )
+  const showPromoteButton = Boolean(
+    !readOnly && showExploreBadge && exploreImageUrl
+  )
+  const storyboardShotIndex = useMemo(() => {
+    if (showExploreBadge || !scriptTable) return null
+    return resolveStoryboardShotIndex({
+      genNodeId: id,
+      scriptTableRef: data.scriptTableRef,
+      scriptTable,
+    })
+  }, [showExploreBadge, scriptTable, id, data.scriptTableRef])
+  const [promotePopoverOpen, setPromotePopoverOpen] = useState(false)
+  const [promoteRowIndex, setPromoteRowIndex] = useState(0)
   const progressHints = useProgressHints()
   const [status, setStatus] = useState(() => normalizeInitialImageStatus(data.status))
   const [prompt, setPrompt] = useState(data.prompt || "")
@@ -245,6 +374,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
   const [progressHint, setProgressHint] = useState(() => progressHints[0])
   /** 单图模式沿用；宫格模式用 slotProgress / slotPhases */
   const [pollProgress, setPollProgress] = useState(0)
+  const [isPreparing, setIsPreparing] = useState(false)
   const [slotPhases, setSlotPhases] = useState([])
   const [slotProgress, setSlotProgress] = useState([])
   const imageModels = useModelStore((s) => s.imageModels)
@@ -261,8 +391,9 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
 
   useEffect(() => {
     if (!modelCapabilities || !data.onUpdate) return
+    if (isNodePatchNoop(data, { capabilities: modelCapabilities })) return
     data.onUpdate(id, { capabilities: modelCapabilities })
-  }, [modelCapabilities, id, data.onUpdate])
+  }, [modelCapabilities, id, data])
 
   // 换模型后裁剪不兼容的比例 / 清晰度
   useEffect(() => {
@@ -451,16 +582,19 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     })
     staleGuard.start()
     staleGuardRef.current = staleGuard
+    const rateLimit = createRateLimitBackoffState()
     const intervals = []
     activeTaskIds.forEach((activeTaskId, index) => {
       let timerId = null
       const pollOnce = async () => {
+        if (rateLimit.paused) return
         if (doneSlots.has(index)) return
         const pollUrl = `${API_BASE}/api/tasks/${activeTaskId}`
         try {
           logImageGen(`轮询 #${index} 请求`, { url: pollUrl, taskId: activeTaskId })
           const res = await api.get(`/api/tasks/${activeTaskId}`)
           const task = res.data
+          rateLimit.reset()
           staleGuardRef.current?.touch?.()
           logImageGen(`轮询 #${index} 响应`, {
             httpStatus: res.status,
@@ -474,15 +608,29 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
           const phase = deriveSlotPhase(task)
           phasesRef.current[index] = phase
           if (phase === SLOT_PHASE.GENERATING && typeof task.progress === "number") {
-            const prev = progressRef.current[index] || 0
-            const next = Math.max(prev, Math.min(100, Math.max(0, Number(task.progress) || 0)))
+            const capped = capRunningProgress(normalizeProgressPercent(task.progress), {
+              isComplete: false,
+            })
+            const next = capped != null
+              ? Math.max(progressRef.current[index] || 0, capped)
+              : (progressRef.current[index] || 0)
             progressRef.current[index] = next
             staleGuardRef.current?.bump(next)
           } else if (phase === SLOT_PHASE.WAITING) {
             progressRef.current[index] = 0
           }
           if (totalCount <= 1 && typeof task.progress === "number") {
-            setPollProgress((prev) => Math.max(prev, Math.min(100, Math.max(0, Number(task.progress) || 0))))
+            const capped = capRunningProgress(normalizeProgressPercent(task.progress), {
+              isComplete: task.status === "completed",
+            })
+            if (capped != null) {
+              setPollProgress((prev) => mergeMonotonicProgress(prev, capped, {
+                allowDecrease: task.status === "completed",
+              }))
+            }
+          }
+          if (totalCount <= 1) {
+            setIsPreparing(isMediaTaskPreparing(task))
           }
           syncSlotUi()
 
@@ -491,10 +639,16 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
             doneSlots.add(index)
             const raw = task.result || ""
             const imageUrl = resolveTaskResultUrl(raw)
-            slotsRef.current[index] = imageUrl
-            phasesRef.current[index] = SLOT_PHASE.DONE
-            progressRef.current[index] = 100
-            logImageGen(`轮询 #${index} 单格完成`, { imageUrl })
+            if (!imageUrl) {
+              phasesRef.current[index] = SLOT_PHASE.FAILED
+              lastFailureMsg = parseGenerationError(null, task) || t("canvas.gen.failed")
+              logImageGen(`轮询 #${index} 完成但无 URL`, { raw })
+            } else {
+              slotsRef.current[index] = imageUrl
+              phasesRef.current[index] = SLOT_PHASE.DONE
+              progressRef.current[index] = 100
+              logImageGen(`轮询 #${index} 单格完成`, { imageUrl })
+            }
             setResults([...slotsRef.current])
             syncSlotUi()
             if (doneSlots.size === activeTaskIds.length) {
@@ -522,6 +676,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
             detail: err.response?.data,
           })
           if (isNetworkError(err)) return
+          if (rateLimit.apply(err)) return
           if (timerId) clearInterval(timerId)
           doneSlots.add(index)
           phasesRef.current[index] = SLOT_PHASE.FAILED
@@ -642,6 +797,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       setTaskIds([])
       setErrorMessage(null)
       setPollProgress(0)
+      setIsPreparing(false)
       setStatus(
         nextStatus === "failed"
           ? "failed"
@@ -673,29 +829,82 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     toastTimerRef.current = setTimeout(() => setToast(null), 2000)
   }, [])
 
+  const runPromoteToStoryboard = useCallback(
+    (rowIndex) => {
+      if (!scriptTable || storyboardRows.length === 0) {
+        showToast(t("canvas.draft.needScript"))
+        return false
+      }
+      const clamped = Math.min(Math.max(0, rowIndex), storyboardRows.length - 1)
+      const ok = promoteExploreToStoryboard({
+        nodes: allNodes,
+        setNodes,
+        setEdges,
+        scriptTableId: scriptTable.id,
+        rowIndex: clamped,
+        imageGenNodeId: id,
+        imageUrl: exploreImageUrl,
+      })
+      if (ok) {
+        setPromotePopoverOpen(false)
+        showToast(t("canvas.draft.promoted", { n: clamped + 1 }))
+      }
+      return ok
+    },
+    [
+      scriptTable,
+      storyboardRows.length,
+      allNodes,
+      setNodes,
+      setEdges,
+      id,
+      exploreImageUrl,
+      showToast,
+      t,
+    ]
+  )
+
+  const handlePromoteClick = useCallback(() => {
+    if (!scriptTable || storyboardRows.length === 0) {
+      showToast(t("canvas.draft.needScript"))
+      return
+    }
+    if (storyboardRows.length === 1) {
+      runPromoteToStoryboard(0)
+      return
+    }
+    setPromoteRowIndex(0)
+    setPromotePopoverOpen((v) => !v)
+  }, [scriptTable, storyboardRows.length, runPromoteToStoryboard, showToast, t])
+
   const getNodeRef = useRef(null)
+  const { getNode } = useReactFlow()
+  getNodeRef.current = getNode
+
+  const resolvedReferenceImages = useMemo(
+    () => getResolvedReferenceImagesList(data, getNode),
+    [data, getNode]
+  )
+
+  const imageRefContext = useMemo(
+    () => resolveImageRefContext(data, modelId, id, getNodes, getEdges, getNode),
+    [data, modelId, id, getNodes, getEdges, getNode, resolvedReferenceImages]
+  )
+  const { needsPulidFace, hasFaceRef } = imageRefContext
 
   const buildSubmitPayload = useCallback(() => {
     const mentionsList = Array.isArray(data.mentions) ? data.mentions : []
-    const merged = mergeMentionRefsIntoReferenceImages(
-      getReferenceImagesList(data),
-      mentionsList,
-      getNodeRef.current
-    )
-    const refs = getResolvedReferenceImagesList(
-      { referenceImages: merged },
-      getNodeRef.current
-    )
-    const refUrls = refs
-      .map((r) => r.imageUrl)
-      .filter((url) => url && !isInlineImageUrl(url))
-    const characterFaceUrl = collectConnectedCharacterFaceUrl(getNodes(), getEdges(), id)
-    const pulidFaceUrl = characterFaceUrl && !isInlineImageUrl(characterFaceUrl) ? characterFaceUrl : null
+    const ctx = resolveImageRefContext(data, modelId, id, getNodes, getEdges, getNodeRef.current)
+    const {
+      refs,
+      refUrls,
+      pulidFaceUrl,
+      rawRef,
+      selectedModel,
+      useReactor,
+    } = ctx
     const generationPrompt = (data.generationPrompt || "").trim()
     const displayPrompt = (data.displayPrompt || prompt || data.prompt || "").trim()
-    const rawRef = pulidFaceUrl || refUrls[0] || data.referenceImageUrl || null
-    const selectedModel = pulidFaceUrl ? "flux-pulid" : (data.modelId || modelId)
-    const hasFaceRef = Boolean(pulidFaceUrl || (selectedModel === "flux-pulid" && rawRef))
     const payload = {
       model: selectedModel,
       prompt: generationPrompt || displayPrompt,
@@ -724,7 +933,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       ratio: data.imgRatio || "1:1",
       count: data.count || 1,
       node_id: id,
-      use_reactor: hasFaceRef || Boolean(data.use_reactor),
+      use_reactor: useReactor,
     }
     const denoise = data.img2imgDenoise
     if (denoise != null && Number.isFinite(Number(denoise))) {
@@ -744,6 +953,12 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       payload.quality_preset_id = qualityPresetId
     }
     if (data.traceId) payload.trace_id = data.traceId
+    if (Array.isArray(data.identityIds) && data.identityIds.length) {
+      payload.identity_ids = data.identityIds
+    }
+    if (Array.isArray(data.entityRefAudit) && data.entityRefAudit.length) {
+      payload.entity_ref_audit = data.entityRefAudit
+    }
     const { canvasId } = useCanvasStore.getState()
     if (isRealProjectId(canvasId)) payload.project_id = canvasId
     return payload
@@ -755,6 +970,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     setSending(true)
     setStatus("pending")
     setPollProgress(0)
+    setIsPreparing(true)
     setErrorMessage(null)
     const batchCount = Math.max(1, Math.min(payload.count || 1, 4))
     setExpectedCount(batchCount)
@@ -827,6 +1043,12 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       logImageGen("handleGenerate 跳过：sending=true")
       return
     }
+    if (needsPulidFace) {
+      logImageGen("handleGenerate 跳过：PuLID 缺少正脸参考图")
+      setErrorMessage(PULID_FACE_REQUIRED_MSG)
+      showToast(PULID_FACE_REQUIRED_MSG)
+      return
+    }
     const payload = buildSubmitPayload()
     if (!payload.prompt) {
       logImageGen("handleGenerate 跳过：提示词为空")
@@ -838,8 +1060,10 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     await submitImageTask(payload)
   }, [
     sending,
+    needsPulidFace,
     buildSubmitPayload,
     submitImageTask,
+    showToast,
     data.displayPrompt,
     data.prompt,
     id,
@@ -850,6 +1074,11 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
 
   const handleRetry = useCallback(async () => {
     if (sending) return
+    if (needsPulidFace) {
+      setErrorMessage(PULID_FACE_REQUIRED_MSG)
+      showToast(PULID_FACE_REQUIRED_MSG)
+      return
+    }
     const errText = errorMessage || data.error || ""
     const policy = getRetryPolicy(errText)
     if (!policy.retryable) return
@@ -861,7 +1090,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     stopPolling()
     clearNodeTaskState("pending")
     await submitImageTask(payload)
-  }, [sending, buildSubmitPayload, submitImageTask, clearNodeTaskState, stopPolling, errorMessage, data.error])
+  }, [sending, needsPulidFace, buildSubmitPayload, submitImageTask, clearNodeTaskState, stopPolling, errorMessage, data.error, showToast])
 
   const handleStopGeneration = useCallback(async () => {
     stopPolling()
@@ -906,24 +1135,31 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     document.body.removeChild(link)
   }, [results, data.uploadedImage])
 
+  const handleCellEnhance = useCallback(
+    async (imageUrl) => {
+      if (!imageUrl) return
+      try {
+        const { canvasId } = useCanvasStore.getState()
+        const payload = {
+          image_url: resolveReferenceUrlForApi(imageUrl),
+          upscale_factor: 2,
+          strength: "normal",
+          node_id: id,
+          ...teamIdPayload(),
+        }
+        if (isRealProjectId(canvasId)) payload.project_id = canvasId
+        await api.post("/api/tasks/image-enhance", payload)
+      } catch (err) {
+        console.error("[image-gen] enhance failed:", err)
+      }
+    },
+    [id]
+  )
+
   const [referenceImage, setReferenceImage] = useState(data.referenceImage || null)
   const uploadRef = useRef(null)
   const canvasActions = useCanvasActions()
   const refSelect = useReferenceSelect()
-  const { getNode } = useReactFlow()
-  getNodeRef.current = getNode
-
-  const resolvedReferenceImages = useMemo(
-    () => getResolvedReferenceImagesList(data, getNode),
-    [data, getNode]
-  )
-
-  useEffect(() => {
-    console.log("[image-gen] referenceImages", {
-      raw: getReferenceImagesList(data),
-      resolved: resolvedReferenceImages,
-    })
-  }, [data, resolvedReferenceImages])
 
   const isRefSelectActive = refSelect?.mode?.active
   const isRefSource = refSelect?.mode?.sourceNodeId === id
@@ -1026,7 +1262,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
   const handleReupload = useCallback(() => {
     const input = document.createElement("input")
     input.type = "file"
-    input.accept = "image/*"
+    input.accept = IMAGE_ACCEPT
     input.onchange = async (e) => {
       const file = e.target.files?.[0]
       if (!file) return
@@ -1056,6 +1292,13 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
     setSlotProgress(Array(batchCount).fill(0))
     data.onUpdate?.(id, { pendingTrigger: null, expectedCount: batchCount })
     setTimeout(() => {
+      if (needsPulidFace) {
+        setStatus("failed")
+        setErrorMessage(PULID_FACE_REQUIRED_MSG)
+        showToast(PULID_FACE_REQUIRED_MSG)
+        data.onUpdate?.(id, { status: "failed", error: PULID_FACE_REQUIRED_MSG })
+        return
+      }
       const payload = buildSubmitPayloadRef.current?.()
       if (!payload?.prompt) {
         console.error("[image-gen] pendingTrigger 跳过：提示词为空", { payload, dataPrompt: data.prompt })
@@ -1113,7 +1356,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       logImageGen("pendingTrigger → submitImageTask", payload)
       submitImageTaskRef.current?.(payload)
     }, 30)
-  }, [data.pendingTrigger, data.count, data.prompt, id, data, setNodes, t])
+  }, [data.pendingTrigger, data.count, data.prompt, id, data, setNodes, t, needsPulidFace, showToast])
 
   const isIdle = status === "input"
   const isPending = status === "pending" || status === "generating"
@@ -1352,6 +1595,10 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
 
   useEffect(() => {
     if (!isPending) return undefined
+    if (isPreparing) {
+      setProgressHint(t("canvas.gen.preparing"))
+      return undefined
+    }
     let hintIndex = 0
     setProgressHint(progressHints[0])
     const hintTimer = setInterval(() => {
@@ -1359,7 +1606,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       setProgressHint(progressHints[hintIndex])
     }, PROGRESS_HINT_INTERVAL_MS)
     return () => clearInterval(hintTimer)
-  }, [isPending, progressHints])
+  }, [isPending, isPreparing, progressHints, t])
 
   const rootRef = useRef(null)
   useCanvasNodeWheel(rootRef)
@@ -1435,14 +1682,14 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
       <div className={`gn2-upload-row${showUploadRow ? " gn2-upload-row--visible" : ""}`}>
         <div className="gn2-upload-bar">
           <button type="button" className="gn2-upload-btn nodrag" aria-label={t("canvas.common.upload")} onClick={() => uploadRef.current?.click()}>
-            <UploadIcon /> {t("canvas.common.upload")}
+            <UploadIcon /> {t("canvas.prompt.uploadImage")}
           </button>
           <span className="gn2-upload-divider" aria-hidden="true" />
           <button type="button" className="gn2-upload-btn nodrag" aria-label={t("canvas.image.fromLibrary")} onClick={openAssetLibrary}>
             <AssetLibraryIcon /> {t("canvas.image.fromLibrary")}
           </button>
         </div>
-        <input ref={uploadRef} type="file" accept="image/*" hidden onChange={handleTopUpload} aria-label={t("canvas.common.upload")} />
+        <input ref={uploadRef} type="file" accept={IMAGE_ACCEPT} hidden onChange={handleTopUpload} aria-label={t("canvas.common.upload")} />
       </div>
 
       {/* 标签行 */}
@@ -1451,6 +1698,24 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
         <EditableNodeLabel nodeId={id} data={data} defaultLabel="Image" className="gn2-label-text" />
         <NodeLastEditedMeta meta={data?.meta} />
       </div>
+
+      {needsPulidFace && selected ? (
+        <div className="gn2-pulid-face-hint nodrag" role="alert">
+          {PULID_FACE_REQUIRED_MSG}
+        </div>
+      ) : null}
+
+      {hasFaceRef && selected ? (
+        <label className="gn2-reactor-toggle nodrag" onPointerDown={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            className="gn2-reactor-toggle-input"
+            checked={data.use_reactor !== false}
+            onChange={(e) => data.onUpdate?.(id, { use_reactor: e.target.checked })}
+          />
+          <span>换脸增强（ReActor）</span>
+        </label>
+      ) : null}
 
       {/* 卡片本体 */}
       <div
@@ -1463,8 +1728,17 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
           ...(isRefTarget ? { cursor: "pointer" } : null),
         }}
       >
+        {showExploreBadge ? (
+          <span className="canvas-explore-badge" title={t("canvas.draft.badgeTitle")}>
+            {t("canvas.draft.badge")}
+          </span>
+        ) : storyboardShotIndex != null ? (
+          <span className="canvas-shot-badge">
+            {t("canvas.draft.shotLabel", { n: storyboardShotIndex + 1 })}
+          </span>
+        ) : null}
         {/* Target handle — tgt, top:50% relative to gn2-root, same as src zones */}
-        <Handle type="target" position={Position.Left} id="tgt" style={{ position: 'absolute', top: '50%', left: -1, width: 1, height: 1, minWidth: 1, minHeight: 1, background: 'transparent', border: 'none', opacity: 0, transform: 'translateY(-50%)', zIndex: 25 }} />
+        <Handle type="target" position={Position.Left} id="tgt" className="gn2-edge-handle gn2-edge-handle--target" />
         {/* Source handles: large hit area centered on card edge */}
         <Handle type="source" position={Position.Left}  id="src-left"  className="gn2-edge-handle gn2-edge-handle--left"
           onMouseEnter={() => setLeftVisible(true)} onMouseLeave={() => { if (!plusPinned) setLeftVisible(false) }} />
@@ -1536,6 +1810,7 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
                 const url = mediaUrlForDisplay(img.imageUrl)
                 const cellPhase = slotPhases[i] || (url ? SLOT_PHASE.DONE : SLOT_PHASE.WAITING)
                 const cellProgress = slotProgress[i] ?? 0
+                const isCellPreparing = isPending && !url && cellPhase === SLOT_PHASE.PREPARING
                 const isCellWaiting = isPending && !url && cellPhase === SLOT_PHASE.WAITING
                 const isCellPicker = isCanvasPickerActive && !isRefSource && !!url && isMultiGrid
                 const isCellSelected =
@@ -1611,9 +1886,11 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
                           <>
                             <GenerationBrandLoader />
                             <span className="gn2-pct">
-                              {isMultiGrid
-                                ? (cellProgress > 0 ? `${cellProgress}%` : "0%")
-                                : (pollProgress > 0 ? `${pollProgress}%` : "0%")}
+                              {isCellPreparing || (i === 0 && isPreparing && pollProgress === 0)
+                                ? t("canvas.gen.preparing")
+                                : isMultiGrid
+                                  ? (cellProgress > 0 ? `${cellProgress}%` : "0%")
+                                  : (pollProgress > 0 ? `${pollProgress}%` : "0%")}
                             </span>
                             {i === 0 && (
                               <GenerationStopButton onStop={handleStopGeneration} />
@@ -1662,6 +1939,50 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
             defaultExpanded={data.userRating == null}
             onRated={(patch) => patchNodeData(patch, "taskRating")}
           />
+        ) : null}
+
+        {showPromoteButton ? (
+          <div className="gn2-promote-row nodrag nopan" onPointerDown={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="gn2-promote-btn nodrag nopan"
+              onClick={(e) => {
+                e.stopPropagation()
+                handlePromoteClick()
+              }}
+            >
+              {t("canvas.draft.promote")}
+            </button>
+            {promotePopoverOpen && storyboardRows.length > 1 ? (
+              <div className="gn2-promote-popover nodrag nopan">
+                <label className="gn2-promote-popover-label">
+                  <span className="gn2-promote-popover-hint">{t("canvas.draft.selectShot")}</span>
+                  <select
+                    className="gn2-promote-select nodrag nopan"
+                    value={promoteRowIndex}
+                    onChange={(e) => setPromoteRowIndex(Number(e.target.value))}
+                    aria-label={t("canvas.draft.selectShot")}
+                  >
+                    {storyboardRows.map((row, i) => (
+                      <option key={row.id || i} value={i}>
+                        {t("canvas.draft.shotLabel", { n: i + 1 })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="gn2-promote-confirm nodrag nopan"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    runPromoteToStoryboard(promoteRowIndex)
+                  }}
+                >
+                  {t("canvas.draft.promoteConfirm")}
+                </button>
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         <MediaFullscreenViewer src={lightboxSrc} kind="image" onClose={() => setLightboxSrc(null)} />
@@ -1745,6 +2066,17 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
               }}
             >
               <span>⬇</span>{t("canvas.image.download")}
+            </button>
+            <button
+              type="button"
+              className="gn2-dots-item nodrag nopan"
+              onClick={(e) => {
+                e.stopPropagation()
+                void handleCellEnhance(cellMenu.imageUrl)
+                closeCellMenus()
+              }}
+            >
+              <span>✦</span>{t("canvas.image.enhance")}
             </button>
           </div>,
           getThemePortalRoot()
@@ -1852,3 +2184,4 @@ export default function GenerationCardNode({ id, data, selected, isConnectable }
   )
 }
 
+export default memo(GenerationCardNode, generationCardPropsAreEqual)

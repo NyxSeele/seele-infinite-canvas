@@ -5,12 +5,13 @@ import AdminRoute from "./components/AdminRoute.jsx"
 import Login from "./pages/Login.jsx"
 import Register from "./pages/Register.jsx"
 import Workspace from "./pages/Workspace.jsx"
-import Canvas from "./pages/Canvas.jsx"
 import JoinTeam from "./pages/JoinTeam.jsx"
+import NetworkTest from "./pages/NetworkTest.jsx"
 import TeamFiles from "./pages/TeamFiles.jsx"
 import AppUpdateBanner from "./components/common/AppUpdateBanner.jsx"
 import VeloraLoadingPage from "./components/common/VeloraLoadingPage.jsx"
 
+const Canvas = lazy(() => import("./pages/Canvas.jsx"))
 const WorkspaceProjects = lazy(() => import("./pages/WorkspaceProjects.jsx"))
 const AdminLayout = lazy(() => import("./pages/Admin/AdminLayout.jsx"))
 const Dashboard = lazy(() => import("./pages/Admin/Dashboard.jsx"))
@@ -70,6 +71,14 @@ export default function AppRouter() {
             element={
               <ProtectedRoute>
                 <JoinTeam />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/network-test"
+            element={
+              <ProtectedRoute>
+                <NetworkTest />
               </ProtectedRoute>
             }
           />

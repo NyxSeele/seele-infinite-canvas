@@ -2,6 +2,7 @@ from models.user_upload import UserUpload
 from models.user_asset import UserAsset
 from models.canvas import CanvasState
 from models.canvas_project import CanvasProject
+from models.project_collaborator import ProjectCollaborator
 from models.canvas_share import CanvasShare
 from models.canvas_comment import CanvasCommentMessage, CanvasCommentThread
 from models.model_permission import UserModelPermission
@@ -32,6 +33,7 @@ __all__ = [
     "Task",
     "CanvasState",
     "CanvasProject",
+    "ProjectCollaborator",
     "CanvasShare",
     "CanvasCommentThread",
     "CanvasCommentMessage",

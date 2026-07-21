@@ -4,13 +4,33 @@ import { useStore } from "reactflow"
 import { useLocale } from "../../utils/locale"
 import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
 import { Z_DROPDOWN } from "../../utils/zIndexLayers"
+import { isModelRecommended, sortModelsForDisplay } from "../../utils/canvas/modelCatalog"
 import { closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import "./NodeBanner.css"
 
 const sp = (e) => e.stopPropagation()
 
+function StarIcon() {
+  return (
+    <svg className="nb-dropup-item-star" width="10" height="10" viewBox="0 0 12 12" aria-hidden>
+      <path
+        fill="currentColor"
+        d="M6 1.2 7.55 4.35 11 4.85 8.5 7.2 9.1 10.6 6 9 2.9 10.6 3.5 7.2 1 4.85 4.45 4.35Z"
+      />
+    </svg>
+  )
+}
+
 /** 模型下拉项：名称 + 可选能力说明；disabled 时灰显且不可选 */
-export function ModelDropupItem({ model, active, onSelect, disabled = false, disabledHint }) {
+export function ModelDropupItem({
+  model,
+  active,
+  onSelect,
+  disabled = false,
+  disabledHint,
+  showRecommended = false,
+}) {
+  const { t } = useLocale()
   const id = model?.id || model?.display_name
   const name = model?.display_name || model?.id || ""
   const summary = (model?.summary || "").trim()
@@ -28,7 +48,19 @@ export function ModelDropupItem({ model, active, onSelect, disabled = false, dis
         onSelect?.(id)
       }}
     >
-      <span className="nb-dropup-item-name">{name}</span>
+      <span className="nb-dropup-item-name-row">
+        <span className="nb-dropup-item-name">{name}</span>
+        {showRecommended && !disabled ? (
+          <>
+            <span className="nb-dropup-item-star-wrap" aria-hidden>
+              <StarIcon />
+            </span>
+            <span className="nb-dropup-item-recommended-label">
+              {t("canvas.model.recommended")}
+            </span>
+          </>
+        ) : null}
+      </span>
       {sub ? <span className="nb-dropup-item-summary">{sub}</span> : null}
     </button>
   )
@@ -47,15 +79,19 @@ export default function CanvasModelDropup({
   bare = true,
   title,
   direction = "down",
+  vidMode,
+  isItemDisabled,
+  disabledHint,
 }) {
   const { t } = useLocale()
   const [open, setOpen] = useState(false)
   const [menuStyle, setMenuStyle] = useState(null)
   const wrapRef = useRef(null)
   const anchorRef = useRef(null)
+  const displayModels = sortModelsForDisplay(models, { vidMode })
   const label =
-    models.find((m) => m.id === value)?.display_name
-    || models.find((m) => (m.id || m.display_name) === value)?.display_name
+    displayModels.find((m) => m.id === value)?.display_name
+    || displayModels.find((m) => (m.id || m.display_name) === value)?.display_name
     || value
     || t("canvas.image.noModel")
 
@@ -148,14 +184,14 @@ export default function CanvasModelDropup({
     return () => cancelAnimationFrame(rafId)
   }, [open, updateMenuPosition, viewportTransform])
 
-  const menuPortal = open && models.length > 0 && menuStyle
+  const menuPortal = open && displayModels.length > 0 && menuStyle
     ? createPortal(
         <div
           className={`${menuClass}${direction === "up" ? " nb-dropup-menu--portal" : " nb-dropdown-menu--portal"} nodrag ${getThemePageClass()}`}
           style={menuStyle}
           onPointerDown={sp}
         >
-          {models.map((m) => {
+          {displayModels.map((m) => {
             const id = m.id || m.display_name
             const itemDisabled = Boolean(isItemDisabled?.(m))
             return (
@@ -165,6 +201,7 @@ export default function CanvasModelDropup({
                 active={value === id}
                 disabled={itemDisabled}
                 disabledHint={disabledHint}
+                showRecommended={isModelRecommended(m, { vidMode })}
                 onSelect={(nextId) => {
                   onChange?.(nextId)
                   setOpen(false)

@@ -112,3 +112,15 @@ export async function runAgentStream(body, { signal } = {}) {
 
   return response
 }
+
+/** Read-only pipeline manifest (stages + executor/capabilities for skills UI). */
+export async function getPipelineManifest(name = "velora_canvas") {
+  const response = await fetch(
+    `${API_BASE}/api/agent/pipeline/${encodeURIComponent(name)}`,
+    { headers: authHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`加载 pipeline 失败 (${response.status})`)
+  }
+  return response.json()
+}

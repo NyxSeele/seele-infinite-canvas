@@ -18,6 +18,7 @@ export const TEXT_RESPONSE_WIDTH = 480
 export const NODE_WIDTHS_MAP = {
   "image-gen": 280,
   "video-gen": 400,
+  "short-video-factory": 400,
   "text-note": TEXT_NOTE_WIDTH,
   "script-table": SCRIPT_TABLE_WIDTH,
   "script-beat-card": 920,
@@ -165,6 +166,16 @@ export function isEmptyImageGenNode(node) {
   const d = node.data || {}
   if (d.uploadedImage || d.imageUrl) return false
   if (Array.isArray(d.results) && d.results.some(Boolean)) return false
+  const st = d.status
+  if (st === "pending" || st === "generating" || st === "queued") return false
+  return true
+}
+
+/** 选中 video-gen 是否适合直接写入上传视频（而非再新建一张卡） */
+export function isEmptyVideoGenNode(node) {
+  if (!node || node.type !== "video-gen") return false
+  const d = node.data || {}
+  if (d.videoUrl) return false
   const st = d.status
   if (st === "pending" || st === "generating" || st === "queued") return false
   return true

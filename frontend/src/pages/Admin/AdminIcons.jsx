@@ -60,6 +60,19 @@ export function IconFiles() {
   )
 }
 
+export function IconNetwork() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+      <circle cx="9" cy="9" r="2" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="3.5" cy="5" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="14.5" cy="5" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="3.5" cy="13" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="14.5" cy="13" r="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M5 6l3 2M13 6l-3 2M5 12l3-2M13 12l-3-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function IconChevron() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>

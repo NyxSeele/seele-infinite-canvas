@@ -1,4 +1,5 @@
 import api from "../../services/api"
+import { encodePublicMediaUrl } from "../encodePublicMediaUrl"
 import { ensureMediaUrl, refreshMediaTicket, toRelativeMediaUrl } from "../mediaTicket"
 
 const AVATAR_KEY = "canvas-user-avatar-url"
@@ -19,6 +20,7 @@ export function readUserAvatar() {
   const raw = readUserAvatarRaw()
   if (!raw) return ""
   if (raw.startsWith("data:") || raw.startsWith("blob:")) return raw
+  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw
   return ensureMediaUrl(raw)
 }
 
@@ -26,7 +28,11 @@ export function writeUserAvatar(url) {
   try {
     let stored = url || ""
     if (stored && !stored.startsWith("data:") && !stored.startsWith("blob:")) {
-      stored = toRelativeMediaUrl(stored)
+      if (stored.includes("/api/uploads/")) {
+        stored = toRelativeMediaUrl(stored).split("?")[0]
+      } else if (stored.startsWith("http")) {
+        stored = encodePublicMediaUrl(stored).split("?")[0]
+      }
     }
     if (stored) localStorage.setItem(AVATAR_KEY, stored)
     else localStorage.removeItem(AVATAR_KEY)

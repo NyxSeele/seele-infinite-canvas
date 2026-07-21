@@ -3,9 +3,12 @@ import { fetchMyTeams } from "../services/teamApi"
 
 const STORAGE_KEY = "ai_studio_active_team_id"
 const HTTP_MIN_GAP_MS = 5000
+const USER_ACTION_MIN_GAP_MS = 2000
 
 let inflightPromise = null
 let lastHttpAt = 0
+let scheduleRefreshTimer = null
+let pendingRefreshAfterInflight = false
 
 function readStoredTeamId() {
   try {
@@ -54,6 +57,21 @@ export const useTeamStore = create((set, get) => ({
   /** 团队管理里用户主动操作后刷新 */
   refreshTeams: () => get().fetchTeams({ force: true, userAction: true }),
 
+  /** team-context-changed 等高频事件：防抖合并为一次刷新 */
+  scheduleRefreshTeams: () => {
+    if (inflightPromise) {
+      pendingRefreshAfterInflight = true
+      return inflightPromise
+    }
+    if (scheduleRefreshTimer) {
+      window.clearTimeout(scheduleRefreshTimer)
+    }
+    scheduleRefreshTimer = window.setTimeout(() => {
+      scheduleRefreshTimer = null
+      void get().fetchTeams({ force: true, userAction: true })
+    }, 400)
+  },
+
   fetchTeams: async (options = false) => {
     const opts =
       typeof options === "boolean"
@@ -62,12 +80,14 @@ export const useTeamStore = create((set, get) => ({
     const { force = false, userAction = false } = opts
     const state = get()
 
+    if (inflightPromise) return inflightPromise
+
     if (!force && state.loaded) return
-    if (!userAction && inflightPromise) return inflightPromise
-    if (!userAction && state.loading && !force) return inflightPromise
 
     const now = Date.now()
-    if (!userAction && now - lastHttpAt < HTTP_MIN_GAP_MS) {
+    const minGap = userAction ? USER_ACTION_MIN_GAP_MS : HTTP_MIN_GAP_MS
+    if (now - lastHttpAt < minGap) {
+      if (state.loaded) return Promise.resolve()
       return
     }
 
@@ -97,7 +117,7 @@ export const useTeamStore = create((set, get) => ({
         const status = err?.response?.status
         set({
           loading: false,
-          loaded: true,
+          loaded: state.loaded,
           error: err?.response?.data?.detail || err.message || "加载团队失败",
         })
         if (status === 429) {
@@ -108,6 +128,14 @@ export const useTeamStore = create((set, get) => ({
 
     inflightPromise = run().finally(() => {
       inflightPromise = null
+      if (pendingRefreshAfterInflight) {
+        pendingRefreshAfterInflight = false
+        const gap = Date.now() - lastHttpAt
+        const delay = Math.max(0, USER_ACTION_MIN_GAP_MS - gap)
+        window.setTimeout(() => {
+          void get().fetchTeams({ force: true, userAction: true })
+        }, delay)
+      }
     })
     return inflightPromise
   },
@@ -126,6 +154,11 @@ export const useTeamStore = create((set, get) => ({
   reset: () => {
     inflightPromise = null
     lastHttpAt = 0
+    pendingRefreshAfterInflight = false
+    if (scheduleRefreshTimer) {
+      window.clearTimeout(scheduleRefreshTimer)
+      scheduleRefreshTimer = null
+    }
     writeStoredTeamId(null)
     set({
       ownedTeam: null,

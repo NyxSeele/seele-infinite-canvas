@@ -86,13 +86,6 @@ def main() -> int:
         ("flux-dev", {}, 30, "short_queue"),
         ("hidream", {}, 30, "short_queue"),
         ("wan-2.6", {"duration": 5, "steps": 4}, None, "short_queue"),
-        ("hunyuan-video-1.5", {"width": 1280, "height": 720, "steps": 50}, 480, "long_queue"),
-        (
-            "hunyuan-video-1.5",
-            {"width": 1280, "height": 720, "use_distilled": True},
-            120,
-            "long_queue",
-        ),
         ("video-enhance-seedvr2", {}, 60, "short_queue"),
     ]
     duration_results = []
@@ -102,13 +95,9 @@ def main() -> int:
         row = {"model": mid, "params": params, "sec": sec, "queue": q}
         duration_results.append(row)
         if expect_sec is not None and sec != expect_sec:
-            # distilled 720p: 480//4=120 → long_queue（边界 ≥120）
-            if mid == "hunyuan-video-1.5" and params.get("use_distilled") and sec == 120:
-                pass
-            else:
-                issues.append(f"duration {mid} {params} => {sec}, want {expect_sec}")
+            issues.append(f"duration {mid} {params} => {sec}, want {expect_sec}")
         if q != expect_q:
-            # 蒸馏 120s 边界：queue_bucket 用 < 120 → long
+            # 蒸馏边界：queue_bucket 用 < 120 → long
             if expect_q == "long_queue" and sec >= SHORT_TASK_THRESHOLD_SEC and q == "long_queue":
                 pass
             elif q != expect_q:

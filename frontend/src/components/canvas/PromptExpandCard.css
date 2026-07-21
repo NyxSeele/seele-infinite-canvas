@@ -1,0 +1,133 @@
+.pec-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.52);
+  pointer-events: all;
+  opacity: 0;
+}
+
+.pec-overlay--open {
+  animation: pec-overlay-in var(--motion-duration-normal, 240ms) var(--motion-ease-out, cubic-bezier(0.16, 1, 0.3, 1)) forwards;
+}
+
+.pec-overlay--closing {
+  animation: pec-overlay-out var(--motion-duration-fast, 180ms) var(--motion-ease-in, cubic-bezier(0.4, 0, 1, 1)) forwards;
+  pointer-events: none;
+}
+
+@keyframes pec-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pec-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.pec-card {
+  position: relative;
+  width: min(92vw, 780px);
+  max-height: min(88vh, 860px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  pointer-events: all;
+  opacity: 0;
+  transform: translateY(12px) scale(0.97);
+}
+
+.pec-overlay--open .pec-card {
+  animation: pec-card-in var(--motion-duration-normal, 240ms) var(--motion-ease-out, cubic-bezier(0.16, 1, 0.3, 1)) forwards;
+}
+
+.pec-overlay--closing .pec-card {
+  animation: pec-card-out var(--motion-duration-fast, 180ms) var(--motion-ease-in, cubic-bezier(0.4, 0, 1, 1)) forwards;
+}
+
+@keyframes pec-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes pec-card-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+}
+
+.pec-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: var(--tl-toolbar-btn-bg);
+  color: var(--tl-toolbar-icon);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pec-close:hover {
+  background: var(--tl-toolbar-btn-hover);
+  color: var(--tl-toolbar-icon-active);
+}
+
+.pec-card__shell {
+  width: 100%;
+  max-height: min(88vh, 860px);
+  overflow: auto;
+}
+
+.pec-card .nb-banner--modal {
+  opacity: 1;
+  transform: none;
+  pointer-events: all;
+  width: 100%;
+  min-height: 0;
+  max-height: none;
+  padding-top: 18px;
+}
+
+.pec-card .nb-banner--modal .nb-textarea-wrap {
+  max-height: none;
+  flex: 1;
+  min-height: min(32vh, 280px);
+}
+
+.pec-card .nb-banner--modal .nb-textarea,
+.pec-card .nb-banner--modal .mention-editor {
+  min-height: min(32vh, 280px);
+  max-height: min(48vh, 420px);
+}
+
+.pec-card .nb-banner--modal.nb-banner--prompt-text .nb-textarea {
+  min-height: min(36vh, 320px);
+  max-height: min(52vh, 460px);
+}
+
+.pec-card .nb-banner--modal .nb-topbar--video .video-top-bar {
+  flex-wrap: wrap;
+}

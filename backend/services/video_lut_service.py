@@ -77,6 +77,8 @@ def apply_lut_to_video_file(
         "medium",
         "-c:a",
         "copy",
+        "-movflags",
+        "+faststart",
         str(output_path),
     ]
     try:

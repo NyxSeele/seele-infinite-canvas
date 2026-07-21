@@ -17,6 +17,8 @@ import {
   makeCastRefId,
   normalizeCastLibrary,
   normalizeCastLibraryEntry,
+  slugIdentityId,
+  castEntryHasReferenceImage,
 } from "./castLibrary"
 import { touchLibraryById } from "./libraryUsage"
 import {
@@ -44,6 +46,7 @@ import {
   applyOutlineStructureToNodes,
   postOutlineStructure,
 } from "./outlineStructureApi"
+import { buildExecutorMap, getExecutor } from "./toolRegistry"
 
 const NODE_WIDTH_FALLBACK = {
   "text-note": TEXT_NOTE_WIDTH,
@@ -354,28 +357,12 @@ export async function executeAgentPipelineStep(action, ctx) {
     return { ok: false, error: busy.reason || "当前步骤仍在生成中，请稍候" }
   }
 
-  switch (step) {
-    case "create_text_note":
-      return ctx.createTextNote(data)
-    case "start_text_generation":
-      return ctx.startTextGeneration(data)
-    case "generate_outline":
-      return ctx.generateOutline(data)
-    case "generate_script_table":
-      return ctx.generateScriptTable(data)
-    case "split_shot_beats":
-      return ctx.splitShotBeats(data)
-    case "generate_storyboard":
-      return ctx.generateStoryboard(data)
-    case "generate_video":
-      return ctx.generateVideo(data)
-    case "manage_cast":
-      return ctx.manageCast(data)
-    case "manage_scene":
-      return ctx.manageScene(data)
-    default:
-      return { ok: false, error: `未知链路步骤：${step}` }
+  const executorMap = buildExecutorMap(ctx)
+  const run = getExecutor(executorMap, step)
+  if (!run) {
+    return { ok: false, error: `未知链路步骤：${step}` }
   }
+  return run(data)
 }
 
 export function createAgentPipelineContext({
@@ -1065,14 +1052,29 @@ export function createAgentPipelineContext({
           (c) => c.name.toLowerCase() === name.toLowerCase()
         )
         if (idx >= 0) {
+          const img = item.imageUrl || item.image_url || null
           nextLib[idx] = {
             ...nextLib[idx],
             ...(item.description != null
               ? { description: String(item.description).trim() }
               : {}),
             ...(item.type ? { type: castType } : {}),
-            ...(item.imageUrl || item.image_url
-              ? { imageUrl: item.imageUrl || item.image_url, pendingImage: false }
+            ...(item.identity_id || item.identityId
+              ? { identityId: item.identity_id || item.identityId }
+              : {}),
+            ...(item.face_url || item.faceUrl ? { faceUrl: item.face_url || item.faceUrl } : {}),
+            ...(item.three_view_url || item.threeViewUrl
+              ? { threeViewUrl: item.three_view_url || item.threeViewUrl }
+              : {}),
+            ...(item.costume_url || item.costumeUrl
+              ? { costumeUrl: item.costume_url || item.costumeUrl }
+              : {}),
+            ...(img
+              ? {
+                  imageUrl: img,
+                  faceUrl: item.face_url || item.faceUrl || img,
+                  pendingImage: false,
+                }
               : {}),
           }
         }
@@ -1088,8 +1090,12 @@ export function createAgentPipelineContext({
         id: makeCastRefId(),
         name,
         type: castType,
+        identityId: item.identity_id || item.identityId || slugIdentityId(name),
         description: item.description || "",
         imageUrl: item.imageUrl || item.image_url || null,
+        faceUrl: item.face_url || item.faceUrl || item.imageUrl || item.image_url || null,
+        threeViewUrl: item.three_view_url || item.threeViewUrl || null,
+        costumeUrl: item.costume_url || item.costumeUrl || null,
       })
       if (entry) nextLib.push(entry)
     }
@@ -1106,8 +1112,8 @@ export function createAgentPipelineContext({
     })
 
     const castPending = nextLib
-      .filter((c) => !c.imageUrl)
-      .map((c) => ({ id: c.id, name: c.name, type: c.type }))
+      .filter((c) => !castEntryHasReferenceImage(c))
+      .map((c) => ({ id: c.id, name: c.name, type: c.type, identityId: c.identityId }))
 
     return {
       ok: true,

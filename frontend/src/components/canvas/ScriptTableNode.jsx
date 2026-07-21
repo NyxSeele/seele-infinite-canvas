@@ -34,9 +34,10 @@ import ScriptShotCard from "./ScriptShotCard"
 import CanvasModelDropup from "./CanvasModelDropup"
 import VideoStylePicker from "./VideoStylePicker"
 import {
-  isVideoModelCompatible,
-  preferredModelForMode,
+  isScriptTableVideoModelCompatible,
+  preferredScriptTableVideoModel,
 } from "../../utils/canvas/videoModelCompat"
+import { pickDefaultModel, sortModelsForDisplay } from "../../utils/canvas/modelCatalog"
 import { closeActiveCanvasDropdown, closeCanvasDropdown, openCanvasDropdown } from "./canvasDropdownCoordinator"
 import ScriptSegmentHeader from "./ScriptSegmentHeader"
 import NodeLoadingState from "./NodeLoadingState"
@@ -47,6 +48,7 @@ import {
   patchSegmentInList,
   resolveScriptTableSegments,
 } from "../../utils/canvas/scriptTableSegments"
+import { makeEmptyScriptRow } from "../../utils/canvas/scriptTableRowFactory"
 import { formatDurationSec } from "../../utils/canvas/videoDurationIntent"
 import {
   applyQualityPresetToRow,
@@ -104,45 +106,7 @@ function deferNodePatch(updateData, patch) {
   queueMicrotask(() => updateData(patch))
 }
 
-function makeRowId() {
-  return `row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-}
-
-export function makeEmptyScriptRow(shotNumber = 1) {
-  const duration = 8
-  return normalizeScriptRow(
-    applyQualityPresetToRow(
-      {
-        id: makeRowId(),
-        shotNumber,
-        duration,
-        camera: "",
-        movement: "",
-        lighting: "",
-        composition: "",
-        colorGrade: "",
-        lens: "",
-        performance: "",
-        soundDesign: "",
-        soundNote: "",
-        atmosphereNote: "",
-        qualityPresetId: "",
-        prompt: "",
-        description: "",
-        promptMentions: [],
-        keyframes: [],
-        beatCardNodeId: null,
-        directImageGenNodeId: null,
-        directResultUrl: null,
-        directStatus: "idle",
-        directVideoGenNodeId: null,
-        status: "idle",
-        error: null,
-      },
-      "auto"
-    )
-  )
-}
+export { makeEmptyScriptRow } from "../../utils/canvas/scriptTableRowFactory"
 
 export default function ScriptTableNode({ id, data, selected }) {
   const { t } = useLocale()
@@ -156,6 +120,15 @@ export default function ScriptTableNode({ id, data, selected }) {
   const { getNode } = useReactFlow()
   const imageModels = useModelStore((s) => s.imageModels)
   const videoModels = useModelStore((s) => s.videoModels)
+  const scriptTableVideoModels = useMemo(
+    () => sortModelsForDisplay(
+      videoModels
+        .filter((m) => isScriptTableVideoModelCompatible(m.id || m.display_name))
+        .map((m) => ({ ...m, id: m.id || m.display_name })),
+      { vidMode: "首尾帧" },
+    ),
+    [videoModels],
+  )
   const initialRows =
     Array.isArray(data.rows) && data.rows.length > 0
       ? data.rows
@@ -330,7 +303,7 @@ export default function ScriptTableNode({ id, data, selected }) {
 
   useEffect(() => {
     if (imageModels.length > 0 && !modelId) {
-      const defaultId = imageModels[0].id || ""
+      const defaultId = pickDefaultModel(imageModels, { category: "image" }) || imageModels[0].id || ""
       if (defaultId) {
         setModelId(defaultId)
         updateData({ modelId: defaultId })
@@ -340,16 +313,16 @@ export default function ScriptTableNode({ id, data, selected }) {
 
   useEffect(() => {
     if (videoModels.length === 0) return
-    const preferred = preferredModelForMode("首尾帧", videoModels)
+    const preferred = preferredScriptTableVideoModel(videoModels)
     if (!videoModelId) {
-      const defaultVid = preferred || videoModels[0].id || videoModels[0].display_name || ""
+      const defaultVid = preferred || pickDefaultModel(videoModels, { category: "video", vidMode: "首尾帧" }) || videoModels[0].id || videoModels[0].display_name || ""
       if (defaultVid) {
         setVideoModelId(defaultVid)
         updateData({ videoModelId: defaultVid })
       }
       return
     }
-    if (!isVideoModelCompatible(videoModelId, "首尾帧") && preferred && preferred !== videoModelId) {
+    if (!isScriptTableVideoModelCompatible(videoModelId) && preferred && preferred !== videoModelId) {
       setVideoModelId(preferred)
       updateData({ videoModelId: preferred })
     }
@@ -1148,17 +1121,13 @@ export default function ScriptTableNode({ id, data, selected }) {
               <CanvasModelDropup
                 tag={t("canvas.script.video")}
                 icon={VideoModelIcon}
-                models={videoModels.map((m) => ({
-                  ...m,
-                  id: m.id || m.display_name,
-                }))}
+                models={scriptTableVideoModels}
                 value={videoModelId}
                 direction="down"
+                vidMode="首尾帧"
                 disabled={readOnly}
-                isItemDisabled={(m) => !isVideoModelCompatible(m.id || m.display_name, "首尾帧")}
-                disabledHint="当前模式不可用"
                 onChange={(mid) => {
-                  if (!isVideoModelCompatible(mid, "首尾帧")) return
+                  if (!isScriptTableVideoModelCompatible(mid)) return
                   setVideoModelId(mid)
                   updateData({ videoModelId: mid })
                 }}

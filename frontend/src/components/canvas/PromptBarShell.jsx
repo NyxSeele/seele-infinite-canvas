@@ -16,30 +16,34 @@ export default function PromptBarShell({
   expandInField = false,
   topbarSlot = null,
   mediaSlot = null,
-  isExpanded,
+  modal = false,
+  expandCardOpen = false,
   onToggleExpand,
   expandTitle,
   collapseTitle,
+  showExpandButton = true,
+  bannerRef,
   textareaWrapRef,
   textareaSlot,
   bottombarSlot,
 }) {
-  const expandBtn = onToggleExpand ? (
+  const expandBtn = onToggleExpand && showExpandButton ? (
     <button
       type="button"
       className={`nb-icon-btn nb-expand-btn nodrag${expandInField ? " nb-expand-btn--in-field" : ""}`}
       onPointerDown={sp}
       onClick={(e) => { sp(e); onToggleExpand() }}
-      title={isExpanded ? collapseTitle : expandTitle}
-      aria-expanded={isExpanded}
+      title={expandCardOpen ? collapseTitle : expandTitle}
+      aria-expanded={expandCardOpen}
     >
-      {isExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+      {expandCardOpen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
     </button>
   ) : null
 
   return (
     <div
-      className={`nb-banner nodrag nopan${visible ? " nb-banner--visible" : ""}${compact ? " nb-banner--compact" : ""}${!showTopbar && compact ? " nb-banner--no-topbar" : ""}${promptVariant ? ` nb-banner--prompt-${promptVariant}` : ""}`}
+      ref={bannerRef}
+      className={`nb-banner nodrag nopan${visible ? " nb-banner--visible" : ""}${compact ? " nb-banner--compact" : ""}${modal ? " nb-banner--modal" : ""}${!showTopbar && compact ? " nb-banner--no-topbar" : ""}${promptVariant ? ` nb-banner--prompt-${promptVariant}` : ""}`}
       style={style}
       onPointerDown={onBannerPointerDown}
     >
@@ -53,7 +57,7 @@ export default function PromptBarShell({
       {mediaSlot ? <div className="nb-banner__media">{mediaSlot}</div> : null}
 
       <div
-        className={`nb-textarea-wrap${isExpanded ? " nb-textarea-wrap--expanded" : ""}${expandInField ? " nb-textarea-wrap--in-field-expand" : ""}`}
+        className={`nb-textarea-wrap${expandInField ? " nb-textarea-wrap--in-field-expand" : ""}`}
         ref={textareaWrapRef}
       >
         {textareaSlot}

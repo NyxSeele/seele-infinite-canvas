@@ -24,6 +24,7 @@ backend/**/__pycache__/
 backend/*.db
 backend/.pytest_cache/
 backend/uploads/
+backend/data/canvas_backups/
 backend/scripts/adversarial_results/*
 !backend/scripts/adversarial_results/.gitkeep
 backend/tmp/
@@ -49,3 +50,9 @@ Thumbs.db
 
 # 本地调试产物
 debug_videos/
+
+# 运行时生成媒体（不入库）
+data/short_video/
+
+# 本地 bootstrap 大包
+backend/static/h800-bootstrap/*.tgz

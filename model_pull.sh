@@ -2,7 +2,7 @@
 # 新实例模型拉取脚本（热模型 / enabled=True 全套）
 # 用法：bash model_pull.sh
 # 依赖：aria2c；可选 huggingface-cli（部分温模型脚本用）
-# 预计：约 176G（HunyuanVideo 1.5 套件 ≈27G 替换原版 13B）
+# 预计：约 149G
 set -euo pipefail
 
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
@@ -10,8 +10,6 @@ HF="${HF_ENDPOINT}"
 COMFY="${COMFYUI_MODELS:-/root/autodl-tmp/ComfyUI/models}"
 WAN="${HF}/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files"
 HIDREAM="${HF}/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files"
-HUNYUAN="${HF}/Comfy-Org/HunyuanVideo_repackaged/resolve/main/split_files"
-HUNYUAN15="${HF}/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files"
 FLUX_TE="${HF}/comfyanonymous/flux_text_encoders/resolve/main"
 FLUX_DEV="${HF}/Comfy-Org/flux1-dev/resolve/main"
 KIJAI="${HF}/Kijai/flux-fp8/resolve/main"
@@ -91,30 +89,16 @@ aria_get "${WAN}/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors
 aria_get "${WAN}/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors" \
   "$COMFY/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors" 500000000
 
-# ── HunyuanVideo 1.5（热模型，8.3B T2V 720p）─────────────────────
-# 官方 Comfy 重打包：https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged
-# 镜像：${HF}/Comfy-Org/HunyuanVideo_1.5_repackaged
-# 组成：UNET ~15.5G + VAE ~2.35G + Qwen2.5-VL TE ~8.74G + byT5 ~419M ≈ 27.0G
-aria_get "${HUNYUAN15}/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors" \
-  "$COMFY/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors" 10000000000
-aria_get "${HUNYUAN15}/vae/hunyuanvideo15_vae_fp16.safetensors" \
-  "$COMFY/vae/hunyuanvideo15_vae_fp16.safetensors" 1000000000
-aria_get "${HUNYUAN15}/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
-  "$COMFY/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" 5000000000
-aria_get "${HUNYUAN15}/text_encoders/byt5_small_glyphxl_fp16.safetensors" \
-  "$COMFY/text_encoders/byt5_small_glyphxl_fp16.safetensors" 100000000
-# 可选：1080p SR 蒸馏（上采样，非 T2V 主权重）
-# aria_get "${HUNYUAN15}/diffusion_models/hunyuanvideo1.5_1080p_sr_distilled_fp16.safetensors" \
-#   "$COMFY/diffusion_models/hunyuanvideo1.5_1080p_sr_distilled_fp16.safetensors" 10000000000
-# CFG / step 蒸馏：720p T2V cfg-distill 官方标注 Coming soon；
-# 480p I2V step-distill / 480p T2V cfg-distill 见 tencent/HunyuanVideo-1.5 transformer/*
-# FastHunyuan（旧版 13B 蒸馏）见 https://huggingface.co/FastVideo/FastHunyuan — 冷模型区
-
-# ── SeedVR2 ───────────────────────────────────────────────────────
-aria_get "${SEEDVR}/seedvr2_ema_3b_fp8_e4m3fn.safetensors" \
-  "$COMFY/SEEDVR2/seedvr2_ema_3b_fp8_e4m3fn.safetensors" 3000000000
+# ── SeedVR2（默认顶配 7B FP16；3B 可选降级）────────────────────────
+aria_get "${SEEDVR}/seedvr2_ema_7b_fp16.safetensors" \
+  "$COMFY/SEEDVR2/seedvr2_ema_7b_fp16.safetensors" 15000000000
+aria_get "${SEEDVR}/seedvr2_ema_7b_sharp_fp16.safetensors" \
+  "$COMFY/SEEDVR2/seedvr2_ema_7b_sharp_fp16.safetensors" 15000000000
 aria_get "${SEEDVR}/ema_vae_fp16.safetensors" \
   "$COMFY/SEEDVR2/ema_vae_fp16.safetensors" 100000000
+# 可选：5090 轻量降级
+# aria_get "${SEEDVR}/seedvr2_ema_3b_fp8_e4m3fn.safetensors" \
+#   "$COMFY/SEEDVR2/seedvr2_ema_3b_fp8_e4m3fn.safetensors" 3000000000
 
 echo "完成，请重启 ComfyUI"
 echo "温模型/附属权重可按需执行："
@@ -122,15 +106,3 @@ echo "  bash backend/scripts/_download_g30_ltx2_weights.sh   # PuLID + LTX2"
 echo "  bash backend/scripts/_download_g40_buffalo_l.sh      # ReActor buffalo_l"
 echo "  bash backend/scripts/_download_g39_audiogen.sh       # AudioGen"
 df -h "$(dirname "$COMFY")" | tail -1
-
-# ── 冷模型（默认不下载；需要时取消注释）──────────────────────────
-# HunyuanVideo 原版 13B T2V 720p bf16（已由 1.5 热模型替代）
-# aria_get "${HUNYUAN}/diffusion_models/hunyuan_video_t2v_720p_bf16.safetensors" \
-#   "$COMFY/diffusion_models/hunyuan_video_t2v_720p_bf16.safetensors" 20000000000
-# aria_get "${HUNYUAN}/vae/hunyuan_video_vae_bf16.safetensors" \
-#   "$COMFY/vae/hunyuan_video_vae_bf16.safetensors" 100000000
-# aria_get "${HUNYUAN}/text_encoders/llava_llama3_fp8_scaled.safetensors" \
-#   "$COMFY/text_encoders/llava_llama3_fp8_scaled.safetensors" 1000000000
-# FastHunyuan（旧 13B 蒸馏加速，非 1.5）:
-#   https://huggingface.co/FastVideo/FastHunyuan
-#   https://hf-mirror.com/FastVideo/FastHunyuan

@@ -31,7 +31,7 @@ def test_canvas_image_request_accepts_use_reactor():
 def test_build_flux_pulid_with_reactor_nodes():
     wf = _build_flux_pulid_workflow(
         "portrait of a woman",
-        "svdq-int4_r32-flux.1-dev.safetensors",
+        "svdq-fp4_r32-flux.1-dev.safetensors",
         1024,
         1024,
         1,
@@ -57,7 +57,7 @@ def test_build_flux_pulid_with_reactor_nodes():
 def test_build_flux_pulid_without_reactor():
     wf = _build_flux_pulid_workflow(
         "portrait",
-        "svdq-int4_r32-flux.1-dev.safetensors",
+        "svdq-fp4_r32-flux.1-dev.safetensors",
         512,
         512,
         2,

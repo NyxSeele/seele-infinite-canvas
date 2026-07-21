@@ -3,20 +3,7 @@ import { Handle, Position } from "reactflow"
 import { useCanvasActions } from "./CanvasActionsContext"
 import "./CanvasShared.css"
 
-const TGT_STYLE = {
-  position: "absolute",
-  top: "50%",
-  left: -1,
-  width: 1,
-  height: 1,
-  minWidth: 1,
-  minHeight: 1,
-  background: "transparent",
-  border: "none",
-  opacity: 0,
-  transform: "translateY(-50%)",
-  zIndex: 25,
-}
+const TGT_CLASS = "gn2-edge-handle gn2-edge-handle--target"
 
 /** 文本工作流节点左右加号 + 拖线锚点（与 GenerationCardNode 一致） */
 export default function TextWorkflowEdgePlugs({ nodeId, nodeType, disabled = false, selected = false }) {
@@ -29,7 +16,7 @@ export default function TextWorkflowEdgePlugs({ nodeId, nodeType, disabled = fal
 
   return (
     <>
-      <Handle type="target" position={Position.Left} id="tgt" style={TGT_STYLE} />
+      <Handle type="target" position={Position.Left} id="tgt" className={TGT_CLASS} />
       <Handle
         type="source"
         position={Position.Left}

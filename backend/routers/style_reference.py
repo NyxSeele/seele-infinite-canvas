@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from core.datetime_utils import to_utc_iso
 from core.dependencies import get_current_user
 from db.session import get_db
 from models import Task, User
@@ -34,6 +35,13 @@ router = APIRouter(tags=["style-reference"])
 logger = logging.getLogger(__name__)
 
 TASK_TYPE_STYLE_REF = "style_ref"
+
+
+def _canvas_version_meta(project) -> dict:
+    return {
+        "version": int(project.version or 1),
+        "updated_at": to_utc_iso(project.updated_at) if project.updated_at else None,
+    }
 
 
 async def _run_style_ref_task(
@@ -78,11 +86,18 @@ async def _run_style_ref_task(
             row_id=row_id,
         )
 
+        db.refresh(project)
         task = db.get(Task, task_id)
         if task and task.status != "cancelled":
             task.status = "completed"
             task.error = None
-            task.result = json.dumps(style_data, ensure_ascii=False)
+            task.result = json.dumps(
+                {
+                    "style_reference": style_data,
+                    **_canvas_version_meta(project),
+                },
+                ensure_ascii=False,
+            )
             db.commit()
     except HTTPException as e:
         detail = e.detail if isinstance(e.detail, str) else "视频风格分析失败，请稍后重试"
@@ -226,7 +241,12 @@ def put_shot_style_reference(
         row_id=row_id,
     )
     db.commit()
-    return {"style_reference": updated, "node_id": node_id}
+    db.refresh(project)
+    return {
+        "style_reference": updated,
+        "node_id": node_id,
+        **_canvas_version_meta(project),
+    }
 
 
 @router.delete("/api/shots/{row_id}/style-reference")
@@ -246,7 +266,8 @@ def delete_shot_style_reference(
         row_id=row_id,
     )
     db.commit()
-    return {"success": True, "node_id": node_id}
+    db.refresh(project)
+    return {"success": True, "node_id": node_id, **_canvas_version_meta(project)}
 
 
 @router.get("/api/video-nodes/{node_id}/style-reference")
@@ -301,7 +322,8 @@ def put_video_node_style_reference(
     patch = body.model_dump(exclude_unset=True)
     updated = update_node_style_reference(project, node_id, patch)
     db.commit()
-    return {"style_reference": updated}
+    db.refresh(project)
+    return {"style_reference": updated, **_canvas_version_meta(project)}
 
 
 @router.delete("/api/video-nodes/{node_id}/style-reference")
@@ -314,4 +336,5 @@ def delete_video_node_style_reference(
     project = get_accessible_project(db, user, project_id, require_edit=True)
     clear_node_style_reference(project, node_id)
     db.commit()
-    return {"success": True}
+    db.refresh(project)
+    return {"success": True, **_canvas_version_meta(project)}

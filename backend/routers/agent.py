@@ -13,6 +13,7 @@ from schemas.agent_schemas import (
     AgentConversationResponse,
     AgentConversationSaveRequest,
     AgentRunRequest,
+    PipelineManifestResponse,
 )
 from services.agent_conversation_service import (
     get_conversation_messages,
@@ -25,9 +26,25 @@ from services.agent_chat_history_service import (
 )
 from services.agent_service import run_agent_stream, generate_chat_title
 from services.canvas_access import get_accessible_project
+from services.pipeline_manifest import PipelineManifestError, load_pipeline, manifest_to_api_dict
 from services.rate_limit import check_agent_rate_limit
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+@router.get("/pipeline/{name}", response_model=PipelineManifestResponse)
+def get_agent_pipeline_manifest(
+    name: str,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        manifest = load_pipeline(name)
+    except PipelineManifestError as exc:
+        detail = str(exc)
+        if "not found" in detail:
+            raise HTTPException(status_code=404, detail="pipeline manifest not found") from exc
+        raise HTTPException(status_code=500, detail="pipeline manifest invalid") from exc
+    return PipelineManifestResponse(**manifest_to_api_dict(manifest))
 
 
 @router.get("/conversation/{project_id}", response_model=AgentConversationResponse)

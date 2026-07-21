@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useLocale } from "../../utils/locale"
 import { useOverlayMount, overlayClassNames } from "../../hooks/useFlyoutMount"
-import { getThemePortalRoot } from "../../utils/themePortalRoot"
 import {
   applyImportDocument,
   parseImportSheets,
@@ -19,7 +18,7 @@ import {
 } from "../../utils/canvas/importDocumentApply"
 import "./ImportDocumentModal.css"
 
-const ACCEPT = ".xlsx,.docx"
+const ACCEPT = ".xlsx,.xls,.docx,.doc"
 const EMPTY_PROJECTS = []
 
 function scanStatusLabel(status, t) {
@@ -46,6 +45,7 @@ export default function ImportDocumentModal({
   open,
   onClose,
   projectId: projectIdProp = "",
+  initialFile = null,
   projects = EMPTY_PROJECTS,
   theme = "dark",
   onApplied,
@@ -100,6 +100,24 @@ export default function ImportDocumentModal({
     setError("")
   }, [])
 
+  const runScan = useCallback(async (scanFile, scanProjectId) => {
+    if (!scanFile || !scanProjectId) {
+      setError(t("canvas.import.needFileProject"))
+      return
+    }
+    setLoading(true)
+    setError("")
+    try {
+      const result = await scanImportDocument({ projectId: scanProjectId, file: scanFile })
+      setScanResult(result)
+      setStep("pickEpisode")
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || t("canvas.import.scanFailed"))
+    } finally {
+      setLoading(false)
+    }
+  }, [t])
+
   useEffect(() => {
     if (!open) {
       wasOpenRef.current = false
@@ -107,9 +125,17 @@ export default function ImportDocumentModal({
     }
     if (wasOpenRef.current) return
     wasOpenRef.current = true
-    setProjectId(projectIdProp || projects[0]?.id || "")
+    const nextProjectId = projectIdProp || projects[0]?.id || ""
+    setProjectId(nextProjectId)
     reset()
-  }, [open, projectIdProp, projects, reset])
+    if (initialFile) {
+      setFile(initialFile)
+      setStep("file")
+      if (nextProjectId) {
+        void runScan(initialFile, nextProjectId)
+      }
+    }
+  }, [open, projectIdProp, projects, reset, initialFile, runScan])
 
   const toggleSheetSelected = (sheetName) => {
     setSelectedSheetNames((prev) =>
@@ -141,21 +167,7 @@ export default function ImportDocumentModal({
   }
 
   const handleScan = async () => {
-    if (!file || !projectId) {
-      setError(t("canvas.import.needFileProject"))
-      return
-    }
-    setLoading(true)
-    setError("")
-    try {
-      const result = await scanImportDocument({ projectId, file })
-      setScanResult(result)
-      setStep("pickEpisode")
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || t("canvas.import.scanFailed"))
-    } finally {
-      setLoading(false)
-    }
+    await runScan(file, projectId)
   }
 
   const loadGrouping = (sheet) => {
@@ -788,6 +800,6 @@ export default function ImportDocumentModal({
         </div>
       </div>
     </div>,
-    getThemePortalRoot()
+    document.body
   )
 }

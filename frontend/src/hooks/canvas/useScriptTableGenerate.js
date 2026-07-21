@@ -8,11 +8,12 @@ import { getT } from "../../utils/locale"
 import { normalizeCastLibrary } from "../../utils/canvas/castLibrary"
 import {
   buildEntityThemeContext,
-  characterCastLibrary,
+  buildScriptShotIdentityPayload,
   collectConnectedCharacterRefs,
+  formatMissingIdentityMessage,
+  isMissingIdentityApiError,
   mergeCharacterRefsForCompile,
-  resolveCharacterRefsForRow,
-  resolveSceneRefsForRow,
+  resolveShotEntityRefs,
 } from "../../utils/canvas/entityRefs"
 import { useAssetStore } from "../../stores/assetStore"
 import { getEffectiveQualityPresetId } from "../../utils/canvas/scriptTableNode"
@@ -38,6 +39,7 @@ import {
   syncRowFromKeyframes,
 } from "../../utils/canvas/scriptTableKeyframes"
 import { buildRefItem, buildClearGenerationTaskPatch } from "../../components/canvas/videoReferenceHelpers"
+import { defaultVidAudioForModel } from "../../utils/canvas/videoModelCompat"
 import { buildShotPromptPackage } from "../../utils/canvas/scriptPromptPackage"
 import { appendStyleReferenceToDescription } from "../../utils/canvas/styleReferenceFormat"
 import {
@@ -68,8 +70,8 @@ function resolveBeatCard(nodes, row) {
   return nodes.find((n) => n.id === row.beatCardNodeId && n.type === BEAT_CARD_NODE_TYPE) || null
 }
 
-/** 分镜出视频：复用已有视频节点的比例/清晰度/音频，否则默认 16:9 / 720P / 关闭 */
-function resolveScriptVideoParams(...sourceNodes) {
+/** 分镜出视频：复用已有视频节点的比例/清晰度/音频，否则按模型默认 */
+function resolveScriptVideoParams(videoModelId, ...sourceNodes) {
   for (const node of sourceNodes) {
     const d = node?.data
     if (!d) continue
@@ -77,11 +79,15 @@ function resolveScriptVideoParams(...sourceNodes) {
       return {
         vidRatio: d.vidRatio || "16:9",
         vidQuality: d.vidQuality || "720P",
-        vidAudio: d.vidAudio || "关闭",
+        vidAudio: d.vidAudio || defaultVidAudioForModel(videoModelId),
       }
     }
   }
-  return { vidRatio: "16:9", vidQuality: "720P", vidAudio: "关闭" }
+  return {
+    vidRatio: "16:9",
+    vidQuality: "720P",
+    vidAudio: defaultVidAudioForModel(videoModelId),
+  }
 }
 
 /** 分镜复用视频节点时清空旧成片/LUT/增强，避免 pendingTrigger 前展示旧结果 */
@@ -237,11 +243,19 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         const prevRow = rowIndex > 0 ? rows[rowIndex - 1] : null
         const visualContinuity = scriptNode.data.visualContinuity === true
         const continuityMode = scriptNode.data.continuityMode !== false
-        const castLibrary = normalizeCastLibrary(scriptNode.data.castLibrary || [])
+        const castLibrary = normalizeCastLibrary(scriptNode.data.castLibrary || [], {
+          requireImage: false,
+        })
         const rowForCast = { ...row, prompt: rowDesc }
         const globalAssets = useAssetStore.getState().assets || []
         const sceneLibrary = scriptNode.data?.sceneLibrary || []
-        const matchedCast = resolveCharacterRefsForRow(rowForCast, castLibrary, globalAssets)
+        const {
+          matchedCast,
+          entityRefUrls,
+          charFaceUrls,
+          identityIds,
+          entityRefAudit,
+        } = resolveShotEntityRefs(rowForCast, castLibrary, sceneLibrary, globalAssets)
         const connectedChars = collectConnectedCharacterRefs(
           nodesRef.current,
           edgesRef?.current || [],
@@ -252,9 +266,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           matchedCast.map((c) => ({
             name: c.name || "",
             appearance: c.prompt || c.description || c.note || "",
+            identityId: c.identityId,
           }))
         )
-        const matchedScenes = resolveSceneRefsForRow(rowForCast, sceneLibrary)
         const castContext = buildEntityThemeContext(
           rowForCast,
           castLibrary,
@@ -262,18 +276,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           globalAssets
         )
 
-        const MAX_CHAR_REFS = 3
-        const MAX_SCENE_REFS = 1
-        let manualRefs = []
-        const charRefs = matchedCast.map((c) => c.imageUrl).filter(Boolean).slice(0, MAX_CHAR_REFS)
-        const sceneRefs = matchedScenes.map((s) => s.imageUrl).filter(Boolean).slice(0, MAX_SCENE_REFS)
-        manualRefs = [...charRefs, ...sceneRefs]
-        if (!manualRefs.length && castLibrary.length) {
-          manualRefs = characterCastLibrary(castLibrary)
-            .map((c) => c.imageUrl)
-            .filter(Boolean)
-            .slice(0, MAX_CHAR_REFS)
-        }
+        const manualRefs = entityRefUrls
 
         const traceId = newTraceId()
         let descriptionForBuild = rowDesc
@@ -292,23 +295,37 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           /* fallback to raw row description */
         }
 
-        const buildRes = await api.post("/api/prompt/build-shot", {
-          description: descriptionForBuild,
-          model_id: modelId,
-          global_style: "",
-          quality_preset_id: getEffectiveQualityPresetId(row, scriptNode.data),
-          theme_context: castContext || scriptNode.data.themeContext || "",
-          prior_shots: priorShots,
-          shot_number: row.shotNumber ?? rowIndex + 1,
-          visual_continuity: visualContinuity,
-          continuity_mode: continuityMode,
-          has_previous_shot_image: Boolean(
-            prevRow?.directResultUrl || getLastKeyframeResult(prevRow)
-          ),
-          has_manual_reference: manualRefs.length > 0,
-          trace_id: traceId,
-          character_refs_count: characterRefs.length,
-        })
+        let buildRes
+        try {
+          buildRes = await api.post("/api/prompt/build-shot", {
+            description: descriptionForBuild,
+            model_id: modelId,
+            global_style: "",
+            quality_preset_id: getEffectiveQualityPresetId(row, scriptNode.data),
+            theme_context: castContext || scriptNode.data.themeContext || "",
+            prior_shots: priorShots,
+            shot_number: row.shotNumber ?? rowIndex + 1,
+            visual_continuity: visualContinuity,
+            continuity_mode: continuityMode,
+            has_previous_shot_image: Boolean(
+              prevRow?.directResultUrl || getLastKeyframeResult(prevRow)
+            ),
+            has_manual_reference: manualRefs.length > 0,
+            trace_id: traceId,
+            character_refs_count: characterRefs.length,
+            ...buildScriptShotIdentityPayload(rowForCast, castLibrary),
+          })
+        } catch (err) {
+          const missing = isMissingIdentityApiError(err)
+          if (missing) {
+            patchScriptTableRow(scriptTableNodeId, rowId, {
+              directStatus: "failed",
+              error: formatMissingIdentityMessage(missing),
+            })
+            return false
+          }
+          throw err
+        }
 
         const {
           prompt,
@@ -354,7 +371,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           }
         }
         const refUrl = resolvedRefs[0] || null
-        const pulidFaceRef = charRefs[0] || null
+        const pulidFaceRef = charFaceUrls[0] || null
         const effectiveModelId = pulidFaceRef ? "flux-pulid" : modelId
         const pulidRefs = pulidFaceRef ? [pulidFaceRef] : resolvedRefs
 
@@ -388,6 +405,8 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             : [],
           reference_images: pulidRefs.length ? pulidRefs : undefined,
           use_reactor: Boolean(pulidFaceRef),
+          identityIds,
+          entityRefAudit,
           count: 1,
           expectedCount: 1,
           builtPrompt: prompt,
@@ -528,7 +547,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         const prevKfInRow = getPreviousKeyframeInRow({ keyframes }, keyframeId)
         const visualContinuity = scriptNode.data.visualContinuity === true
         const continuityMode = scriptNode.data.continuityMode !== false
-        const castLibrary = normalizeCastLibrary(scriptNode.data.castLibrary || [])
+        const castLibrary = normalizeCastLibrary(scriptNode.data.castLibrary || [], {
+          requireImage: false,
+        })
         const rowForCast = {
           ...row,
           prompt: rowDesc,
@@ -536,7 +557,13 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         }
         const globalAssets = useAssetStore.getState().assets || []
         const sceneLibrary = scriptNode.data?.sceneLibrary || []
-        const matchedCast = resolveCharacterRefsForRow(rowForCast, castLibrary, globalAssets)
+        const {
+          matchedCast,
+          entityRefUrls,
+          charFaceUrls,
+          identityIds,
+          entityRefAudit,
+        } = resolveShotEntityRefs(rowForCast, castLibrary, sceneLibrary, globalAssets)
         const connectedChars = collectConnectedCharacterRefs(
           nodesRef.current,
           edgesRef?.current || [],
@@ -547,9 +574,9 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           matchedCast.map((c) => ({
             name: c.name || "",
             appearance: c.prompt || c.description || c.note || "",
+            identityId: c.identityId,
           }))
         )
-        const matchedScenes = resolveSceneRefsForRow(rowForCast, sceneLibrary)
         const castContext = buildEntityThemeContext(
           rowForCast,
           castLibrary,
@@ -557,18 +584,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           globalAssets
         )
 
-        const MAX_CHAR_REFS = 3
-        const MAX_SCENE_REFS = 1
-        let manualRefs = []
-        const charRefs = matchedCast.map((c) => c.imageUrl).filter(Boolean).slice(0, MAX_CHAR_REFS)
-        const sceneRefs = matchedScenes.map((s) => s.imageUrl).filter(Boolean).slice(0, MAX_SCENE_REFS)
-        manualRefs = [...charRefs, ...sceneRefs]
-        if (!manualRefs.length && castLibrary.length) {
-          manualRefs = characterCastLibrary(castLibrary)
-            .map((c) => c.imageUrl)
-            .filter(Boolean)
-            .slice(0, MAX_CHAR_REFS)
-        }
+        const manualRefs = entityRefUrls
 
         const traceId = newTraceId()
         let descriptionForBuild = rowDesc
@@ -587,23 +603,37 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           /* fallback to raw row description */
         }
 
-        const buildRes = await api.post("/api/prompt/build-shot", {
-          description: descriptionForBuild,
-          model_id: modelId,
-          global_style: "",
-          quality_preset_id: getEffectiveQualityPresetId(row, scriptNode.data),
-          theme_context: castContext || scriptNode.data.themeContext || "",
-          prior_shots: priorShots,
-          shot_number: row.shotNumber ?? rowIndex + 1,
-          visual_continuity: visualContinuity,
-          continuity_mode: continuityMode,
-          has_previous_shot_image: Boolean(
-            prevKfInRow?.resultUrl || getLastKeyframeResult(prevRow)
-          ),
-          has_manual_reference: manualRefs.length > 0,
-          trace_id: traceId,
-          character_refs_count: characterRefs.length,
-        })
+        let buildRes
+        try {
+          buildRes = await api.post("/api/prompt/build-shot", {
+            description: descriptionForBuild,
+            model_id: modelId,
+            global_style: "",
+            quality_preset_id: getEffectiveQualityPresetId(row, scriptNode.data),
+            theme_context: castContext || scriptNode.data.themeContext || "",
+            prior_shots: priorShots,
+            shot_number: row.shotNumber ?? rowIndex + 1,
+            visual_continuity: visualContinuity,
+            continuity_mode: continuityMode,
+            has_previous_shot_image: Boolean(
+              prevKfInRow?.resultUrl || getLastKeyframeResult(prevRow)
+            ),
+            has_manual_reference: manualRefs.length > 0,
+            trace_id: traceId,
+            character_refs_count: characterRefs.length,
+            ...buildScriptShotIdentityPayload(rowForCast, castLibrary),
+          })
+        } catch (err) {
+          const missing = isMissingIdentityApiError(err)
+          if (missing) {
+            patchScriptTableKeyframe(scriptTableNodeId, rowId, keyframeId, {
+              status: "failed",
+              error: formatMissingIdentityMessage(missing),
+            })
+            return false
+          }
+          throw err
+        }
 
         const {
           prompt,
@@ -656,7 +686,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           }
         }
         const refUrl = resolvedRefs[0] || null
-        const pulidFaceRef = charRefs[0] || null
+        const pulidFaceRef = charFaceUrls[0] || null
         const effectiveModelId = pulidFaceRef ? "flux-pulid" : modelId
         const pulidRefs = pulidFaceRef ? [pulidFaceRef] : resolvedRefs
 
@@ -689,6 +719,8 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             : [],
           reference_images: pulidRefs.length ? pulidRefs : undefined,
           use_reactor: Boolean(pulidFaceRef),
+          identityIds,
+          entityRefAudit,
           count: 1,
           expectedCount: 1,
           builtPrompt: prompt,
@@ -987,14 +1019,28 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
             : rowWithDirector
       const samplingProfile = String(row.movement || "").trim() ? "quality" : "fast"
       let videoPrompt = appendStyleReferenceToDescription(sceneDescForVideo, shotStyleRef)
+      const castForPkg = normalizeCastLibrary(scriptNode.data.castLibrary || [], {
+        requireImage: false,
+      })
+      const globalAssets = useAssetStore.getState().assets || []
+      const sceneLibrary = scriptNode.data?.sceneLibrary || []
+      const { matchedCast, identityIds, entityRefAudit } = resolveShotEntityRefs(
+        row,
+        castForPkg,
+        sceneLibrary,
+        globalAssets
+      )
+      if (matchedCast.length > 0 && !rowDirectImageReady(row)) {
+        patchScriptTableRow(scriptTableNodeId, rowId, {
+          error: getT()("canvas.script.directImageFirst"),
+        })
+        return false
+      }
       const priorVideoGenId = row.directVideoGenNodeId
       const priorVideo = priorVideoGenId
         ? nodesRef.current.find((n) => n.id === priorVideoGenId) || getNode(priorVideoGenId)
         : null
       try {
-        const castForPkg = normalizeCastLibrary(scriptNode.data.castLibrary || [])
-        const globalAssets = useAssetStore.getState().assets || []
-        const matchedCast = resolveCharacterRefsForRow(row, castForPkg, globalAssets)
         const connectedChars = collectConnectedCharacterRefs(
           nodesRef.current,
           edgesRef?.current || [],
@@ -1005,8 +1051,29 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
           matchedCast.map((c) => ({
             name: c.name || "",
             appearance: c.prompt || c.description || c.note || "",
+            identityId: c.identityId,
           }))
         )
+        if (matchedCast.length > 0) {
+          try {
+            await api.post("/api/prompt/build-shot", {
+              description: sceneDescForVideo || shotPromptText(row) || "video",
+              model_id: scriptNode.data.modelId || videoModelId,
+              theme_context: buildEntityThemeContext(row, castForPkg, sceneLibrary, globalAssets),
+              shot_number: row.shotNumber ?? rowIndex + 1,
+              ...buildScriptShotIdentityPayload(row, castForPkg),
+            })
+          } catch (err) {
+            const missing = isMissingIdentityApiError(err)
+            if (missing) {
+              patchScriptTableRow(scriptTableNodeId, rowId, {
+                error: formatMissingIdentityMessage(missing),
+              })
+              return false
+            }
+            throw err
+          }
+        }
         const compiled = await compilePrompt({
           scene_desc: sceneDescForVideo,
           character_refs: characterRefs,
@@ -1052,8 +1119,10 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         keyframes: { first: firstRef, last: firstRef },
         referenceMode: "keyframe",
         vidDuration: `${durationSec}s`,
-        ...resolveScriptVideoParams(priorVideo, existingVideo),
+        ...resolveScriptVideoParams(videoModelId, priorVideo, existingVideo),
         scriptTableRef: { nodeId: scriptTableNodeId, rowId, lane: "direct" },
+        identityIds,
+        entityRefAudit,
         pendingTrigger: triggerAt,
       }
 
@@ -1191,7 +1260,7 @@ export function useScriptTableGenerate({ nodes, setNodes, setEdges, getNode, nod
         keyframes: { first: firstRef, last: lastRef },
         referenceMode: "keyframe",
         vidDuration: `${durationSec}s`,
-        ...resolveScriptVideoParams(existingVideo),
+        ...resolveScriptVideoParams(videoModelId, existingVideo),
         scriptTableRef: {
           nodeId: scriptTableNodeId,
           rowId,

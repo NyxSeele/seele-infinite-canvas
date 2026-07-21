@@ -87,7 +87,7 @@ export default function MenuFlyoutPortal({
     mounted,
     closing,
     open,
-    base: `wum-flyout-portal ${themeClass}${className ? ` ${className}` : ""}`,
+    base: `wum-flyout-portal ws-overlay-root ${themeClass}${className ? ` ${className}` : ""}`,
     enterClass: open && !closing ? "motion-popover-in motion-popover-in--left" : "",
     exitClass: closing ? "motion-popover-out motion-popover-out--left" : "",
   })
@@ -95,7 +95,7 @@ export default function MenuFlyoutPortal({
   return createPortal(
     <>
       <div
-        className="wum-flyout-bridge"
+        className="wum-flyout-bridge ws-overlay-root"
         style={{
           top: pos.bridgeTop,
           left: pos.bridgeLeft,

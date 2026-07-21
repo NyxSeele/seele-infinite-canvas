@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
-import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
-from core.comfyui_settings import comfyui_nodes_list, resolve_comfyui_node_url
+from core.comfyui_settings import comfyui_nodes_list
 from core.config import settings
 from core.dependencies import get_current_user
 from db.session import get_db
@@ -30,11 +27,10 @@ from schemas.review import (
     ReviewVideoUploadResponse,
 )
 from services.media_access import (
-    sanitize_filename,
     sanitize_upload_rel_path,
-    user_can_access_comfy_output,
     user_can_access_upload,
 )
+from services.studio_media_rehost import parse_studio_media_url, rehost_studio_video
 from services.r2 import (
     R2NotConfiguredError,
     delete_file,
@@ -79,52 +75,6 @@ def _looks_like_video(filename: str, content_type: str) -> bool:
 _UPLOAD_ROOT = Path("uploads")
 
 
-def _parse_studio_media_url(source_url: str) -> dict | None:
-    """Detect /api/view or /api/uploads media; return {kind, ...} or None."""
-    raw = (source_url or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("/"):
-        parsed = urlparse(raw)
-    else:
-        parsed = urlparse(raw)
-        # Absolute URL to our own API paths
-        path = parsed.path or ""
-        if not (path.startswith("/api/view") or path.startswith("/api/uploads/")):
-            return None
-    path = parsed.path or ""
-    qs = parse_qs(parsed.query or "")
-    if path == "/api/view" or path.endswith("/api/view"):
-        filename = (qs.get("filename") or [None])[0]
-        if not filename:
-            return None
-        return {
-            "kind": "view",
-            "filename": filename,
-            "type": (qs.get("type") or ["output"])[0] or "output",
-            "subfolder": (qs.get("subfolder") or [""])[0] or "",
-        }
-    if "/api/uploads/" in path:
-        idx = path.find("/api/uploads/")
-        rel = path[idx + len("/api/uploads/") :].lstrip("/")
-        if not rel:
-            return None
-        return {"kind": "upload", "rel_path": rel}
-    return None
-
-
-def _upload_path_to_r2(file_path: Path, filename: str, content_type: str) -> dict:
-    size = int(file_path.stat().st_size)
-    if size > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"视频过大，最大允许 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
-        )
-    with file_path.open("rb") as fh:
-        result = upload_fileobj(fh, filename, content_type, prefix="review")
-    return {**result, "filename": filename, "size_bytes": size}
-
-
 def _public_media_url(url: str | None) -> str | None:
     """Only return URLs that anonymous clients can load."""
     if not url:
@@ -145,7 +95,7 @@ def _public_media_url(url: str | None) -> str | None:
 
 def _rehost_local_upload_image(db: Session, user: User, source_url: str) -> str | None:
     """If source is /api/uploads/images/..., copy to R2 and return public URL."""
-    media = _parse_studio_media_url(source_url)
+    media = parse_studio_media_url(source_url)
     if not media or media.get("kind") != "upload":
         return None
     safe_rel = sanitize_upload_rel_path(media["rel_path"])
@@ -352,123 +302,21 @@ async def import_review_video(
     db: Session = Depends(get_db),
 ):
     """Rehost private studio media (/api/view|/api/uploads) to R2 for anonymous review."""
-    raw = (body.source_url or "").strip()
-    if not raw:
-        raise HTTPException(status_code=400, detail="缺少 source_url")
-
-    if is_r2_public_asset_url(raw):
-        key = key_from_r2_public_url(raw)
-        return ReviewImportVideoResponse(
-            public_url=raw,
-            key=key,
-            filename=Path(key or "video.mp4").name,
-            rehosted=False,
-        )
-
-    media = _parse_studio_media_url(raw)
-    if media is None:
-        # Already a public external URL — no rehost
-        if raw.startswith("http://") or raw.startswith("https://"):
-            return ReviewImportVideoResponse(
-                public_url=raw,
-                filename="video.mp4",
-                rehosted=False,
-            )
-        raise HTTPException(status_code=400, detail="无法识别的视频地址")
-
-    if not is_r2_configured() or not (settings.r2_public_url or "").strip():
-        raise HTTPException(status_code=503, detail="R2 未配置，无法转存生成历史视频")
-
-    try:
-        if media["kind"] == "upload":
-            safe_rel = sanitize_upload_rel_path(media["rel_path"])
-            if not user_can_access_upload(db, current_user, safe_rel):
-                raise HTTPException(status_code=403, detail="无权访问该视频")
-            file_path = (_UPLOAD_ROOT / safe_rel).resolve()
-            root = _UPLOAD_ROOT.resolve()
-            if not str(file_path).startswith(str(root)) or not file_path.is_file():
-                raise HTTPException(status_code=404, detail="视频文件不存在")
-            filename = file_path.name
-            ctype = "video/mp4"
-            if filename.lower().endswith(".webm"):
-                ctype = "video/webm"
-            result = _upload_path_to_r2(file_path, filename, ctype)
-            return ReviewImportVideoResponse(
-                public_url=result["public_url"],
-                key=result["key"],
-                content_type=result["content_type"],
-                filename=result["filename"],
-                size_bytes=result["size_bytes"],
-                rehosted=True,
-            )
-
-        # ComfyUI /api/view proxy → temp file → R2
-        safe_name = sanitize_filename(media["filename"])
-        safe_subfolder = (media.get("subfolder") or "").strip().replace("\\", "/").strip("/")
-        if safe_subfolder and not all(
-            part and part not in (".", "..") for part in safe_subfolder.split("/")
-        ):
-            raise HTTPException(status_code=400, detail="非法 subfolder")
-        if not user_can_access_comfy_output(
-            db, current_user, safe_name, subfolder=safe_subfolder
-        ):
-            raise HTTPException(status_code=403, detail="无权访问该视频")
-
-        params = {"filename": safe_name, "type": media.get("type") or "output"}
-        if safe_subfolder:
-            params["subfolder"] = safe_subfolder
-        from urllib.parse import parse_qs, urlparse
-
-        node_hint = None
-        parsed_src = urlparse(raw or "")
-        if parsed_src.query:
-            node_hint = (parse_qs(parsed_src.query).get("node") or [None])[0]
-        upstream = f"{resolve_comfyui_node_url(node_hint)}/view"
-        timeout = httpx.Timeout(float(settings.llm_http_timeout), connect=30.0)
-        suffix = Path(safe_name).suffix or ".mp4"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("GET", upstream, params=params) as resp:
-                    if resp.status_code >= 400:
-                        raise HTTPException(
-                            status_code=502,
-                            detail=f"拉取生成视频失败 HTTP {resp.status_code}",
-                        )
-                    written = 0
-                    with tmp_path.open("wb") as out:
-                        async for chunk in resp.aiter_bytes(1024 * 1024):
-                            written += len(chunk)
-                            if written > MAX_UPLOAD_BYTES:
-                                raise HTTPException(
-                                    status_code=413,
-                                    detail=f"视频过大，最大允许 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
-                                )
-                            out.write(chunk)
-            ctype = "video/webm" if suffix.lower() == ".webm" else "video/mp4"
-            result = _upload_path_to_r2(tmp_path, safe_name, ctype)
-            return ReviewImportVideoResponse(
-                public_url=result["public_url"],
-                key=result["key"],
-                content_type=result["content_type"],
-                filename=result["filename"],
-                size_bytes=result["size_bytes"],
-                rehosted=True,
-            )
-        finally:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-    except HTTPException:
-        raise
-    except R2NotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"拉取生成视频失败: {exc}") from exc
+    result = await rehost_studio_video(
+        db,
+        current_user,
+        body.source_url,
+        prefix="review",
+        allow_external_pass_through=True,
+    )
+    return ReviewImportVideoResponse(
+        public_url=result["public_url"],
+        key=result.get("key"),
+        content_type=result.get("content_type") or "video/mp4",
+        filename=result.get("filename") or "video.mp4",
+        size_bytes=int(result.get("size_bytes") or 0),
+        rehosted=bool(result.get("rehosted")),
+    )
 
 
 @router.post("/videos", response_model=ReviewVideoOut)

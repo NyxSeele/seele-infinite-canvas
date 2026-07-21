@@ -7,7 +7,6 @@ BACKEND_TO_MODEL = {
     "wan": "wan-2.6",
     "ltx": "ltx-video",
     "ltx2": "ltx2-video",
-    "hunyuan": "hunyuan-video",
     "seedance": "seedance",
 }
 

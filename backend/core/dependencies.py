@@ -85,3 +85,26 @@ def require_r2_access(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin" and not getattr(user, "r2_access", False):
         raise HTTPException(status_code=403, detail="未授权访问团队文件空间")
     return user
+
+
+def require_team_files_access(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    from models.team import TeamMember
+    from services.storage_routing import resolve_backend
+
+    if user.role == "admin":
+        return user
+    if resolve_backend("team") == "local":
+        editor = (
+            db.query(TeamMember.id)
+            .filter(TeamMember.user_id == user.id, TeamMember.role == "editor")
+            .first()
+        )
+        if editor:
+            return user
+        raise HTTPException(status_code=403, detail="需要团队编辑者权限")
+    if not getattr(user, "r2_access", False):
+        raise HTTPException(status_code=403, detail="未授权访问团队文件空间")
+    return user

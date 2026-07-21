@@ -1,10 +1,38 @@
 # AI Studio 开发进度交接文档
 
-用于开启新对话时快速恢复上下文。最后更新：**2026-07-13**（视频审阅 ✅ · R2 团队文件 ✅ · 公网 Tunnel · pytest **121** · 迁移 **026**）
+> **战略变更（2026-07-21）**：**Hunyuan 已下线**；视频转 **Seedance API**；图像转 **GPT Image API**。本仓库已剥离 Hunyuan 本地视频链路与推荐入口；旧画布 `modelId=hunyuan-*` 自动降级到 `wan-2.6` / `wan-i2v`。
+
+用于开启新对话时快速恢复上下文。最后更新：**2026-07-21**（Hunyuan 下线 · 云端 API 战略）
 
 ---
 
-## 当前总览（2026-07-13 · 最新）
+## 当前总览（2026-07-21 · 最新）
+
+### 进度一句话
+
+**战略转向云端 API**：本地 **HunyuanVideo 已彻底移除**（registry / ComfyUI workflow / 前端推荐）；视频默认 **wan-2.6**，下一任务切 **Seedance 2.0 API**；图像路线 **GPT Image API**（待接）。既有 **视频审阅公开站 + R2**、G31–G45 仍有效。pytest 待本任务验收后更新计数。
+
+**生产管理员账号（2026-07-14）**：登录名 **`seele`**（`role=admin`）· 密码 **`dfy042005`** · 邮箱 `admin@aistudio.local`。
+
+**硬约束 · Admin 文本模型（勿动）**：未经负责人**明确同意**，禁止修改 Admin 后台「模型管理」里的**文本模型**配置。**勿随意重跑** `scripts/_enable_text_models.py`。
+
+**硬约束 · Supervisor / Tunnel（勿整文件覆盖）**：`deploy/supervisor-autodl.conf` 必须**始终保留全部 5 段**。
+
+**硬约束 · 系统盘**：大文件一律放 **`/root/autodl-tmp`**。
+
+### 下轮优先（2026-07-21）
+
+| 优先级 | 项 | 说明 |
+|--------|-----|------|
+| 1 | **Seedance API 上线** | 配置 `SEEDANCE_API_KEY`；画布默认视频模型切 `seedance-2.0` |
+| 2 | **GPT Image API** | 图像生成云端化，替换/补充本地 Comfy 出图 |
+| 3 | 主观质量表（G47） | 人工观看 MP4（Wan / LTX / Seedance 对比） |
+
+~~Hunyuan 本地视频~~：✅ 2026-07-21 已下线并剥离代码
+
+---
+
+## 当前总览（2026-07-13 · 历史快照）
 
 ### 进度一句话
 
@@ -15,6 +43,8 @@
 **硬约束 · Admin 文本模型（勿动）**：未经负责人**明确同意**，禁止修改 Admin 后台「模型管理」里的**文本模型**配置——包括 `registered_models` 中 `category=text` / `type=api` 的启用/禁用、**默认 Agent 文本模型**（`is_default_text`）、LLM 分流模式、单价、`api_key` 等。**勿随意重跑** `scripts/_enable_text_models.py`（会按 `model_registry` + env **覆盖 DB**，常把默认改回 `qwen-plus` 并冲掉后台已配项）。与文本模型无关的任务，**不要改** `model_registry.py` 文本 preset、`llm_router.py`、`admin_models.py` 的默认/seed 逻辑；确需动须先说明影响并保留现有 Admin 配置。
 
 **硬约束 · Supervisor / Tunnel（勿整文件覆盖）**：`deploy/supervisor-autodl.conf` 与 `/etc/supervisor/conf.d/aistudio.conf` 必须**始终保留全部 5 段**：`comfyui0` · `comfyui1` · `aistudio-backend` · **`nginx`** · **`cloudflared`**。与 GPU/后端无关的改动（如双卡调度、`COMFYUI_NODES`）**只允许在现有文件上改对应行**，**禁止**用删减后的片段整文件 `cp` 覆盖——2026-07-14 曾因此删掉 `nginx`/`cloudflared`，公网 **`https://velora.seele0420.cloud`** 出现 **Cloudflare Error 1033**（Tunnel 无连接；本地 `:6006` 仍 200）。改完后须 `diff` 确认五段都在，再 `supervisorctl update`，并 `curl` 公网 `/api/health` 为 **200**。详见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) §3.1 · [Runbook §10](backend/docs/AUTODL_DEPLOY_RUNBOOK.md)。
+
+**硬约束 · 系统盘（严禁无关文件）**：AutoDL **`/` 系统盘仅 30GB**，**严禁**将模型权重、下载缓存、pip/npm/conda 包、大日志、临时测试文件、git 大仓库、生成产物等**与系统运行无关**的内容写入系统盘。一律放 **`/root/autodl-tmp`**（数据盘，可扩容）。系统盘只保留：系统包、Redis/Nginx/Supervisor 配置、极小配置文件。大目录已软链至 `/root/autodl-tmp/.sys-mirror/`（miniconda、`.cache`、`.npm`、LaunchTool311 等）；`TMPDIR=/root/autodl-tmp/tmp`。操作前 `df -h /` 确认 **<80%**；若满，先清 `/tmp` 测试残留并检查是否误写 `/root` 非软链目录。详见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) §1 磁盘表。
 
 ### 本周关键交付（2026-07-13 · 视频审阅 / R2 / 品牌 UX）
 
@@ -203,7 +233,7 @@
 - ~~**新机 Supervisor 未自启**~~：✅ 2026-07-08 `/usr/bin/supervisord -c /etc/supervisor/supervisord.conf`（见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) §3.1）
 - ~~**HiDream-i1 权重 + workflow 对齐**~~：✅ 2026-07-07 落盘 + smoke PASS（见 [`HANDOFF_SERVER.md`](HANDOFF_SERVER.md) §2.5）
 - ~~**wan-i2v API 实测**~~：✅ 2026-07-07 smoke PASS；**`/api/view` 参考图** ✅ 2026-07-07 晚修复
-- ~~**HunyuanVideo**~~：✅ G35/G38 smoke 通过正式上线（720p/50 步约 **109 分钟**；显存峰值 **23076 MiB (~22.5G)**；无致命 CUDA OOM；VAE 曾 tiled 回退告警）。**重负载**：建议高级选项，避免与 Wan/PuLID 同卡叠跑
+- ~~**HunyuanVideo**~~：✅ 历史 G35/G38 曾上线；**2026-07-21 战略下线**，代码与 registry 已剥离，旧画布降级 Wan
 - ~~**LTX-2 fp4**~~：✅ 权重落盘 + API 接线 + 结构探针 PASS（2026-07-09）
 - ~~**G30 人物一致性**~~：✅ phash + flux-pulid 全栈 + GPU smoke PASS（2026-07-09）；详见 [`G30_RESUME.md`](G30_RESUME.md)
 - ~~**画质增强 media_access 绝对 URL 绕过**~~：✅ `normalize_media_reference_url` + 前端 enhance 用相对路径；单测覆盖绝对 `/api/view`
@@ -230,13 +260,13 @@
 - 纯前端项自动化（可选）：`libraryUsage` / `generationRetryPolicy` 若需 Vitest，单独立项
 - ~~**Portal / z-index 收口**~~：✅ 未 portal 化 overlay 迁 `getThemePortalRoot`；`zIndexLayers.js` 常量已引用
 
-### 下轮优先（2026-07-13）
+### 下轮优先（2026-07-13 · 历史）
 
 | 优先级 | 项 | 说明 |
 |--------|-----|------|
 | 1 | 主观质量表（G47） | 人工观看 MP4 |
 | 2 | 审阅站加固（可选） | 真 DRM / 鉴权门禁 / 审阅单测；当前仅软防下载 |
-| — | **Seedance Key（G46）** | **最后再说 / 不排期**；框架就绪，被动等待 Key |
+| — | **Seedance Key（G46）** | 见文首 2026-07-21 战略表 |
 
 ~~视频审阅 / R2~~ / ~~G45 视频逐帧~~ / ~~G44 assets~~ / ~~清理债项四件套~~：✅ 已闭环
 

@@ -1,4 +1,4 @@
-import { makeEmptyScriptRow } from "../../components/canvas/ScriptTableNode"
+import { makeEmptyScriptRow } from "./scriptTableRowFactory"
 import { pickShotDirectorFields } from "./shotDirectorFields"
 import { formatScreenplayParagraphs } from "./textFormat"
 function sortScriptRows(rows) {

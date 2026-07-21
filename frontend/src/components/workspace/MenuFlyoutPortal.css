@@ -1,13 +1,13 @@
 .wum-flyout-bridge {
-  position: fixed;
-  z-index: 519;
+  position: fixed !important;
+  z-index: 539;
   background: transparent;
   pointer-events: auto;
 }
 
 .wum-flyout-portal {
-  position: fixed;
-  z-index: 520;
+  position: fixed !important;
+  z-index: 540;
   background: var(--tl-card-bg, #ffffff);
   border: 1px solid var(--tl-card-border, #e5e5e5);
   border-radius: 16px;
@@ -21,15 +21,21 @@
 }
 
 .wum-flyout-portal.rf-page--dark {
-  background: #161616;
+  background: #161616 !important;
   border-color: #2a2a2a;
   color: #f0f0f0;
   box-shadow: 0 20px 56px rgba(0, 0, 0, 0.55);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  opacity: 1 !important;
 }
 
 .wum-flyout-portal.rf-page--light {
-  background: #ffffff;
+  background: #ffffff !important;
   border-color: #e8e8e8;
   color: #111111;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.12);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  opacity: 1 !important;
 }

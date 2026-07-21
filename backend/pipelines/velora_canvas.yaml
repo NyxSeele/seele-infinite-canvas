@@ -1,0 +1,155 @@
+name: velora_canvas_screenplay
+version: "1.0"
+description: Velora 画布宣传片/剧本主链 pipeline manifest
+shared_skill: agent_skills/velora_canvas/_shared.md
+
+stages:
+  - name: create_text_note
+    order: 1
+    phase: script_structure
+    optional: false
+    skill: agent_skills/velora_canvas/create_text_note.md
+    executor: canvas.create_text_note
+    capabilities:
+      - canvas.nodes.create
+    ui_label: 创建文本输入卡
+    preconditions:
+      - canvas_has_no_text_note_for_topic
+    produces:
+      - text_note
+    prompt_label: 画布无本主题的 text-note
+
+  - name: start_text_generation
+    order: 2
+    phase: script_structure
+    optional: false
+    skill: agent_skills/velora_canvas/start_text_generation.md
+    executor: canvas.start_text_generation
+    capabilities:
+      - canvas.nodes.create
+      - canvas.edges.create
+      - api.tasks.text
+    ui_label: 生成剧本文本
+    preconditions:
+      - has_text_note
+      - missing_or_regen_text_response
+    produces:
+      - text_response
+    prompt_label: 已有 text-note，尚无 text-response 或需重新生成
+
+  - name: generate_outline
+    order: 3
+    phase: script_structure
+    optional: false
+    skill: agent_skills/velora_canvas/generate_outline.md
+    executor: canvas.generate_outline
+    capabilities:
+      - canvas.nodes.create
+      - canvas.edges.create
+      - api.screenplay.structure
+    ui_label: 生成剧本大纲
+    preconditions:
+      - text_response_complete
+      - intent_screenplay
+    produces:
+      - outline
+    prompt_label: text-response 已完成，且 intent=screenplay
+
+  - name: generate_script_table
+    order: 4
+    phase: script_structure
+    optional: false
+    skill: agent_skills/velora_canvas/generate_script_table.md
+    executor: canvas.generate_script_table
+    capabilities:
+      - canvas.nodes.create
+      - canvas.edges.create
+      - api.screenplay.shots
+    ui_label: 生成分镜表
+    preconditions:
+      - outline_has_scenes
+      - outline_not_loading
+    produces:
+      - script_table
+    prompt_label: 大纲已有 scenes 且非 loading
+
+  - name: split_shot_beats
+    order: 5
+    phase: storyboard
+    optional: true
+    skill: agent_skills/velora_canvas/split_shot_beats.md
+    executor: canvas.split_shot_beats
+    capabilities:
+      - canvas.nodes.update
+      - canvas.nodes.create
+    ui_label: 拆分镜头节拍
+    preconditions:
+      - script_table_ready
+    produces:
+      - beat_card
+    prompt_label: 可选；大分镜直连出图时可跳过
+
+  - name: generate_storyboard
+    order: 6
+    phase: storyboard
+    optional: false
+    skill: agent_skills/velora_canvas/generate_storyboard.md
+    executor: canvas.generate_storyboard
+    capabilities:
+      - canvas.nodes.update
+      - api.tasks.image
+    ui_label: 生成分镜图
+    preconditions:
+      - shot_storyboard_incomplete
+    produces:
+      - storyboard_image
+    prompt_label: 该镜分镜图未完成（可直连出图，无需先拆节拍）
+
+  - name: generate_video
+    order: 7
+    phase: storyboard
+    optional: false
+    skill: agent_skills/velora_canvas/generate_video.md
+    executor: canvas.generate_video
+    capabilities:
+      - canvas.nodes.update
+      - api.tasks.video
+    ui_label: 生成镜头视频
+    preconditions:
+      - shot_storyboard_complete
+      - shot_video_incomplete
+    produces:
+      - shot_video
+    prompt_label: 该镜分镜图已完成、尚无**已完成**的视频（has_video=false）
+
+  - name: manage_cast
+    order: 8
+    phase: library
+    optional: true
+    skill: agent_skills/velora_canvas/manage_cast.md
+    executor: canvas.manage_cast
+    capabilities:
+      - canvas.nodes.update
+      - library.cast
+    ui_label: 管理角色库
+    preconditions:
+      - script_table_exists
+    produces:
+      - cast_library
+    prompt_label: 分镜表已存在；用户要求添加/更新角色设定
+
+  - name: manage_scene
+    order: 9
+    phase: library
+    optional: true
+    skill: agent_skills/velora_canvas/manage_scene.md
+    executor: canvas.manage_scene
+    capabilities:
+      - canvas.nodes.update
+      - library.scene
+    ui_label: 管理场景库
+    preconditions:
+      - script_table_exists
+    produces:
+      - scene_library
+    prompt_label: 分镜表已存在；用户要求添加/更新场景实体

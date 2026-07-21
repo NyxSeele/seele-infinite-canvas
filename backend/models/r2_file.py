@@ -26,3 +26,5 @@ class R2File(Base):
         DateTime(timezone=True), default=utcnow, index=True
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    storage_backend: Mapped[str] = mapped_column(String(16), default="r2", index=True)
+    local_rel_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)

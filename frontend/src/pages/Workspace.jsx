@@ -12,12 +12,10 @@ import WorkspaceDropSelect from "../components/workspace/WorkspaceDropSelect"
 import ScopeSwitchPanel from "../components/common/ScopeSwitchPanel"
 import { LineIcon } from "../components/icons/LineIcons"
 import {
-  ProjectThumb,
   getEpisodeOptions,
   getRatioOptions,
   RatioShape,
 } from "../components/workspace/workspaceProjectUtils"
-import mammoth from "mammoth"
 import ImportDocumentModal from "../components/canvas/ImportDocumentModal"
 import { showDevNotice } from "../components/common/ProductNoticeModal"
 import { useLocale } from "../utils/locale"
@@ -57,6 +55,15 @@ function TabAiIcon() {
   )
 }
 
+function TabCanvasIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M5.5 10.5 7.5 6.5l2 2 2.5-3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 export default function Workspace() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -81,27 +88,35 @@ export default function Workspace() {
   const [ratioValue, setRatioValue] = useState("default")
   const [importDocumentOpen, setImportDocumentOpen] = useState(false)
   const [importProjectId, setImportProjectId] = useState("")
+  const [importInitialFile, setImportInitialFile] = useState(null)
+  const [importBusy, setImportBusy] = useState(false)
 
   const uploadInputRef = useRef(null)
+  const importFileInputRef = useRef(null)
 
   const displayName = useMemo(
     () => readDisplayName(user?.username) || user?.username || t("ws.default.creator"),
     [user?.username, t]
   )
 
+  const toolChipClass = useCallback(
+    (path) => `ws-tool-chip${location.pathname === path ? " ws-tool-chip--active" : ""}`,
+    [location.pathname],
+  )
+
   const episodeOptions = useMemo(() => getEpisodeOptions(t), [t])
   const ratioOptions = useMemo(() => getRatioOptions(t), [t])
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
+  const refresh = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true)
     try {
-      const list = await listCanvasProjects({ teamId: getActiveTeamId() })
+      const list = await listCanvasProjects({ teamId: getActiveTeamId(), limit: 48 })
       setProjects(list)
     } catch (err) {
       console.error(err)
-      setProjects([])
+      if (!silent) setProjects([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [])
 
@@ -112,27 +127,48 @@ export default function Workspace() {
   useEffect(() => {
     const onTeamChange = () => refresh()
     const onProjectSaved = (e) => {
-      const { projectId, updated_at, preview_url } = e.detail || {}
+      const {
+        projectId,
+        updated_at,
+        preview_url,
+        cover_media_type,
+        recent_collaborators,
+        collaborator_extra_count,
+      } = e.detail || {}
       if (!projectId) return
       setProjects((prev) => prev.map((p) => {
         if (p.id !== projectId) return p
         const next = { ...p }
         if (updated_at) next.updated_at = updated_at
         if (preview_url !== undefined && preview_url !== null) next.preview_url = preview_url
+        if (cover_media_type !== undefined) next.cover_media_type = cover_media_type
+        if (recent_collaborators) next.recent_collaborators = recent_collaborators
+        if (collaborator_extra_count !== undefined) {
+          next.collaborator_extra_count = collaborator_extra_count
+        }
         return next
       }))
     }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") refresh()
+    let lastRefreshAt = 0
+    const REFRESH_MIN_GAP_MS = 30_000
+    const softRefresh = () => {
+      const now = Date.now()
+      if (now - lastRefreshAt < REFRESH_MIN_GAP_MS) return
+      lastRefreshAt = now
+      void refresh({ silent: true })
     }
+    const onVisible = () => {
+      if (document.visibilityState === "visible") softRefresh()
+    }
+    const onFocus = () => softRefresh()
     window.addEventListener("team-context-changed", onTeamChange)
     window.addEventListener("canvas-project-saved", onProjectSaved)
-    window.addEventListener("focus", refresh)
+    window.addEventListener("focus", onFocus)
     document.addEventListener("visibilitychange", onVisible)
     return () => {
       window.removeEventListener("team-context-changed", onTeamChange)
       window.removeEventListener("canvas-project-saved", onProjectSaved)
-      window.removeEventListener("focus", refresh)
+      window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisible)
     }
   }, [refresh])
@@ -236,7 +272,8 @@ export default function Workspace() {
     if (/\.docx$/i.test(file.name)) {
       try {
         const buf = await file.arrayBuffer()
-        const result = await mammoth.extractRawText({ arrayBuffer: buf })
+        const mammoth = await import("mammoth")
+        const result = await mammoth.default.extractRawText({ arrayBuffer: buf })
         applyScriptText(result.value)
       } catch (err) {
         console.error(err)
@@ -264,27 +301,56 @@ export default function Workspace() {
     [readScriptFile]
   )
 
-  const handleOpenImportDocument = useCallback(async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      const created = await createCanvasProject({
-        name: t("ws.default.canvasName"),
-        team_id: getActiveTeamId(),
-      })
-      setImportProjectId(created.id)
-      setImportDocumentOpen(true)
-    } catch (err) {
-      console.error(err)
-      window.alert(t("ws.alert.createFail"))
-    } finally {
-      setBusy(false)
-    }
-  }, [busy, t])
+  const handleOpenImportDocument = useCallback(() => {
+    if (busy || importBusy) return
+    importFileInputRef.current?.click()
+  }, [busy, importBusy])
+
+  const handleImportFileChange = useCallback(
+    async (e) => {
+      const file = e.target.files?.[0]
+      e.target.value = ""
+      if (!file) return
+
+      const ext = (file.name.split(".").pop() || "").toLowerCase()
+      if (ext === "xls") {
+        window.alert(t("ws.alert.xlsUnsupported"))
+        return
+      }
+      if (ext === "doc") {
+        window.alert(t("ws.alert.docUnsupported"))
+        return
+      }
+      if (!["xlsx", "docx"].includes(ext)) {
+        window.alert(t("ws.alert.importFileFormat"))
+        return
+      }
+
+      setImportBusy(true)
+      setBusy(true)
+      try {
+        const created = await createCanvasProject({
+          name: t("ws.default.canvasName"),
+          team_id: getActiveTeamId(),
+        })
+        setImportProjectId(created.id)
+        setImportInitialFile(file)
+        setImportDocumentOpen(true)
+      } catch (err) {
+        console.error(err)
+        window.alert(t("ws.alert.createFail"))
+      } finally {
+        setImportBusy(false)
+        setBusy(false)
+      }
+    },
+    [t]
+  )
 
   const handleCloseImportDocument = useCallback(() => {
     setImportDocumentOpen(false)
     setImportProjectId("")
+    setImportInitialFile(null)
   }, [])
 
   const handleFreeCanvasTab = useCallback(() => {
@@ -295,12 +361,15 @@ export default function Workspace() {
   const tabIndex = tab === "ai" ? 1 : 0
 
   return (
-    <div className={`ws-page ws-page--scroll rf-page--${theme}`}>
+    <div className={`ws-page ws-page--workspace ws-page--scroll rf-page--${theme}`}>
       <WorkspaceTopbar />
 
       <div className="ws-shell">
         <section className="ws-hero">
-          <h1 className="ws-hero-title">{t("ws.greeting", { name: displayName })}</h1>
+          <h1 className="ws-hero-title">
+            {t("ws.greeting.prefix")}
+            <span className="ws-hero-username">{displayName}</span>
+          </h1>
           <p className="ws-hero-sub">
             {t("ws.hero.sub")}
           </p>
@@ -340,7 +409,9 @@ export default function Workspace() {
                 onClick={handleFreeCanvasTab}
                 disabled={busy}
               >
-                <span className="ws-tab-hash">#</span>
+                <span className="ws-tab-hash" aria-hidden>
+                  <TabCanvasIcon />
+                </span>
                 {t("ws.tab.canvas")}
             </button>
           </div>
@@ -361,6 +432,9 @@ export default function Workspace() {
                   >
                   {!uploadPasteOpen ? (
                     <>
+                      <div className="ws-dropzone-icon" aria-hidden>
+                        <LineIcon name="doc" size={28} />
+                      </div>
                       <div className="ws-dropzone-actions">
                         <button
                           type="button"
@@ -384,12 +458,10 @@ export default function Workspace() {
                           disabled={busy}
                           onClick={handleOpenImportDocument}
                         >
-                          {t("canvas.menu.importDocument")}
+                          {importBusy ? t("ws.upload.importCreating") : t("canvas.menu.importDocument")}
                         </button>
                       </div>
-                      <p className="ws-dropzone-hint">
-                        {t("ws.upload.hint")}
-                      </p>
+                      <p className="ws-dropzone-hint">{t("ws.upload.hint")}</p>
                     </>
                   ) : (
                     <>
@@ -425,6 +497,13 @@ export default function Workspace() {
                     accept=".txt,.docx,text/plain"
                     hidden
                     onChange={handleUploadFile}
+                  />
+                  <input
+                    ref={importFileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.docx,.doc"
+                    hidden
+                    onChange={handleImportFileChange}
                   />
                 </div>
               </div>
@@ -483,22 +562,22 @@ export default function Workspace() {
             )}
             </ScopeSwitchPanel>
           </div>
-
-          <footer className="ws-entry-foot">
-            <div className="ws-foot-row">
-              <span className="ws-foot-hint">
-                <span className="ws-foot-info"><LineIcon name="info" size={14} /></span>
-                {tab === "ai"
-                  ? t("ws.foot.aiHint")
-                  : t("ws.foot.uploadHint")}
-              </span>
-              <span className="ws-foot-divider" aria-hidden />
-              <button type="button" className="ws-foot-skip" disabled={busy} onClick={handleBlank}>
-                {t("ws.foot.skip")}
-              </button>
-            </div>
-          </footer>
         </section>
+
+        <footer className="ws-entry-foot">
+          <div className="ws-foot-row">
+            <span className="ws-foot-hint">
+              <span className="ws-foot-info"><LineIcon name="info" size={14} /></span>
+              {tab === "ai"
+                ? t("ws.foot.aiHint")
+                : t("ws.foot.uploadHint")}
+            </span>
+            <span className="ws-foot-divider" aria-hidden />
+            <button type="button" className="ws-foot-skip" disabled={busy} onClick={handleBlank}>
+              {t("ws.foot.skip")}
+            </button>
+          </div>
+        </footer>
       </div>
 
       <ScopeSwitchPanel switchKey={teamSwitchKey} className="ws-team-switch-panel">
@@ -526,7 +605,7 @@ export default function Workspace() {
               <div className="ws-tool-chips" aria-label="快捷入口">
                 <button
                   type="button"
-                  className="ws-tool-chip"
+                  className={toolChipClass("/team-files")}
                   data-tour="ws-team-files"
                   onClick={() => navigateWithReturn(navigate, location, "/team-files")}
                 >
@@ -535,7 +614,7 @@ export default function Workspace() {
                 </button>
                 <button
                   type="button"
-                  className="ws-tool-chip"
+                  className={toolChipClass("/review-publish")}
                   data-tour="ws-review"
                   onClick={() => navigateWithReturn(navigate, location, "/review-publish")}
                 >
@@ -544,21 +623,22 @@ export default function Workspace() {
                 </button>
                 <button
                   type="button"
-                  className="ws-tool-chip ws-tool-chip--accent"
+                  className={toolChipClass("/review")}
                   data-tour="ws-review-public"
                   onClick={() => navigateWithReturn(navigate, location, "/review")}
                 >
                   <LineIcon name="book" size={15} />
                   <span>审阅公开页</span>
                 </button>
+                <button
+                  type="button"
+                  className={toolChipClass("/workspace/projects")}
+                  onClick={() => navigate("/workspace/projects")}
+                >
+                  <LineIcon name="folder" size={15} />
+                  <span>{t("ws.projects.all")}</span>
+                </button>
               </div>
-              <button
-                type="button"
-                className="ws-link-btn ws-link-btn--all"
-                onClick={() => navigate("/workspace/projects")}
-              >
-                {t("ws.projects.all")}
-              </button>
             </div>
           </div>
           {loading ? (
@@ -572,12 +652,12 @@ export default function Workspace() {
                 disabled={busy}
                 onClick={handleBlank}
               >
-                <div className="ws-project-thumb">
-                  <ProjectThumb previewUrl={null} empty />
+                <div className="ws-project-thumb ws-project-thumb--new">
+                  <span className="ws-project-new-plus" aria-hidden>+</span>
                 </div>
                 <div className="ws-project-body">
                   <div className="ws-project-name">{t("ws.project.new")}</div>
-                  <div className="ws-project-time">{t("ws.project.blank")}</div>
+                  <div className="ws-project-time ws-project-time--new">{t("ws.project.blank")}</div>
                 </div>
               </button>
               {projects.slice(0, 9).map((p, i) => (
@@ -585,6 +665,7 @@ export default function Workspace() {
                   <WorkspaceProjectCard
                     variant="preview"
                     project={p}
+                    isRecentEdited={i === 0}
                     onOpen={() => openProject(p.id)}
                     onRename={(name) => handleRenameProject(p.id, name)}
                     onDelete={() => handleDeleteProject(p.id)}
@@ -603,6 +684,7 @@ export default function Workspace() {
         open={importDocumentOpen}
         onClose={handleCloseImportDocument}
         projectId={importProjectId}
+        initialFile={importInitialFile}
         theme={theme}
         onApplied={(result) => {
           handleCloseImportDocument()

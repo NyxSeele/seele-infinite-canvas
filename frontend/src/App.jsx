@@ -3,14 +3,14 @@ import { createPortal } from "react-dom"
 import { getThemePortalRoot } from "./utils/themePortalRoot"
 import { Z_NODE_DOTS_MENU } from "./utils/zIndexLayers"
 import api, { API_BASE } from "./services/api"
-import { appendMediaTicket } from "./utils/mediaTicket"
+import { ensureMediaUrl } from "./utils/mediaTicket"
 import { wsManager } from "./services/ws"
 import ModelSelectBanner from "./components/ModelSelectBanner.jsx"
 import "./App.css"
 
 const DEFAULT_STEPS = 20
 const POLL_INTERVAL = 5000
-const DEFAULT_UNWANTED = "模糊, 低质量, 水印, 文字"
+const DEFAULT_UNWANTED = "blurry, low quality, watermark, text"
 const DEFAULT_VIDEO_UNWANTED =
   "worst quality, inconsistent motion, blurry, jittery, distorted"
 
@@ -45,7 +45,7 @@ function mediaUrl(file) {
   const subfolder = typeof file === "string" ? "" : file.subfolder || ""
   const params = new URLSearchParams({ filename, type })
   if (subfolder) params.set("subfolder", subfolder)
-  return appendMediaTicket(`${API_BASE}/api/view?${params}`)
+  return ensureMediaUrl(`/api/view?${params}`)
 }
 
 function isVideoFilename(filename) {

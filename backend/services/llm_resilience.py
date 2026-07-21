@@ -78,6 +78,27 @@ def is_rate_limited(exc: Exception) -> bool:
     return status_code == 429
 
 
+def is_llm_quota_exhausted_error(exc: Exception) -> bool:
+    """免费额度/配额用尽（含常见 429），触发默认模型降级到均衡分流。"""
+    if is_rate_limited(exc):
+        return True
+    lowered = str(exc).lower()
+    quota_markers = (
+        "quota",
+        "free quota",
+        "free tier",
+        "额度",
+        "免费额度",
+        "配额",
+        "insufficient_quota",
+        "resourceexhausted",
+        "allocation quota",
+        "exceeded your current",
+        "limit exceeded",
+    )
+    return any(marker in lowered for marker in quota_markers)
+
+
 async def sleep_before_retry(attempt: int, base_delay: float, exc: Exception) -> None:
     delay = retry_delay_seconds(attempt, base_delay, rate_limited=is_rate_limited(exc))
     logger.warning(

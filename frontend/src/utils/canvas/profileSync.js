@@ -1,11 +1,31 @@
 import { updateProfile } from "../../services/profileApi"
 import { uploadImageFile, dataUrlToFile } from "../../services/uploadImage"
+import { encodePublicMediaUrl } from "../encodePublicMediaUrl"
 import { ensureMediaUrl, toRelativeMediaUrl } from "../mediaTicket"
 import { writeUserAvatar } from "./userAvatar"
+
+function normalizeAvatarPathForSave(url) {
+  const trimmed = (url || "").trim()
+  if (!trimmed) return ""
+  if (trimmed.startsWith("data:") || trimmed.startsWith("blob:")) return trimmed
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const parsed = new URL(trimmed)
+      if (parsed.pathname.startsWith("/api/uploads/")) {
+        return `${parsed.pathname}${parsed.search}`.split("?")[0]
+      }
+    } catch {
+      /* fall through */
+    }
+    return encodePublicMediaUrl(trimmed).split("?")[0]
+  }
+  return toRelativeMediaUrl(trimmed).split("?")[0]
+}
 
 export function resolveProfileAvatarUrl(raw) {
   if (!raw) return ""
   if (raw.startsWith("data:") || raw.startsWith("blob:")) return raw
+  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw
   return ensureMediaUrl(raw)
 }
 
@@ -50,7 +70,7 @@ export function applyServerProfileToCache(user, { notify = true } = {}) {
     prefs.bio = user.bio
   }
   writePrefs(prefs)
-  const storedAvatar = user.avatar_url ? toRelativeMediaUrl(user.avatar_url) : ""
+  const storedAvatar = user.avatar_url ? normalizeAvatarPathForSave(user.avatar_url) : ""
   if (notify) {
     writeUserAvatar(storedAvatar)
   } else {
@@ -72,10 +92,7 @@ export async function persistAvatarForProfile(avatarUrl) {
     const uploaded = await uploadImageFile(file)
     return toRelativeMediaUrl(uploaded)
   }
-  if (trimmed.startsWith("http")) {
-    return toRelativeMediaUrl(trimmed)
-  }
-  return toRelativeMediaUrl(trimmed)
+  return normalizeAvatarPathForSave(trimmed)
 }
 
 export async function saveProfileToServer({ displayName, bio, avatarUrl, removeAvatar = false }) {

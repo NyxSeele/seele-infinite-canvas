@@ -21,3 +21,5 @@ psycopg2-binary>=2.9
 python-docx
 openpyxl
 pillow-heif>=0.21
+PyYAML>=6.0
+edge-tts>=6.1.0

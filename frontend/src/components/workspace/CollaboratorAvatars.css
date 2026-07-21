@@ -1,0 +1,46 @@
+.ws-collab-avatars {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.ws-collab-avatar {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--tl-card-bg, #fff);
+  background: var(--tl-input-bg, #f3f4f6);
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: calc(var(--ws-collab-index, 0) * -8px);
+  box-sizing: border-box;
+}
+
+.ws-collab-avatar:first-child {
+  margin-left: 0;
+}
+
+.ws-collab-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ws-collab-avatar-letter {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tl-text-secondary);
+  line-height: 1;
+}
+
+.ws-collab-extra {
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tl-text-secondary);
+  line-height: 1;
+}

@@ -1,0 +1,81 @@
+.svf-node {
+  width: 400px;
+}
+
+.svf-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.svf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.svf-field--compact {
+  flex: 1;
+}
+
+.svf-row {
+  display: flex;
+  gap: 8px;
+}
+
+.svf-input,
+.svf-textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.svf-textarea {
+  resize: vertical;
+  min-height: 48px;
+}
+
+.svf-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.svf-generate-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #3d7cff, #6a5cff);
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.svf-generate-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.svf-error {
+  color: #ff8f8f;
+  font-size: 12px;
+}
+
+.svf-preview {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.svf-placeholder {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+}

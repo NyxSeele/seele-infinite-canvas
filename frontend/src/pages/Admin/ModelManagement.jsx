@@ -28,6 +28,22 @@ export default function ModelManagement() {
   const [routingMode, setRoutingMode] = useState("fixed")
   const [routingLoading, setRoutingLoading] = useState(false)
   const [settingDefault, setSettingDefault] = useState("")
+  const [gateway, setGateway] = useState({
+    enabled: false,
+    base_url: "",
+    default_model: "",
+    api_key_masked: null,
+  })
+  const [gatewayDraft, setGatewayDraft] = useState({
+    enabled: false,
+    base_url: "",
+    default_model: "",
+    api_key: "",
+  })
+  const [gatewayLoading, setGatewayLoading] = useState(false)
+  const [gatewaySaving, setGatewaySaving] = useState(false)
+  const [gatewayTesting, setGatewayTesting] = useState(false)
+  const [gatewayTestResult, setGatewayTestResult] = useState(null)
 
   const loadModels = useCallback(async () => {
     setLoading(true)
@@ -58,10 +74,30 @@ export default function ModelManagement() {
     }
   }, [])
 
+  const loadGateway = useCallback(async () => {
+    setGatewayLoading(true)
+    try {
+      const res = await api.get("/api/admin/model-gateway")
+      const data = res.data || {}
+      setGateway(data)
+      setGatewayDraft({
+        enabled: Boolean(data.enabled),
+        base_url: data.base_url || "",
+        default_model: data.default_model || "",
+        api_key: "",
+      })
+    } catch {
+      /* 旧后端或未迁移时忽略 */
+    } finally {
+      setGatewayLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     loadModels()
     loadRouting()
-  }, [loadModels, loadRouting])
+    loadGateway()
+  }, [loadModels, loadRouting, loadGateway])
 
   const handleRoutingModeChange = async (mode) => {
     const prev = routingMode
@@ -74,6 +110,54 @@ export default function ModelManagement() {
       setRoutingMode(prev)
       await loadRouting()
       message.error(formatApiError(e.response?.data?.detail, "更新分流策略失败"))
+    }
+  }
+
+  const handleGatewaySave = async () => {
+    setGatewaySaving(true)
+    setGatewayTestResult(null)
+    try {
+      const payload = {
+        enabled: gatewayDraft.enabled,
+        base_url: gatewayDraft.base_url,
+        default_model: gatewayDraft.default_model,
+      }
+      if (gatewayDraft.api_key.trim()) {
+        payload.api_key = gatewayDraft.api_key.trim()
+      }
+      const res = await api.put("/api/admin/model-gateway", payload)
+      setGateway(res.data || {})
+      setGatewayDraft((prev) => ({ ...prev, api_key: "" }))
+      message.success("文本网关已保存")
+    } catch (e) {
+      message.error(formatApiError(e.response?.data?.detail, "保存网关失败"))
+    } finally {
+      setGatewaySaving(false)
+    }
+  }
+
+  const handleGatewayTest = async () => {
+    setGatewayTesting(true)
+    setGatewayTestResult(null)
+    try {
+      const body = {
+        base_url: gatewayDraft.base_url,
+        default_model: gatewayDraft.default_model,
+      }
+      if (gatewayDraft.api_key.trim()) {
+        body.api_key = gatewayDraft.api_key.trim()
+      }
+      const res = await api.post("/api/admin/model-gateway/test-connection", body)
+      setGatewayTestResult(res.data)
+      if (res.data?.ok) {
+        message.success(`连通成功（${res.data.latency_ms}ms）`)
+      } else {
+        message.error(res.data?.error || "连通失败")
+      }
+    } catch (e) {
+      message.error(formatApiError(e.response?.data?.detail, "测试连通失败"))
+    } finally {
+      setGatewayTesting(false)
     }
   }
 
@@ -251,6 +335,92 @@ export default function ModelManagement() {
             {routingMode === "balanced" &&
               "按 score = 近24h tokens × (单价/最低单价) 选最低者，兼顾成本与负载。"}
           </p>
+        </div>
+      )}
+
+      {tab === "all" && (
+        <div className="adm-llm-routing-panel" style={{ marginTop: 12 }}>
+          <div className="adm-llm-routing-head">
+            <strong>默认文本网关</strong>
+            <span className="adm-llm-routing-hint">
+              当注册模型未配置 api_base 时，可由此 OpenAI-compatible 网关统一转发文本 LLM（不影响 ComfyUI 图/视频）
+            </span>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <input
+              type="checkbox"
+              checked={gatewayDraft.enabled}
+              disabled={gatewayLoading}
+              onChange={(e) =>
+                setGatewayDraft((prev) => ({ ...prev, enabled: e.target.checked }))
+              }
+            />
+            启用全局文本网关
+          </label>
+          <div style={{ display: "grid", gap: 8, maxWidth: 520 }}>
+            <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
+              Base URL
+              <input
+                className="adm-input"
+                value={gatewayDraft.base_url}
+                disabled={gatewayLoading}
+                placeholder="https://api.example.com/v1"
+                onChange={(e) =>
+                  setGatewayDraft((prev) => ({ ...prev, base_url: e.target.value }))
+                }
+              />
+            </label>
+            <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
+              API Key
+              <input
+                className="adm-input"
+                type="password"
+                value={gatewayDraft.api_key}
+                disabled={gatewayLoading}
+                placeholder={gateway.api_key_masked ? `已保存 ${gateway.api_key_masked}` : "sk-..."}
+                onChange={(e) =>
+                  setGatewayDraft((prev) => ({ ...prev, api_key: e.target.value }))
+                }
+              />
+            </label>
+            <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
+              默认模型
+              <input
+                className="adm-input"
+                value={gatewayDraft.default_model}
+                disabled={gatewayLoading}
+                placeholder="gpt-4o-mini"
+                onChange={(e) =>
+                  setGatewayDraft((prev) => ({ ...prev, default_model: e.target.value }))
+                }
+              />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="adm-btn adm-btn--primary"
+              disabled={gatewaySaving || gatewayLoading}
+              onClick={handleGatewaySave}
+            >
+              {gatewaySaving ? "保存中…" : "保存网关"}
+            </button>
+            <button
+              type="button"
+              className="adm-btn"
+              disabled={gatewayTesting || gatewayLoading}
+              onClick={handleGatewayTest}
+            >
+              {gatewayTesting ? "测试中…" : "测试连通性"}
+            </button>
+            {gatewayTestResult ? (
+              <span style={{ fontSize: 12, alignSelf: "center" }}>
+                {gatewayTestResult.ok
+                  ? `✓ ${gatewayTestResult.latency_ms}ms`
+                  : `✗ ${gatewayTestResult.error || "失败"}`}
+              </span>
+            ) : null}
+          </div>
         </div>
       )}
 

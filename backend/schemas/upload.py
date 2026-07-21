@@ -30,6 +30,17 @@ class CanvasImageRegisterResponse(BaseModel):
     aspect_ratio: str
 
 
+class StorageFeatureCapabilities(BaseModel):
+    backend: str
+    max_size_bytes: int | None = None
+    r2_public_url: str | None = None
+
+
 class UploadCapabilitiesResponse(BaseModel):
     r2_direct: bool
     max_size_bytes: int
+    r2_public_url: str | None = None
+    media_public_base: str | None = None
+    canvas: StorageFeatureCapabilities | None = None
+    team: StorageFeatureCapabilities | None = None
+    review: StorageFeatureCapabilities | None = None

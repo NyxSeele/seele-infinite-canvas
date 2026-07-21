@@ -19,6 +19,7 @@ import { formatRelativeTime } from "../../utils/canvas/formatRelativeTime"
 import { normalizeCastLibrary } from "../../utils/canvas/castLibrary"
 import { normalizeSceneLibrary } from "../../utils/canvas/sceneLibrary"
 import { uploadImageFile } from "../../services/uploadImage"
+import { getPipelineManifest } from "../../services/agentApi"
 import { useAssetStore, useCanvasStore } from "../../stores"
 import { getActiveTeamId } from "../../utils/teamContext"
 import { assetKindToCastType, isSubjectKind } from "../../utils/canvas/globalAssets"
@@ -93,7 +94,7 @@ const PLUS_MENU_TOP = [
 
 const PLUS_MENU_BOTTOM = [
   { id: "brainstorm", label: "头脑风暴", Icon: IconBrainstorm, placeholder: true },
-  { id: "skills", label: "技能", Icon: IconSkills, placeholder: true },
+  { id: "skills", label: "技能", Icon: IconSkills },
   {
     id: "thinking",
     label: "思考等级",
@@ -188,6 +189,10 @@ export default function AgentPanel({
   const [referenceImages, setReferenceImages] = useState([])
   const [modeOpen, setModeOpen] = useState(false)
   const [plusOpen, setPlusOpen] = useState(false)
+  const [skillsOpen, setSkillsOpen] = useState(false)
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillsError, setSkillsError] = useState("")
+  const [skillStages, setSkillStages] = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyList, setHistoryList] = useState([])
   const [modeHover, setModeHover] = useState(false)
@@ -566,6 +571,7 @@ export default function AgentPanel({
       if (modeRef.current && !modeRef.current.contains(e.target)) setModeOpen(false)
       if (plusRef.current && !plusRef.current.contains(e.target)) {
         setPlusOpen(false)
+        setSkillsOpen(false)
       }
     }
     document.addEventListener("pointerdown", onDocClick)
@@ -599,10 +605,43 @@ export default function AgentPanel({
     refSelect?.enter?.(AGENT_REF_SOURCE_ID, "referenceImage")
   }, [refAtMax, refSelect])
 
+  const openSkillsMenu = useCallback(async () => {
+    setPlusOpen(false)
+    setSkillsOpen(true)
+    setSkillsLoading(true)
+    setSkillsError("")
+    try {
+      const data = await getPipelineManifest("velora_canvas")
+      const stages = Array.isArray(data?.stages) ? data.stages : []
+      setSkillStages(stages)
+    } catch (err) {
+      setSkillStages([])
+      setSkillsError(err?.message || "加载技能列表失败")
+    } finally {
+      setSkillsLoading(false)
+    }
+  }, [])
+
+  const handleSkillPick = useCallback(
+    (stage) => {
+      const name = stage?.name || ""
+      const label = stage?.ui_label || stage?.prompt_label || name
+      const optional = stage?.optional ? "（可选）" : ""
+      const prompt = `请执行 pipeline 步骤：${name}${optional}（${label}）`
+      setSkillsOpen(false)
+      sendMessage(prompt)
+    },
+    [sendMessage]
+  )
+
   const handlePlusAction = (item) => {
     if (item.placeholder) {
       setPlusOpen(false)
       showDevNotice(item.label)
+      return
+    }
+    if (item.id === "skills") {
+      openSkillsMenu()
       return
     }
     if (item.id === "canvas") {
@@ -1099,7 +1138,10 @@ export default function AgentPanel({
                 type="button"
                 className="ap-composer__plus"
                 aria-label="更多"
-                onClick={() => setPlusOpen((v) => !v)}
+                onClick={() => {
+                  setSkillsOpen(false)
+                  setPlusOpen((v) => !v)
+                }}
               >
                 +
               </button>
@@ -1135,6 +1177,50 @@ export default function AgentPanel({
                       )}
                     </button>
                   ))}
+                </div>
+              )}
+              {skillsOpen && (
+                <div className="ap-plus-menu ap-plus-menu--skills" role="menu">
+                  <div className="ap-plus-menu__skills-head">
+                    <span>技能（pipeline）</span>
+                    <button
+                      type="button"
+                      className="ap-plus-menu__skills-close"
+                      onClick={() => setSkillsOpen(false)}
+                      aria-label="关闭"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  {skillsLoading && (
+                    <div className="ap-plus-menu__skills-status">加载中…</div>
+                  )}
+                  {!skillsLoading && skillsError && (
+                    <div className="ap-plus-menu__skills-status ap-plus-menu__skills-status--err">
+                      {skillsError}
+                    </div>
+                  )}
+                  {!skillsLoading && !skillsError && skillStages.length === 0 && (
+                    <div className="ap-plus-menu__skills-status">暂无技能</div>
+                  )}
+                  {!skillsLoading
+                    && !skillsError
+                    && skillStages.map((stage) => (
+                      <button
+                        key={stage.name}
+                        type="button"
+                        className="ap-plus-menu__item"
+                        role="menuitem"
+                        onClick={() => handleSkillPick(stage)}
+                      >
+                        <span className="ap-plus-menu__label">
+                          {stage.ui_label || stage.prompt_label || stage.name}
+                        </span>
+                        {stage.optional && (
+                          <span className="ap-plus-menu__suffix">可选</span>
+                        )}
+                      </button>
+                    ))}
                 </div>
               )}
             </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 import api from "../../services/api"
 
 const STATUS_BADGE = {
@@ -64,6 +65,18 @@ export default function Dashboard() {
   return (
     <div>
       <h2 className="adm-page-title">系统概览</h2>
+
+      <section className="adm-tools-section">
+        <h3 className="adm-tools-title">运维工具</h3>
+        <Link to="/network-test" className="adm-tool-card">
+          <div className="adm-tool-card-title">网络性能测试</div>
+          <p className="adm-tool-card-desc">
+            对比 Cloudflare Tunnel（velora.seele0420.cloud）与 AutoDL 公网映射的延迟与上下行速度。
+          </p>
+          <span className="adm-tool-card-action">打开测速页 →</span>
+        </Link>
+      </section>
+
       {loading ? (
         <div className="adm-loading">加载中…</div>
       ) : !stats ? (

@@ -1,6 +1,8 @@
 import {
   matchCastRefsInPrompt,
   normalizeCastLibrary,
+  pickCastFaceUrl,
+  pickCastReferenceUrls,
   resolveCastRefsForRow,
 } from "./castLibrary"
 import { normalizeSceneLibrary } from "./sceneLibrary"
@@ -8,7 +10,7 @@ import { scriptRowText } from "./scriptTableKeyframes"
 
 /** 角色库：排除历史误写入 cast_library 的场景条目 */
 export function characterCastLibrary(castLibrary = []) {
-  return normalizeCastLibrary(castLibrary).filter((c) => c.type !== "scene")
+  return normalizeCastLibrary(castLibrary, { requireImage: false }).filter((c) => c.type !== "scene")
 }
 
 export function resolveCharacterRefsForRow(row, castLibrary = [], globalAssets = []) {
@@ -42,6 +44,26 @@ export function resolveSceneRefsForRow(row, sceneLibrary = []) {
   return out.filter((s) => s.imageUrl)
 }
 
+export function extractIdentityIdsFromCast(matchedCast = []) {
+  return [...new Set(matchedCast.map((c) => c.identityId).filter(Boolean))]
+}
+
+export function buildEntityRefAudit(matchedCast = []) {
+  return matchedCast.map((c) => ({
+    identityId: c.identityId || null,
+    name: c.name || "",
+    urls: pickCastReferenceUrls(c),
+  }))
+}
+
+export function isMissingIdentityApiError(err) {
+  const detail = err?.response?.data?.detail
+  if (detail && typeof detail === "object" && detail.code === "missing_identity") {
+    return detail
+  }
+  return null
+}
+
 /**
  * 收集本镜应注入的参考图 URL（角色 + 场景）
  */
@@ -52,7 +74,17 @@ export function collectEntityReferenceUrls(
 ) {
   const characters = resolveCharacterRefsForRow(row, castLibrary, globalAssets)
   const scenes = resolveSceneRefsForRow(row, sceneLibrary)
-  const charUrls = characters.map((c) => c.imageUrl).filter(Boolean).slice(0, maxCharacters)
+  const charUrls = []
+  const seen = new Set()
+  for (const c of characters) {
+    for (const url of pickCastReferenceUrls(c, { max: maxCharacters })) {
+      if (seen.has(url)) continue
+      seen.add(url)
+      charUrls.push(url)
+      if (charUrls.length >= maxCharacters) break
+    }
+    if (charUrls.length >= maxCharacters) break
+  }
   const sceneUrls = scenes.map((s) => s.imageUrl).filter(Boolean).slice(0, maxScenes)
   return [...charUrls, ...sceneUrls]
 }
@@ -78,6 +110,7 @@ export function collectConnectedCharacterRefs(nodes = [], edges = [], nodeId) {
     refs.push({
       name,
       appearance: (node.data?.appearance || "").trim(),
+      identityId: node.data?.identityId || null,
     })
   }
   return refs
@@ -94,8 +127,11 @@ export function collectConnectedCharacterFaceUrl(nodes = [], edges = [], nodeId)
     else continue
     const node = byId.get(otherId)
     if (node?.type !== "character-card") continue
-    const imgs = node.data?.referenceImages
-    if (Array.isArray(imgs) && imgs[0]) return imgs[0]
+    const face = pickCastFaceUrl({
+      faceUrl: node.data?.faceUrl,
+      imageUrl: node.data?.referenceImages?.[0],
+    })
+    if (face) return face
   }
   return null
 }
@@ -111,6 +147,7 @@ export function mergeCharacterRefsForCompile(...groups) {
       out.push({
         name,
         appearance: (ref?.appearance || ref?.desc || ref?.description || ref?.prompt || ref?.note || "").trim(),
+        identityId: ref?.identityId || null,
       })
     }
   }
@@ -123,11 +160,60 @@ export function buildEntityThemeContext(row, castLibrary = [], sceneLibrary = []
   const parts = []
   for (const c of chars) {
     const desc = c.description ? `，${c.description}` : ""
-    parts.push(`角色「${c.name}」${desc}：保持与设定参考图一致的视觉特征`)
+    const idNote = c.identityId ? `（identity: ${c.identityId}）` : ""
+    parts.push(`角色「${c.name}」${idNote}${desc}：跨镜头保持同一身份视觉一致`)
   }
   for (const s of scenes) {
     const desc = s.description ? `，${s.description}` : ""
     parts.push(`场景「${s.name}」${desc}：保持与场景参考图一致的空间与氛围`)
   }
   return parts.join("；")
+}
+
+export function buildScriptShotIdentityPayload(row, castLibrary = []) {
+  const lib = characterCastLibrary(castLibrary)
+  return {
+    cast_library: lib.map((c) => ({
+      id: c.id,
+      name: c.name,
+      type: c.type,
+      identityId: c.identityId,
+      faceUrl: c.faceUrl,
+      threeViewUrl: c.threeViewUrl,
+      costumeUrl: c.costumeUrl,
+      imageUrl: c.imageUrl,
+    })),
+    identity_ids: row?.identityIds || [],
+    row: {
+      identityIds: row?.identityIds || [],
+      promptMentions: row?.promptMentions || [],
+      prompt: row?.prompt || row?.description || "",
+      description: row?.description || row?.prompt || "",
+    },
+  }
+}
+
+export function formatMissingIdentityMessage(detail) {
+  if (!detail) return "角色缺少 identity 或参考图"
+  const names = (detail.names || []).join("、")
+  return detail.message || (names ? `角色 ${names} 缺少 identity 或参考图` : "角色缺少 identity 或参考图")
+}
+
+export function resolveShotEntityRefs(row, castLibrary, sceneLibrary, globalAssets) {
+  const matchedCast = resolveCharacterRefsForRow(row, castLibrary, globalAssets)
+  const matchedScenes = resolveSceneRefsForRow(row, sceneLibrary)
+  const entityRefUrls = collectEntityReferenceUrls(row, {
+    castLibrary,
+    sceneLibrary,
+    globalAssets,
+  })
+  const charFaceUrls = matchedCast.map((c) => pickCastFaceUrl(c)).filter(Boolean)
+  return {
+    matchedCast,
+    matchedScenes,
+    entityRefUrls,
+    charFaceUrls,
+    identityIds: extractIdentityIdsFromCast(matchedCast),
+    entityRefAudit: buildEntityRefAudit(matchedCast),
+  }
 }

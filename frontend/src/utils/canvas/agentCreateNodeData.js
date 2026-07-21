@@ -1,8 +1,14 @@
 import { normalizeOutlineScene } from "./outlineSceneMeta"
 import { normalizeScriptRow } from "./scriptTableKeyframes"
 import { withDefaultQualityPreset } from "./scriptQualityPresets"
-import { makeEmptyScriptRow } from "../../components/canvas/ScriptTableNode"
+import { makeEmptyScriptRow } from "./scriptTableRowFactory"
 import { normalizeClarityLabel } from "./aspectRatioLayout"
+import {
+  defaultVidAudioForModel,
+  I2AV_ONLY,
+  I2V_ONLY,
+} from "./videoModelCompat"
+import { pickDefaultModel } from "./modelCatalog"
 
 export const AGENT_OUTLINE_WIDTH = 540
 export const AGENT_SCRIPT_TABLE_WIDTH = 1120
@@ -48,6 +54,43 @@ function normalizeAgentScriptRows(rows) {
   })
 }
 
+function agentVideoNeedsReferenceImage(modelId) {
+  const id = String(modelId || "")
+  return I2AV_ONLY.has(id) || I2V_ONLY.has(id)
+}
+
+function agentVideoHasReferenceImage(data) {
+  const freeRefs = Array.isArray(data.freeRefs) ? data.freeRefs : []
+  if (freeRefs.some((r) => r?.imageUrl)) return true
+  const kf = data.keyframes
+  if (kf?.first?.imageUrl || kf?.last?.imageUrl) return true
+  if (data.referenceImage || data.referenceImageUrl) return true
+  return false
+}
+
+function buildAgentVideoReferenceFields(data, referenceMode) {
+  const patch = {}
+  if (Array.isArray(data.freeRefs) && data.freeRefs.length > 0) {
+    patch.freeRefs = data.freeRefs
+  }
+  if (data.keyframes && (data.keyframes.first || data.keyframes.last)) {
+    patch.keyframes = data.keyframes
+  }
+  const refUrl = data.referenceImage || data.referenceImageUrl
+  if (refUrl && !patch.freeRefs?.length && !patch.keyframes?.first?.imageUrl) {
+    if (referenceMode === "freeref") {
+      patch.freeRefs = [{ imageUrl: refUrl, imageId: refUrl, label: "参考" }]
+    } else {
+      patch.keyframes = {
+        first: { imageUrl: refUrl, enabled: true },
+        last: data.keyframes?.last || null,
+      }
+      patch.referenceMode = "keyframe"
+    }
+  }
+  return patch
+}
+
 /**
  * 将 Agent create_node action 转为节点初始 data。
  * 返回 { __agentError } 表示应跳过并提示用户。
@@ -58,7 +101,7 @@ export function buildAgentCreateNodeData(action, z) {
   if (action.node_type === "image") {
     const imageModels = action._imageModels || []
     const prompt = (data.prompt || data.content || "").trim()
-    const modelId = data.modelId || imageModels[0]?.id
+    const modelId = data.modelId || pickDefaultModel(imageModels, { category: "image" }) || imageModels[0]?.id
     if (!prompt) {
       return { __agentError: "图像节点缺少 prompt，已跳过" }
     }
@@ -84,7 +127,19 @@ export function buildAgentCreateNodeData(action, z) {
   if (action.node_type === "video") {
     const videoModels = action._videoModels || []
     const prompt = (data.prompt || data.content || "").trim()
-    const modelId = data.modelId || data.video_model_id || videoModels[0]?.id
+    const referenceMode = data.referenceMode
+      || (agentVideoNeedsReferenceImage(data.modelId || data.video_model_id) ? "freeref" : "t2v")
+    const refFields = buildAgentVideoReferenceFields(data, referenceMode)
+    const resolvedReferenceMode = refFields.referenceMode || referenceMode
+    const vidMode = data.vidMode
+      || (resolvedReferenceMode === "freeref"
+        ? "参考"
+        : resolvedReferenceMode === "t2v"
+          ? "文生"
+          : "首尾帧")
+    const modelId = data.modelId || data.video_model_id
+      || pickDefaultModel(videoModels, { category: "video", vidMode })
+      || videoModels[0]?.id
     if (!prompt) {
       return { __agentError: "视频节点缺少 prompt，已跳过" }
     }
@@ -92,7 +147,10 @@ export function buildAgentCreateNodeData(action, z) {
       return { __agentError: "未配置可用的视频模型，无法创建视频节点" }
     }
     const duration = data.duration || data.vidDuration || "5s"
-    return {
+    const needsRefImage = agentVideoNeedsReferenceImage(modelId)
+    const hasRefImage = agentVideoHasReferenceImage(data)
+
+    const nodeData = {
       label: data.label || "Video",
       prompt,
       modelId,
@@ -100,15 +158,23 @@ export function buildAgentCreateNodeData(action, z) {
       vidDuration: typeof duration === "number" ? `${duration}s` : duration,
       vidRatio: data.ratio || data.vidRatio || "16:9",
       vidQuality: normalizeAgentClarity(data.quality || data.vidQuality || "720P"),
-      referenceMode: data.referenceMode || "t2v",
-      vidAudio: "关闭",
+      referenceMode: resolvedReferenceMode,
+      panelMode: data.panelMode || resolvedReferenceMode,
+      vidMode,
+      vidAudio: data.vidAudio || defaultVidAudioForModel(modelId),
       cameraMove: data.cameraMove || "auto",
       shotScale: data.shotScale || "auto",
       samplingProfile: data.samplingProfile || "fast",
-      pendingTrigger: Date.now(),
       agentCreated: true,
       zIndex: z,
+      ...refFields,
     }
+
+    if (!needsRefImage || hasRefImage || refFields.freeRefs?.length || refFields.keyframes?.first?.imageUrl) {
+      nodeData.pendingTrigger = Date.now()
+    }
+
+    return nodeData
   }
 
   if (action.node_type === "outline") {

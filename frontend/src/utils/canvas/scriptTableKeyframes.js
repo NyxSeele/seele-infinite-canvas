@@ -257,6 +257,7 @@ export function normalizeScriptRow(row) {
 
   return {
     ...row,
+    identityIds: Array.isArray(row.identityIds) ? row.identityIds : [],
     duration: clampShotDuration(row.duration ?? 8),
     beatCardNodeId,
     keyframes: [],

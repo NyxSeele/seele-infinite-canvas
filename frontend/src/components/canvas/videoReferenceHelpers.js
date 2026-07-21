@@ -1,4 +1,5 @@
-import { stripMediaTicket } from "../../utils/mediaTicket"
+import { ensureMediaUrl, stripMediaTicket } from "../../utils/mediaTicket"
+import { resolveCanvasR2MediaUrl } from "../../utils/r2MediaUrl"
 
 export const MAX_REFERENCE_IMAGES = 5
 
@@ -16,18 +17,38 @@ function refImageLabel() {
   return getT()("canvas.prompt.refImage")
 }
 
-/** 过滤不可持久化的 blob: URL */
+/** 是否为可在 img src 中加载的媒体 URL */
+export function isDisplayableMediaUrl(url) {
+  if (!url || typeof url !== "string") return false
+  const s = url.trim()
+  if (!s || isBlobUrl(s)) return false
+  if (s.startsWith("data:")) return true
+  if (s.startsWith("http://") || s.startsWith("https://")) return true
+  if (s.includes("/api/view") || s.includes("/api/uploads") || s.includes("/uploads/")) return true
+  if (s.startsWith("/canvas/") || s.startsWith("canvas/")) return true
+  const r2 = resolveCanvasR2MediaUrl(s)
+  return Boolean(r2 && r2.startsWith("http"))
+}
+
+/** 过滤不可持久化的 blob: URL；R2 裸路径在已知 base 时补全为公网 URL */
 export function normalizePersistentImageUrl(url) {
   if (!url || typeof url !== "string") return null
   if (isBlobUrl(url)) return null
-  return url
+  const resolved = resolveCanvasR2MediaUrl(url)
+  return resolved || url
 }
 
 /** 画布加载/保存前剔除 blob:，避免刷新后图片失效 */
 const STUCK_GENERATION_STATUSES = new Set(["pending", "generating", "queued"])
 
+/** 节点数据上是否仍有可恢复的后端任务 ID */
+function hasRecoverableTaskIds(data) {
+  if (data?.taskId) return true
+  return Array.isArray(data?.taskIds) && data.taskIds.length > 0
+}
+
 /**
- * 刷新/异常退出后：勿恢复「生成中」——否则会卡死 UI 或触发异常轮询。
+ * 刷新/异常退出后：有 taskId 时恢复为 pending 交给轮询；无任务 ID 则标中断。
  */
 /** 重新提交前清空节点上的旧任务绑定，避免轮询僵尸 taskId */
 export function buildClearGenerationTaskPatch(overrides = {}) {
@@ -86,12 +107,16 @@ export function resetStaleGenerationState(data, nodeType) {
   const stuck = STUCK_GENERATION_STATUSES.has(next.status)
   if (!stuck) return next
 
+  const recoverable = hasRecoverableTaskIds(next)
+
+  if (recoverable) {
+    next.status = "pending"
+    next.pendingTrigger = null
+    next.error = null
+    return next
+  }
+
   if (nodeType === "video-gen" && next.videoUrl) {
-    if (next.taskId) {
-      next.status = "pending"
-      next.pendingTrigger = null
-      return next
-    }
     next.status = "error"
     next.error = next.error || interruptedError()
     next.pendingTrigger = null
@@ -216,25 +241,20 @@ export function getReferenceImagesList(data) {
   ]
 }
 
-/** 为缺少 imageUrl 的参考项从画布节点补全 URL */
-export function resolveReferenceImageUrl(refItem, getNode) {
-  if (!refItem) return null
-  const url = normalizePersistentImageUrl(refItem.imageUrl)
-  if (url) return { ...refItem, imageUrl: url }
-  if (!refItem.nodeId || typeof getNode !== "function") return refItem
-
+function resolveReferenceImageUrlFromNode(refItem, getNode) {
+  if (!refItem?.nodeId || typeof getNode !== "function") return null
   const node = getNode(refItem.nodeId)
-  if (!node) return refItem
+  if (!node) return null
 
   const images = getImageNodeImages(node)
-  if (!images.length) return refItem
+  if (!images.length) return null
 
   const idx = refItem.imageIndex ?? 0
   const match =
     images.find((r) => r.imageIndex === idx)
     || images[idx]
     || images[0]
-  if (!match?.imageUrl) return refItem
+  if (!match?.imageUrl) return null
 
   return {
     ...refItem,
@@ -242,6 +262,34 @@ export function resolveReferenceImageUrl(refItem, getNode) {
     label: refItem.label || match.label || refImageLabel(),
     imageId: refItem.imageId || match.imageId,
   }
+}
+
+/** 为缺少 imageUrl 的参考项从画布节点补全 URL */
+export function resolveReferenceImageUrl(refItem, getNode) {
+  if (!refItem) return null
+
+  const stored = normalizePersistentImageUrl(refItem.imageUrl)
+  if (stored && isDisplayableMediaUrl(stored)) {
+    return { ...refItem, imageUrl: stored }
+  }
+
+  const fromNode = resolveReferenceImageUrlFromNode(refItem, getNode)
+  if (fromNode?.imageUrl && isDisplayableMediaUrl(fromNode.imageUrl)) {
+    return fromNode
+  }
+
+  if (stored) return { ...refItem, imageUrl: stored }
+  return fromNode || refItem
+}
+
+/** 展示用 URL：解析参考项并附加媒体 ticket */
+export function resolveRefDisplayUrl(ref, getNode) {
+  if (!ref) return null
+  const resolved = resolveReferenceImageUrl(ref, getNode)
+  if (!resolved?.imageUrl || isBlobUrl(resolved.imageUrl)) return null
+  const display = ensureMediaUrl(resolved.imageUrl)
+  if (!display || isBlobUrl(display)) return null
+  return display
 }
 
 /** 解析并补全参考图列表，过滤无 URL 项 */
@@ -311,36 +359,84 @@ export function getImageNodeImages(node) {
   return [buildRefItem({ nodeId: node.id, imageIndex: 0, imageUrl, label })]
 }
 
-/** 下游连线可自动获取的参考图（仅单图节点） */
+/** 下游连线可自动获取的参考图（多结果时取首张） */
 export function getImageNodeOutgoingRef(node) {
   if (!node) return null
   const d = node.data || {}
   const rawResults = Array.isArray(d.results) ? d.results : []
   const label = d.label && String(d.label).trim() ? String(d.label).trim() : "Image"
 
-  if (rawResults.length > 1) {
-    return null
-  }
-
-  if (rawResults.length === 1 && rawResults[0]) {
-    const safe = normalizePersistentImageUrl(rawResults[0])
-    if (!safe) return null
+  const firstResultIndex = rawResults.findIndex(Boolean)
+  if (firstResultIndex >= 0) {
+    const safe = normalizePersistentImageUrl(rawResults[firstResultIndex])
+    if (!safe || !isDisplayableMediaUrl(safe)) return null
     return buildRefItem({
       nodeId: node.id,
-      imageIndex: 0,
+      imageIndex: firstResultIndex,
       imageUrl: safe,
       label,
     })
   }
 
-  const imageUrl = normalizePersistentImageUrl(d.uploadedImage || d.imageUrl || null)
-  if (!imageUrl) return null
+  const imageUrl = normalizePersistentImageUrl(
+    d.resultUrl || d.uploadedImage || d.imageUrl || d.generatedImage || null,
+  )
+  if (!imageUrl || !isDisplayableMediaUrl(imageUrl)) return null
   return buildRefItem({
     nodeId: node.id,
     imageIndex: 0,
     imageUrl,
     label,
   })
+}
+
+/** 删除来自指定源节点的参考图 / 首尾帧 / linkedSource 关联 */
+export function removeRefsSourcedFromNode(data, sourceNodeId) {
+  if (!data || !sourceNodeId) return null
+
+  const patch = {}
+  const keyframes = data.keyframes || DEFAULT_KEYFRAMES
+  const nextKeyframes = { ...keyframes }
+  let keyframesChanged = false
+
+  if (nextKeyframes.first?.nodeId === sourceNodeId) {
+    nextKeyframes.first = null
+    keyframesChanged = true
+  }
+  if (nextKeyframes.last?.nodeId === sourceNodeId) {
+    nextKeyframes.last = null
+    keyframesChanged = true
+  }
+  if (keyframesChanged) {
+    patch.keyframes = nextKeyframes
+  }
+
+  const freeRefs = Array.isArray(data.freeRefs) ? data.freeRefs : []
+  const nextFreeRefs = freeRefs.filter((r) => r.nodeId !== sourceNodeId)
+  if (nextFreeRefs.length !== freeRefs.length) {
+    patch.freeRefs = nextFreeRefs
+  }
+
+  const refList = getReferenceImagesList(data)
+  if (refList.some((r) => r.nodeId === sourceNodeId)) {
+    const nextRefs = refList.filter((r) => r.nodeId !== sourceNodeId)
+    patch.referenceImages = nextRefs
+    const first = nextRefs[0]
+    patch.referenceImage = first?.imageUrl ?? null
+    patch.referenceImageUrl = first?.imageUrl ?? null
+    patch.referenceRef = first ?? null
+  }
+
+  if (
+    !keyframesChanged
+    && !patch.freeRefs
+    && !patch.referenceImages
+    && data.linkedSourceId !== sourceNodeId
+  ) {
+    return null
+  }
+
+  return patch
 }
 
 /** 文本节点连线时可下传的提示词 */
@@ -366,7 +462,13 @@ export function buildIncomingEdgeDataPatch(sourceNode, targetType, targetData = 
     linkedSourceType: sourceNode.type || null,
   }
 
-  const imageRef = getImageNodeOutgoingRef(sourceNode)
+  const imageRefRaw = getImageNodeOutgoingRef(sourceNode)
+  const imageRef = imageRefRaw?.imageUrl
+    ? {
+        ...imageRefRaw,
+        imageUrl: ensureMediaUrl(imageRefRaw.imageUrl) || imageRefRaw.imageUrl,
+      }
+    : imageRefRaw
 
   if (targetType === "image-gen" && imageRef) {
     const existing = getReferenceImagesList(targetData)
@@ -382,12 +484,16 @@ export function buildIncomingEdgeDataPatch(sourceNode, targetType, targetData = 
     const mode = targetData.referenceMode || "keyframe"
     const keyframes = targetData.keyframes || DEFAULT_KEYFRAMES
     const freeRefs = targetData.freeRefs || []
-    if (mode === "keyframe" && !keyframes.first) {
-      patch.keyframes = { ...keyframes, first: imageRef }
-      patch.referenceMode = "keyframe"
+    if (mode === "keyframe") {
+      if (!keyframes.first) {
+        patch.keyframes = { ...keyframes, first: imageRef }
+        patch.referenceMode = "keyframe"
+      } else if (!keyframes.last) {
+        patch.keyframes = { ...keyframes, last: imageRef }
+        patch.referenceMode = "keyframe"
+      }
     } else if (
-      mode !== "keyframe"
-      && !freeRefs.some((r) => r.imageId === imageRef.imageId)
+      !freeRefs.some((r) => r.imageId === imageRef.imageId)
       && freeRefs.length < MAX_REFERENCE_IMAGES
     ) {
       patch.freeRefs = [...freeRefs, imageRef]

@@ -107,3 +107,25 @@ class AgentChatTitleRequest(BaseModel):
 
 class AgentChatTitleResponse(BaseModel):
     title: str
+
+
+class PipelineStageResponse(BaseModel):
+    name: str
+    order: int
+    phase: str
+    optional: bool
+    skill: Optional[str] = None
+    executor: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    ui_label: Optional[str] = None
+    preconditions: List[str] = Field(default_factory=list)
+    produces: List[str] = Field(default_factory=list)
+    prompt_label: str
+
+
+class PipelineManifestResponse(BaseModel):
+    name: str
+    version: str
+    description: str
+    shared_skill: Optional[str] = None
+    stages: List[PipelineStageResponse]

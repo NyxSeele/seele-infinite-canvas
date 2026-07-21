@@ -47,7 +47,7 @@ export default function JoinTeamInputModal({ open, onClose }) {
     mounted,
     closing,
     open,
-    base: `jti-backdrop rf-page--${theme}`,
+    base: `jti-backdrop ws-overlay-root rf-page--${theme}`,
     enterClass: open && !closing ? "motion-modal-overlay-in" : "",
     exitClass: closing ? "motion-modal-overlay-out" : "",
   })

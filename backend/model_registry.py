@@ -3,6 +3,7 @@ model_registry.py
 静态模型注册表 — 所有支持模型的元信息。
 
 comfyui_model_file / LOCAL_MODEL_PRESETS.comfyui_file / COMFYUI_LOCAL_PROVIDERS：
+  代码注册表为源；启动时 services.registered_model_sync 会 upsert 到 registered_models。
   当前值为社区常见命名占位符；GPU 服务器到位后须与 ComfyUI models/ 目录
   实际文件名核对并替换（见 backend/docs/COMFYUI_CUTOVER_RUNBOOK.md）。
   结构化 provider 见 COMFYUI_LOCAL_PROVIDERS（含 endpoint env、workflow 模块、checkpoint）。
@@ -75,6 +76,7 @@ def _recommended_for_ratios(ratios: tuple[str, ...] | list[str], short_side: int
 _RES_SDXL = _recommended_for_ratios(_COMMON_IMAGE_RATIOS, 720)
 _RES_FLUX = _recommended_for_ratios(_COMMON_IMAGE_RATIOS, 720)
 _RES_HIDREAM = _recommended_for_ratios(_COMMON_IMAGE_RATIOS, 720)
+_RES_QWEN_IMAGE = _recommended_for_ratios(_COMMON_IMAGE_RATIOS, 720)
 
 
 _CAP_SDXL = {
@@ -104,6 +106,13 @@ _CAP_HIDREAM = {
     "recommended_resolutions": _RES_HIDREAM,
     "steps_range": [1, 50],
     "cfg_range": [1, 10],
+}
+_CAP_QWEN_IMAGE = {
+    "aspect_ratios": list(_COMMON_IMAGE_RATIOS),
+    "resolutions": list(_IMAGE_QUALITY_TIERS),
+    "recommended_resolutions": _RES_QWEN_IMAGE,
+    "steps_range": [1, 8],
+    "cfg_range": [1, 2],
 }
 _CAP_JIMENG = {
     "aspect_ratios": list(_COMMON_IMAGE_RATIOS),
@@ -206,6 +215,51 @@ _GEN_HIDREAM = {
     "max_resolution": 1280,
     "negative_prompt": False,
 }
+_GEN_QWEN_IMAGE = {
+    "workflow_type": "qwen-image",
+    "generation_defaults": {
+        "steps": 4,
+        "cfg": 1.0,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "aura_shift": 3.1,
+        "denoise_txt2img": 1.0,
+        "denoise_img2img": None,
+    },
+    "img2img_support": "unsupported",
+    "native_resolution": 1328,
+    "max_resolution": 2048,
+    "negative_prompt": False,
+}
+_GEN_QWEN_IMAGE_EDIT = {
+    "workflow_type": "qwen-image-edit",
+    "generation_defaults": {
+        "steps": 4,
+        "cfg": 1.0,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "aura_shift": 3.1,
+        "denoise_txt2img": 1.0,
+        "denoise_img2img": 1.0,
+        "megapixels": 1.0,
+    },
+    "img2img_support": "required",
+    "native_resolution": 1024,
+    "max_resolution": 2048,
+    "negative_prompt": False,
+}
+_GEN_QWEN_IMAGE_RESTORE = {
+    **_GEN_QWEN_IMAGE_EDIT,
+    "workflow_type": "qwen-image-restore",
+    "generation_defaults": {
+        **_GEN_QWEN_IMAGE_EDIT["generation_defaults"],
+        "megapixels": 1.2,
+    },
+}
+_GEN_QWEN_IMAGE_MATERIAL = {
+    **_GEN_QWEN_IMAGE_EDIT,
+    "workflow_type": "qwen-image-material",
+}
 
 _CAP_WAN = {
     "aspect_ratios": ["16:9", "9:16", "1:1"],
@@ -227,12 +281,12 @@ _CAP_LTX2 = {
     "supports_audio": True,
     "supports_image2video": True,
 }
-_CAP_HUNYUAN = {
-    "aspect_ratios": ["16:9", "9:16", "1:1"],
+_CAP_LTX23 = {
+    "aspect_ratios": ["16:9", "9:16"],
     "durations": [5, 10, 15],
-    # 5090 上 1080P 易 OOM，产品侧仅开放 720P
-    "resolutions": ["720P"],
-    "supports_audio": False,
+    "resolutions": ["480P", "720P", "1080P"],
+    "supports_audio": True,
+    "supports_image2video": True,
 }
 _CAP_VIDEO_ENHANCE = {
     "upscale_factors": [1.0, 1.5, 2.0, 3.0],
@@ -241,6 +295,7 @@ _CAP_VIDEO_ENHANCE = {
 
 VIDEO_ENHANCE_SEEDVR2_ID = "video-enhance-seedvr2"
 VIDEO_ENHANCE_REALESRGAN_ID = "video-enhance-realesrgan"
+IMAGE_ENHANCE_SEEDVR2_ID = "image-enhance-seedvr2"
 
 ALL_MODELS: list[dict] = [
     # ── 文本生成 ──────────────────────────────────────────────────────────
@@ -316,40 +371,18 @@ ALL_MODELS: list[dict] = [
         "comfyui_model_file": "sd_xl_base_1.0.safetensors",  # 占位；服务器确认后替换
         "default_enabled": False,
         "capabilities": _CAP_SDXL,
-        "summary": "文生图，支持参考图 img2img",
+        "summary": "经典文生图",
         **_GEN_SDXL,
-    },
-    {
-        "id": "flux-dev",
-        "name": "Flux Dev",
-        "category": "image",
-        "type": "local",
-        "comfyui_model_file": "flux1-dev-fp8.safetensors",
-        "default_enabled": False,
-        "capabilities": _CAP_FLUX_DEV,
-        "summary": "文生图，支持参考图 img2img",
-        **_GEN_FLUX_DEV,
-    },
-    {
-        "id": "flux-schnell",
-        "name": "Flux Schnell",
-        "category": "image",
-        "type": "local",
-        "comfyui_model_file": "flux1-schnell.safetensors",  # 占位；服务器确认后替换
-        "default_enabled": False,
-        "capabilities": _CAP_FLUX_SCHNELL,
-        "summary": "文生图（更快，质量略低）",
-        **_GEN_FLUX_SCHNELL,
     },
     {
         "id": "flux-pulid",
         "name": "Flux + PuLID 人物一致性",
         "category": "image",
         "type": "local",
-        "comfyui_model_file": "svdq-int4_r32-flux.1-dev.safetensors",
-        "default_enabled": False,
+        "comfyui_model_file": "svdq-fp4_r32-flux.1-dev.safetensors",
+        "default_enabled": True,
         "capabilities": _CAP_FLUX_DEV,
-        "summary": "人物一致性出图，需正脸参考",
+        "summary": "让角色长相保持一致",
         **_GEN_FLUX_PULID,
     },
     {
@@ -358,10 +391,54 @@ ALL_MODELS: list[dict] = [
         "category": "image",
         "type": "local",
         "comfyui_model_file": "hidream_i1_dev_fp8.safetensors",
-        "default_enabled": False,
+        "default_enabled": True,
         "capabilities": _CAP_HIDREAM,
-        "summary": "文生图",
+        "summary": "另一种画面风格",
         **_GEN_HIDREAM,
+    },
+    {
+        "id": "qwen-image",
+        "name": "Qwen-Image",
+        "category": "image",
+        "type": "local",
+        "comfyui_model_file": "svdq-fp4_r128-qwen-image-lightningv1.0-4steps.safetensors",
+        "default_enabled": True,
+        "capabilities": _CAP_QWEN_IMAGE,
+        "summary": "输入文字，生成图片",
+        **_GEN_QWEN_IMAGE,
+    },
+    {
+        "id": "qwen-image-edit",
+        "name": "Qwen-Image Edit",
+        "category": "image",
+        "type": "local",
+        "comfyui_model_file": "qwen_image_edit_2511_fp8mixed.safetensors",
+        "default_enabled": True,
+        "capabilities": _CAP_QWEN_IMAGE,
+        "summary": "上传图片，按描述修改",
+        **_GEN_QWEN_IMAGE_EDIT,
+    },
+    {
+        "id": "qwen-image-restore",
+        "name": "Qwen-Image Restore",
+        "category": "image",
+        "type": "local",
+        "comfyui_model_file": "qwen_image_edit_2511_fp8mixed.safetensors",
+        "default_enabled": True,
+        "capabilities": _CAP_QWEN_IMAGE,
+        "summary": "修复老旧模糊的照片",
+        **_GEN_QWEN_IMAGE_RESTORE,
+    },
+    {
+        "id": "qwen-image-material",
+        "name": "Qwen-Image Material",
+        "category": "image",
+        "type": "local",
+        "comfyui_model_file": "qwen_image_edit_2511_fp8mixed.safetensors",
+        "default_enabled": True,
+        "capabilities": _CAP_QWEN_IMAGE,
+        "summary": "把画面材质换成另一张图",
+        **_GEN_QWEN_IMAGE_MATERIAL,
     },
     {
         "id": "jimeng-5.0-lite",
@@ -372,7 +449,7 @@ ALL_MODELS: list[dict] = [
         "provider": "jimeng",
         "default_enabled": False,
         "capabilities": _CAP_JIMENG,
-        "summary": "云端文生图",
+        "summary": "云端出图",
     },
     # ── 视频生成 ──────────────────────────────────────────────────────────
     {
@@ -385,7 +462,7 @@ ALL_MODELS: list[dict] = [
         "capabilities": _CAP_WAN,
         "workflow_type": "wan",
         "video_backend": "wan",
-        "summary": "仅文生视频（T2V），不支持参考图",
+        "summary": "只用文字生成视频",
     },
     {
         "id": "wan-i2v",
@@ -397,7 +474,7 @@ ALL_MODELS: list[dict] = [
         "capabilities": _CAP_WAN,
         "workflow_type": "wan",
         "video_backend": "wan",
-        "summary": "图生视频 / 首尾帧，需参考图",
+        "summary": "首尾两张图生成过渡视频",
     },
     {
         "id": "wan-fun-inpaint",
@@ -409,7 +486,7 @@ ALL_MODELS: list[dict] = [
         "capabilities": _CAP_WAN,
         "workflow_type": "wan",
         "video_backend": "wan",
-        "summary": "首尾帧 Fun Inpaint，需双帧",
+        "summary": "首尾帧专用",
     },
     {
         "id": "ltx-video",
@@ -421,7 +498,7 @@ ALL_MODELS: list[dict] = [
         "capabilities": _CAP_LTX,
         "workflow_type": "ltx",
         "video_backend": "ltx",
-        "summary": "文生视频",
+        "summary": "轻量文生视频",
     },
     {
         "id": "ltx2-fp4",
@@ -429,35 +506,24 @@ ALL_MODELS: list[dict] = [
         "category": "video",
         "type": "local",
         "comfyui_model_file": "ltx-2-19b-dev-fp4.safetensors",
-        "default_enabled": False,
+        "default_enabled": True,
         "capabilities": _CAP_LTX2,
         "workflow_type": "ltx2",
         "video_backend": "ltx2",
-        "summary": "文生/图生视频（较快）",
+        "summary": "文字或图片都能生成视频",
     },
     {
-        "id": "hunyuan-video",
-        "name": "HunyuanVideo",
+        "id": "ltx23-i2av",
+        "name": "LTX-2.3 I2AV",
         "category": "video",
         "type": "local",
-        "comfyui_model_file": "hunyuan_video_t2v_720p_bf16.safetensors",
-        "default_enabled": False,
-        "capabilities": _CAP_HUNYUAN,
-        "workflow_type": "hunyuan",
-        "video_backend": "hunyuan",
-        "summary": "文生视频（高质量，耗时长）",
-    },
-    {
-        "id": "hunyuan-video-1.5",
-        "name": "HunyuanVideo 1.5",
-        "category": "video",
-        "type": "local",
-        "comfyui_model_file": "hunyuanvideo1.5_720p_t2v_fp16.safetensors",
+        "comfyui_model_file": "ltx-2.3-22b-dev_transformer_only_fp8_scaled.safetensors",
         "default_enabled": True,
-        "capabilities": _CAP_HUNYUAN,
-        "workflow_type": "hunyuan",
-        "video_backend": "hunyuan",
-        "summary": "文生视频 1.5（默认启用）",
+        "capabilities": _CAP_LTX23,
+        "workflow_type": "ltx23-i2av",
+        "video_backend": "ltx23",
+        "img2img_support": "required",
+        "summary": "生成带声音的视频",
     },
     {
         "id": "seedance-2.0",
@@ -475,11 +541,128 @@ ALL_MODELS: list[dict] = [
             "supports_audio": False,
         },
         "video_backend": "seedance",
-        "summary": "云端文生视频",
+        "summary": "云端生成视频",
     },
 ]
 
 MODEL_MAP: dict[str, dict] = {m["id"]: m for m in ALL_MODELS}
+
+# 用户向简述 + 推荐星标（画布模型选择器 SSOT）
+MODEL_CATALOG: dict[str, dict] = {
+    # ── 图像 ──
+    "qwen-image": {
+        "summary": "输入文字，生成图片",
+        "recommended": True,
+        "sort_rank": 10,
+    },
+    "qwen-image-edit": {
+        "summary": "上传图片，按描述修改",
+        "sort_rank": 20,
+    },
+    "hidream": {
+        "summary": "另一种画面风格",
+        "sort_rank": 30,
+    },
+    "flux-pulid": {
+        "summary": "让角色长相保持一致",
+        "recommended": True,
+        "sort_rank": 25,
+    },
+    "qwen-image-restore": {
+        "summary": "修复老旧模糊的照片",
+        "sort_rank": 60,
+    },
+    "qwen-image-material": {
+        "summary": "把画面材质换成另一张图",
+        "sort_rank": 70,
+    },
+    "sdxl": {
+        "summary": "经典文生图",
+        "sort_rank": 90,
+    },
+    "jimeng-5.0-lite": {
+        "summary": "云端出图",
+        "sort_rank": 100,
+    },
+    # ── 视频 ──
+    "ltx2-fp4": {
+        "summary": "开源文/图生视频（实验向）；人物戏请用参考图，默认关音频",
+        "recommended_modes": ["i2v", "t2v"],
+        "sort_rank": 40,
+    },
+    "wan-i2v": {
+        "summary": "首尾两张图生成过渡视频（推荐图生）",
+        "recommended": True,
+        "recommended_modes": ["keyframe"],
+        "sort_rank": 15,
+    },
+    "wan-2.6": {
+        "summary": "只用文字生成视频",
+        "recommended": True,
+        "recommended_modes": ["t2v"],
+        "sort_rank": 10,
+    },
+    "ltx23-i2av": {
+        "summary": "生成带声音的视频",
+        "sort_rank": 35,
+    },
+    "wan-fun-inpaint": {
+        "summary": "首尾帧专用",
+        "sort_rank": 45,
+    },
+    "ltx-video": {
+        "summary": "轻量文生视频",
+        "sort_rank": 90,
+    },
+    "seedance-2.0": {
+        "summary": "云端生成视频",
+        "sort_rank": 100,
+    },
+    # ── 文本（画布扩写） ──
+    "qwen-plus": {
+        "summary": "写作与剧本扩写",
+        "recommended": True,
+        "sort_rank": 10,
+    },
+    "qwen-turbo": {
+        "summary": "写作扩写，回复更快",
+        "sort_rank": 20,
+    },
+    "qwen-max": {
+        "summary": "写作扩写，效果更好",
+        "sort_rank": 30,
+    },
+}
+
+_CATALOG_KEYS = frozenset({"summary", "recommended", "recommended_modes", "sort_rank"})
+
+
+def get_model_catalog_meta(model_id: str) -> dict:
+    """返回用户向 catalog 字段；summary 可回退 MODEL_MAP / provider。"""
+    key = (model_id or "").strip()
+    meta = dict(MODEL_CATALOG.get(key) or {})
+    if not meta.get("summary"):
+        entry = MODEL_MAP.get(key) or COMFYUI_PROVIDER_MAP.get(key) or {}
+        summary = (entry.get("summary") or "").strip()
+        if summary:
+            meta["summary"] = summary
+    meta.setdefault("recommended", False)
+    meta.setdefault("recommended_modes", [])
+    meta.setdefault("sort_rank", 100)
+    return meta
+
+
+def _apply_catalog_to_entry(entry: dict) -> None:
+    cat = MODEL_CATALOG.get(entry.get("id") or "")
+    if not cat:
+        return
+    for k in _CATALOG_KEYS:
+        if k in cat:
+            entry[k] = cat[k]
+
+
+for _m in ALL_MODELS:
+    _apply_catalog_to_entry(_m)
 
 # Admin 写入的 MaaS 文本模型不在 ALL_MODELS；仅补用户可见 summary
 MODEL_SUMMARY_OVERRIDES: dict[str, str] = {
@@ -530,11 +713,15 @@ def _infer_profile_by_filename(comfyui_filename: str) -> dict | None:
     name = (comfyui_filename or "").strip().lower()
     if not name:
         return None
+    if "qwen_image_edit" in name or "qwen-image-edit" in name:
+        return dict(_GEN_QWEN_IMAGE_EDIT)
+    if "qwen-image" in name or "qwen_image" in name or "nunchaku-qwen" in name:
+        return dict(_GEN_QWEN_IMAGE)
     if "flux1-schnell" in name or "flux-schnell" in name:
         return dict(_GEN_FLUX_SCHNELL)
     if "flux1-dev" in name or "flux-dev" in name:
         return dict(_GEN_FLUX_DEV)
-    if "svdq-int4" in name or "flux-pulid" in name:
+    if "svdq-int4" in name or "svdq-fp4" in name or "flux-pulid" in name:
         return dict(_GEN_FLUX_PULID)
     if "hidream" in name:
         return dict(_GEN_HIDREAM)
@@ -563,11 +750,11 @@ def _infer_profile_by_filename(comfyui_filename: str) -> dict | None:
 
 
 def resolve_video_backend(model_id: str | None = None) -> str:
-    """解析视频模型分派后端：wan / hunyuan / ltx / ltx2 / seedance（默认 ltx）。"""
+    """解析视频模型分派后端：wan / ltx / ltx2 / seedance（默认 ltx）。"""
     entry = _lookup_model_entry(model_id or "")
     if entry:
         backend = (entry.get("video_backend") or entry.get("workflow_type") or "").strip().lower()
-        if backend in ("wan", "hunyuan", "ltx", "ltx2", "seedance"):
+        if backend in ("wan", "ltx", "ltx2", "ltx23", "seedance"):
             return backend
     return "ltx"
 
@@ -719,6 +906,9 @@ def _comfyui_local_provider(
     companion_files: dict[str, str] | None = None,
     notes: str = "",
     summary: str = "",
+    recommended: bool = False,
+    recommended_modes: list[str] | None = None,
+    sort_rank: int = 100,
     enabled: bool = False,
 ) -> dict:
     """
@@ -750,6 +940,13 @@ def _comfyui_local_provider(
         entry["notes"] = notes
     if summary:
         entry["summary"] = summary
+    if recommended:
+        entry["recommended"] = True
+    if recommended_modes:
+        entry["recommended_modes"] = list(recommended_modes)
+    if sort_rank != 100:
+        entry["sort_rank"] = sort_rank
+    _apply_catalog_to_entry(entry)
     return entry
 
 
@@ -767,52 +964,13 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
         capabilities=_CAP_SDXL,
         gen_preset=_GEN_SDXL,
         notes="图像 workflow 早期已实现（KSampler + CheckpointLoader）",
-        summary="文生图，支持参考图 img2img",
-    ),
-    _comfyui_local_provider(
-        id="flux-dev",
-        display_name="Flux Dev",
-        category="image",
-        comfyui_checkpoint="flux1-dev-fp8.safetensors",
-        workflow_type="flux",
-        workflow_module="backend/providers/comfyui.py",
-        workflow_builder="_build_flux_workflow",
-        workflow_impl="ready",
-        capabilities=_CAP_FLUX_DEV,
-        gen_preset=_GEN_FLUX_DEV,
-        companion_files={
-            "clip_l": "clip_l.safetensors",
-            "clip_t5": "t5xxl_fp8_e4m3fn.safetensors",
-            "vae": "ae.safetensors",
-        },
-        notes="Flux Dev fp8；UNET 在 diffusion_models/；guidance≤4.5",
-        summary="文生图，支持参考图 img2img",
-        enabled=True,
-    ),
-    _comfyui_local_provider(
-        id="flux-schnell",
-        display_name="Flux Schnell",
-        category="image",
-        comfyui_checkpoint="flux1-schnell.safetensors",
-        workflow_type="flux",
-        workflow_module="backend/providers/comfyui.py",
-        workflow_builder="_build_flux_workflow",
-        workflow_impl="ready",
-        capabilities=_CAP_FLUX_SCHNELL,
-        gen_preset=_GEN_FLUX_SCHNELL,
-        companion_files={
-            "clip_l": "clip_l.safetensors",
-            "clip_t5": "t5xxl_fp16.safetensors",
-            "vae": "ae.safetensors",
-        },
-        notes="2026-06-25 预案补全；steps=4 guidance=1.0，无负向提示词",
-        summary="文生图（更快，质量略低）",
+        summary="经典文生图",
     ),
     _comfyui_local_provider(
         id="flux-pulid",
         display_name="Flux + PuLID",
         category="image",
-        comfyui_checkpoint="svdq-int4_r32-flux.1-dev.safetensors",
+        comfyui_checkpoint="svdq-fp4_r32-flux.1-dev.safetensors",
         workflow_type="flux_pulid",
         workflow_module="backend/providers/comfyui.py",
         workflow_builder="_build_flux_pulid_workflow",
@@ -820,7 +978,7 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
         capabilities=_CAP_FLUX_DEV,
         gen_preset=_GEN_FLUX_PULID,
         companion_files={
-            "dit": "svdq-int4_r32-flux.1-dev.safetensors",
+            "dit": "svdq-fp4_r32-flux.1-dev.safetensors",
             "pulid": "pulid_flux_v0.9.1.safetensors",
             "eva_clip": "EVA02_CLIP_L_336_psz14_s6B.pt",
             "clip_l": "clip_l.safetensors",
@@ -828,8 +986,8 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
             "vae": "ae.safetensors",
         },
         notes="Nunchaku int4 FLUX + PuLID 人物一致性；需正脸参考图",
-        summary="人物一致性出图，需正脸参考",
-        enabled=False,
+        summary="让角色长相保持一致",
+        enabled=True,
     ),
     _comfyui_local_provider(
         id="hidream",
@@ -850,7 +1008,91 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
             "vae": "ae.safetensors",
         },
         notes="2026-07-07 对齐 Comfy-Org/HiDream-I1_ComfyUI dev fp8 + 云绘工作流采样参数",
-        summary="文生图",
+        summary="另一种画面风格",
+        enabled=True,
+    ),
+    _comfyui_local_provider(
+        id="qwen-image",
+        display_name="Qwen-Image",
+        category="image",
+        comfyui_checkpoint="svdq-fp4_r128-qwen-image-lightningv1.0-4steps.safetensors",
+        workflow_type="qwen-image",
+        workflow_module="backend/providers/comfyui.py",
+        workflow_builder="_build_qwen_image_workflow",
+        workflow_impl="ready",
+        capabilities=_CAP_QWEN_IMAGE,
+        gen_preset=_GEN_QWEN_IMAGE,
+        companion_files={
+            "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "vae": "qwen_image_vae.safetensors",
+        },
+        notes="云绘双截棍 Qwen-Image fp4；Nunchaku DiT + Lightning 4步；无负向提示词",
+        summary="输入文字，生成图片",
+        enabled=True,
+    ),
+    _comfyui_local_provider(
+        id="qwen-image-edit",
+        display_name="Qwen-Image Edit",
+        category="image",
+        comfyui_checkpoint="qwen_image_edit_2511_fp8mixed.safetensors",
+        workflow_type="qwen-image-edit",
+        workflow_module="backend/providers/comfyui.py",
+        workflow_builder="_build_qwen_image_edit_workflow",
+        workflow_impl="ready",
+        capabilities=_CAP_QWEN_IMAGE,
+        gen_preset=_GEN_QWEN_IMAGE_EDIT,
+        companion_files={
+            "dit": "qwen_image_edit_2511_fp8mixed.safetensors",
+            "lora_angles": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+            "lora_lightning": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+            "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "vae": "qwen_image_vae.safetensors",
+        },
+        notes="Qwen-Image-Edit 2511；UNET+Lightning LoRA+TextEncodeQwenImageEditPlus；需参考图",
+        summary="上传图片，按描述修改",
+        enabled=True,
+    ),
+    _comfyui_local_provider(
+        id="qwen-image-restore",
+        display_name="Qwen-Image Restore",
+        category="image",
+        comfyui_checkpoint="qwen_image_edit_2511_fp8mixed.safetensors",
+        workflow_type="qwen-image-restore",
+        workflow_module="backend/providers/comfyui.py",
+        workflow_builder="_build_qwen_image_restore_workflow",
+        workflow_impl="ready",
+        capabilities=_CAP_QWEN_IMAGE,
+        gen_preset=_GEN_QWEN_IMAGE_RESTORE,
+        companion_files={
+            "dit": "qwen_image_edit_2511_fp8mixed.safetensors",
+            "lora_angles": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+            "lora_lightning": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+            "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "vae": "qwen_image_vae.safetensors",
+        },
+        notes="老照片修复；UNET+多角度 LoRA+Lightning LoRA；单图输入",
+        summary="修复老旧模糊的照片",
+        enabled=True,
+    ),
+    _comfyui_local_provider(
+        id="qwen-image-material",
+        display_name="Qwen-Image Material",
+        category="image",
+        comfyui_checkpoint="qwen_image_edit_2511_fp8mixed.safetensors",
+        workflow_type="qwen-image-material",
+        workflow_module="backend/providers/comfyui.py",
+        workflow_builder="_build_qwen_image_material_workflow",
+        workflow_impl="ready",
+        capabilities=_CAP_QWEN_IMAGE,
+        gen_preset=_GEN_QWEN_IMAGE_MATERIAL,
+        companion_files={
+            "dit": "qwen_image_edit_2511_fp8mixed.safetensors",
+            "lora_lightning": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+            "clip": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "vae": "qwen_image_vae.safetensors",
+        },
+        notes="材质替换；主图+材质参考图（可选第三张）；Lightning 4步",
+        summary="把画面材质换成另一张图",
         enabled=True,
     ),
     _comfyui_local_provider(
@@ -864,7 +1106,7 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
         workflow_impl="ready",
         capabilities=_CAP_WAN,
         notes="Wan 2.2 T2V 四步；双 UNET fp8 + Lightx2v LoRA；API id 保持 wan-2.6",
-        summary="仅文生视频（T2V），不支持参考图",
+        summary="只用文字生成视频",
         enabled=True,
     ),
     _comfyui_local_provider(
@@ -878,7 +1120,7 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
         workflow_impl="ready",
         capabilities=_CAP_WAN,
         notes="Wan 2.2 I2V 四步；需 mode=image2video + 参考图",
-        summary="图生视频 / 首尾帧，需参考图",
+        summary="首尾两张图生成过渡视频",
         enabled=True,
     ),
     _comfyui_local_provider(
@@ -892,7 +1134,7 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
         workflow_impl="ready",
         capabilities=_CAP_WAN,
         notes="Wan 2.2 Fun Inpaint 首尾帧；需双帧 + mode=fun_inpaint；fun_inpaint 双 UNET + i2v Lightx2v LoRA",
-        summary="首尾帧 Fun Inpaint，需双帧",
+        summary="首尾帧专用",
         enabled=True,
     ),
     _comfyui_local_provider(
@@ -910,7 +1152,7 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
             "runtime_default_ckpt": "ltx-video-2b-v0.9.5.safetensors",
         },
         notes="视频 workflow 早期已实现；画布 POST /api/tasks/video 当前固定走 LTX 链路",
-        summary="文生视频",
+        summary="轻量文生视频",
     ),
     _comfyui_local_provider(
         id="ltx2-fp4",
@@ -930,60 +1172,44 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
             "runtime_default_ckpt": "ltx-2-19b-dev-fp4.safetensors",
         },
         notes="LTX-2 19B fp4 T2V/I2V；两阶段采样 + 空间上采样；24GB VRAM 建议降分辨率",
-        summary="文生/图生视频（较快）",
-        enabled=False,
-    ),
-    _comfyui_local_provider(
-        id="hunyuan-video",
-        display_name="HunyuanVideo",
-        category="video",
-        comfyui_checkpoint="hunyuan_video_t2v_720p_bf16.safetensors",
-        workflow_type="hunyuan",
-        workflow_module="backend/comfyui/client.py",
-        workflow_builder="submit_hunyuan_video_prompt",
-        workflow_impl="ready",
-        capabilities=_CAP_HUNYUAN,
-        companion_files={
-            "clip_l": "clip_l.safetensors",
-            "clip_llava": "llava_llama3_fp8_scaled.safetensors",
-            "vae": "hunyuan_video_vae_bf16.safetensors",
-            "runtime_default_ckpt": "hunyuan_video_t2v_720p_bf16.safetensors",
-        },
-        notes="HunyuanVideo T2V 720p bf16；默认 steps=50；需 DualCLIP + 专用 VAE",
-        summary="文生视频（高质量，耗时长）",
+        summary="文字或图片都能生成视频",
         enabled=True,
     ),
     _comfyui_local_provider(
-        id="hunyuan-video-1.5",
-        display_name="HunyuanVideo 1.5",
+        id="ltx23-i2av",
+        display_name="LTX-2.3 I2AV",
         category="video",
-        comfyui_checkpoint="hunyuanvideo1.5_720p_t2v_fp16.safetensors",
-        workflow_type="hunyuan",
+        comfyui_checkpoint="ltx-2.3-22b-dev_transformer_only_fp8_scaled.safetensors",
+        workflow_type="ltx23-i2av",
         workflow_module="backend/comfyui/client.py",
-        workflow_builder="submit_hunyuan_video_prompt",
+        workflow_builder="build_ltx23_i2av_workflow",
         workflow_impl="ready",
-        capabilities=_CAP_HUNYUAN,
+        capabilities=_CAP_LTX23,
+        gen_preset={"img2img_support": "required"},
         companion_files={
-            "vae": "hunyuanvideo15_vae_fp16.safetensors",
-            "clip_qwen": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
-            "clip_byt5": "byt5_small_glyphxl_fp16.safetensors",
-            "runtime_default_ckpt": "hunyuanvideo1.5_720p_t2v_fp16.safetensors",
+            "unet": "ltx-2.3-22b-dev_transformer_only_fp8_scaled.safetensors",
+            "text_projection": "ltx-2.3_text_projection_bf16.safetensors",
+            "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
+            "distilled_lora": "ltx-2.3-22b-distilled-lora-384.safetensors",
+            "audio_vae": "LTX23_audio_vae_bf16.safetensors",
+            "video_vae": "LTX23_video_vae_bf16.safetensors",
+            "runtime_default_ckpt": "ltx-2.3-22b-dev_transformer_only_fp8_scaled.safetensors",
         },
-        notes="HunyuanVideo 1.5 T2V 720p；DualCLIP(Qwen+ByT5)+专用 VAE",
-        summary="文生视频 1.5（默认启用）",
+        notes="LTX-2.3 22B 图+音生视频；权重下载完成后启用",
+        summary="生成带声音的视频",
         enabled=True,
     ),
     _comfyui_local_provider(
         id=VIDEO_ENHANCE_SEEDVR2_ID,
         display_name="SeedVR2 Video Enhance",
         category="video_enhance",
-        comfyui_checkpoint="seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+        comfyui_checkpoint="seedvr2_ema_7b_fp16.safetensors",
         workflow_type="seedvr2_enhance",
         workflow_module="backend/comfyui/client.py",
         workflow_builder="submit_seedvr2_enhance_prompt",
         workflow_impl="ready",
         capabilities=_CAP_VIDEO_ENHANCE,
-        notes="SeedVR2 3B fp8 视频画质增强；权重在 models/SEEDVR2/",
+        notes="SeedVR2 7B FP16 顶配视频画质增强（H800）；权重在 models/SEEDVR2/",
         summary="成片画质增强，非生成模型",
         enabled=True,
     ),
@@ -999,6 +1225,20 @@ COMFYUI_LOCAL_PROVIDERS: list[dict] = [
         capabilities=_CAP_VIDEO_ENHANCE,
         notes="Real-ESRGAN 逐帧超分 fallback；较短镜头可用",
         summary="成片超分增强，非生成模型",
+    ),
+    _comfyui_local_provider(
+        id=IMAGE_ENHANCE_SEEDVR2_ID,
+        display_name="SeedVR2 Image Enhance",
+        category="image_enhance",
+        comfyui_checkpoint="seedvr2_ema_7b_fp16.safetensors",
+        workflow_type="seedvr2_image_enhance",
+        workflow_module="backend/comfyui/client.py",
+        workflow_builder="submit_seedvr2_image_enhance_prompt",
+        workflow_impl="ready",
+        capabilities=_CAP_VIDEO_ENHANCE,
+        notes="SeedVR2 7B FP16 静帧画质增强；权重与视频版共用",
+        summary="静帧画质增强，非生成模型",
+        enabled=True,
     ),
 ]
 

@@ -18,6 +18,7 @@ from db.init_db import init_database
 from routers import (
     admin,
     admin_files,
+    admin_model_gateway,
     admin_models,
     agent,
     assets,
@@ -25,6 +26,7 @@ from routers import (
     auth,
     canvas,
     canvas_ws,
+    comfyui_workflows,
     media,
     models,
     prompt,
@@ -39,11 +41,17 @@ from routers import (
     import_document,
     style_reference,
     lut,
+    generation_memory,
     r2_files,
     review,
+    network,
+    short_video,
 )
 from services.redis_client import get_redis
 from services.local_model_sync import sync_local_models
+from services.registered_model_sync import sync_registered_models
+from services.llm_vision import ensure_vision_model_registered
+from services.style_ref_task_recovery import recover_orphaned_style_ref_tasks_on_boot
 from services.rate_limit import check_ip_rate_limit, clear_rate_limit_keys
 
 
@@ -51,6 +59,19 @@ from services.rate_limit import check_ip_rate_limit, clear_rate_limit_keys
 async def lifespan(application: FastAPI):
     apply_access_log_filters()
     init_database()
+    reg_changed = sync_registered_models()
+    studio_print("boot", f"registered_models 已从 model_registry 同步（变更 {reg_changed} 条）")
+    from db.session import SessionLocal
+
+    boot_db = SessionLocal()
+    try:
+        if ensure_vision_model_registered(boot_db):
+            studio_print("boot", "已自动注册画风视觉模型 qwen-vl-max")
+        recovered = recover_orphaned_style_ref_tasks_on_boot(boot_db)
+        if recovered:
+            studio_print("boot", f"已回收 {recovered} 个中断的画风分析任务")
+    finally:
+        boot_db.close()
     current = comfyui.init_model_config(comfyui.MODEL_CONFIG_PATH)
     asyncio.create_task(sync_local_models())
     studio_print("boot", "后端启动")
@@ -78,6 +99,7 @@ _RATE_LIMIT_SKIP_PREFIXES = (
     "/api/auth/register",
     "/api/auth/refresh",
     "/api/teams/mine",
+    "/api/network",
 )
 
 
@@ -105,6 +127,7 @@ os.makedirs("uploads/videos", exist_ok=True)
 os.makedirs("uploads/exports", exist_ok=True)
 os.makedirs("uploads/luts", exist_ok=True)
 os.makedirs("uploads/audio", exist_ok=True)
+os.makedirs("uploads/team", exist_ok=True)
 
 app.include_router(auth.router)
 app.include_router(teams.router)
@@ -113,6 +136,7 @@ app.include_router(canvas.router)
 app.include_router(canvas_ws.router)
 app.include_router(user.router)
 app.include_router(admin_models.router)
+app.include_router(admin_model_gateway.gateway_router)
 app.include_router(admin.router)
 app.include_router(admin_files.router)
 app.include_router(tasks.router)
@@ -128,9 +152,13 @@ app.include_router(exports.router)
 app.include_router(import_document.router)
 app.include_router(style_reference.router)
 app.include_router(lut.router)
+app.include_router(generation_memory.router)
 app.include_router(audio.router)
+app.include_router(comfyui_workflows.router)
+app.include_router(short_video.router)
 app.include_router(r2_files.router)
 app.include_router(review.router)
+app.include_router(network.router)
 
 if not settings.is_production:
     from routers import debug_trace

@@ -26,7 +26,6 @@ import WorkspaceTopbar from "../components/workspace/WorkspaceTopbar"
 
 import WorkspaceProjectCard from "../components/workspace/WorkspaceProjectCard"
 import ScopeSwitchPanel from "../components/common/ScopeSwitchPanel"
-import { ProjectThumb } from "../components/workspace/workspaceProjectUtils"
 
 import { useLocale } from "../utils/locale"
 
@@ -56,85 +55,65 @@ export default function WorkspaceProjects() {
 
 
 
-  const refresh = useCallback(async () => {
-
-    setLoading(true)
-
+  const refresh = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true)
     try {
-
-      const list = await listCanvasProjects({ teamId: getActiveTeamId() })
-
+      const list = await listCanvasProjects({ teamId: getActiveTeamId(), limit: 100 })
       setProjects(list)
-
     } catch (err) {
-
       console.error(err)
-
-      setProjects([])
-
+      if (!silent) setProjects([])
     } finally {
-
-      setLoading(false)
-
+      if (!silent) setLoading(false)
     }
-
   }, [])
 
-
-
   useEffect(() => {
-
     refresh()
-
   }, [refresh, activeTeamId])
 
-
-
   useEffect(() => {
-
     const onTeamChange = () => refresh()
-
     const onProjectSaved = (e) => {
-
-      const { projectId, updated_at, preview_url } = e.detail || {}
-
+      const {
+        projectId,
+        updated_at,
+        preview_url,
+        cover_media_type,
+        recent_collaborators,
+        collaborator_extra_count,
+      } = e.detail || {}
       if (!projectId) return
-
       setProjects((prev) => prev.map((p) => {
-
         if (p.id !== projectId) return p
-
         const next = { ...p }
-
         if (updated_at) next.updated_at = updated_at
-
         if (preview_url !== undefined && preview_url !== null) next.preview_url = preview_url
-
+        if (cover_media_type !== undefined) next.cover_media_type = cover_media_type
+        if (recent_collaborators) next.recent_collaborators = recent_collaborators
+        if (collaborator_extra_count !== undefined) {
+          next.collaborator_extra_count = collaborator_extra_count
+        }
         return next
-
       }))
-
     }
 
+    let lastRefreshAt = 0
+    const softRefresh = () => {
+      const now = Date.now()
+      if (now - lastRefreshAt < 30_000) return
+      lastRefreshAt = now
+      void refresh({ silent: true })
+    }
     window.addEventListener("team-context-changed", onTeamChange)
-
     window.addEventListener("canvas-project-saved", onProjectSaved)
-
-    window.addEventListener("focus", refresh)
-
+    window.addEventListener("focus", softRefresh)
     return () => {
-
       window.removeEventListener("team-context-changed", onTeamChange)
-
       window.removeEventListener("canvas-project-saved", onProjectSaved)
-
-      window.removeEventListener("focus", refresh)
-
+      window.removeEventListener("focus", softRefresh)
     }
-
   }, [refresh])
-
-
 
   const handleCreate = useCallback(async () => {
 
@@ -258,6 +237,7 @@ export default function WorkspaceProjects() {
                 <div key={p.id} style={{ "--i": i }}>
                   <WorkspaceProjectCard
                     project={p}
+                    isRecentEdited={i === 0}
                     onOpen={() => navigate(`/canvas/${p.id}`)}
                     onRename={(name) => handleRename(p.id, name)}
                     onDelete={() => handleDelete(p.id)}
@@ -273,12 +253,11 @@ export default function WorkspaceProjects() {
                 onClick={handleCreate}
               >
                 <div className="ws-grid-thumb ws-grid-thumb--new">
-                  <ProjectThumb previewUrl={null} empty />
-                  <span className="ws-grid-new-plus">+</span>
+                  <span className="ws-grid-new-plus" aria-hidden>+</span>
                 </div>
                 <div className="ws-grid-body">
                   <div className="ws-grid-name">{t("ws.project.new")}</div>
-                  <div className="ws-grid-time">{t("ws.project.blank")}</div>
+                  <div className="ws-grid-time ws-grid-time--new">{t("ws.project.blank")}</div>
                 </div>
               </button>
             </div>

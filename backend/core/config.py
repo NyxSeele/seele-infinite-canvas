@@ -35,7 +35,7 @@ class Settings(BaseSettings):
         description="Fernet 派生密钥；未设时回退 JWT_SECRET",
     )
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = Field(default=120)
+    access_token_expire_minutes: int = Field(default=480)
     refresh_token_expire_days: int = 30
 
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
         default="deepseek-v3",
         validation_alias=AliasChoices("AGENT_MODEL", "AGENT_MODEL_STRING"),
     )
-    optimize_timeout: float = 32.0
+    optimize_timeout: float = 12.0
     tasks_cache_ttl: float = 3.0
     # Cloudflare Free ~100s idle limit; keep LLM HTTP under that.
     llm_http_timeout: float = Field(
@@ -162,6 +162,11 @@ class Settings(BaseSettings):
         default="seele", validation_alias="R2_BUCKET_NAME"
     )
     r2_public_url: str = Field(default="", validation_alias="R2_PUBLIC_URL")
+
+    media_public_base: str = Field(default="", validation_alias="MEDIA_PUBLIC_BASE")
+    storage_canvas: str = Field(default="auto", validation_alias="STORAGE_CANVAS")
+    storage_team: str = Field(default="auto", validation_alias="STORAGE_TEAM")
+    storage_review: str = Field(default="r2", validation_alias="STORAGE_REVIEW")
 
     canvas_lock_ttl_seconds: int = Field(default=90)
     canvas_heartbeat_seconds: int = Field(default=25)

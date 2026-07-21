@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { useReactFlow } from "reactflow"
 import { useAssetStore } from "../../stores/assetStore"
 import { createUserAsset, updateUserAsset, uploadUserAsset } from "../../services/assetsApi"
-import { getCanvasTeamId } from "../../utils/teamContext"
+import { slugIdentityId } from "../../utils/canvas/castLibrary"
+import { syncCastLibraryOnScriptTables } from "../../utils/canvas/castLibrarySync"
 import { useLocale } from "../../utils/locale"
 import NodeCardDotsMenu from "./NodeCardDotsMenu"
 import TextWorkflowEdgePlugs from "./TextWorkflowEdgePlugs"
@@ -68,13 +69,24 @@ export default function CharacterCardNode({ id, data, selected }) {
         name: trimmedName,
         appearance: appearance.trim(),
         referenceImages: images,
+        faceUrl: images[0] || null,
+        identityId: data.identityId || slugIdentityId(trimmedName),
         assetId,
+      })
+      syncCastLibraryOnScriptTables(setNodes, {
+        name: trimmedName,
+        appearance: appearance.trim(),
+        referenceImages: images,
+        faceUrl: images[0] || null,
+        identityId: data.identityId || slugIdentityId(trimmedName),
+        assetId,
+        globalAssetId: data.globalAssetId,
       })
       await loadAssets({ teamId })
     } finally {
       setSaving(false)
     }
-  }, [appearance, data.assetId, id, images, loadAssets, name, patchData, readOnly])
+  }, [appearance, data.assetId, data.globalAssetId, data.identityId, id, images, loadAssets, name, patchData, readOnly, setNodes])
 
   const onUpload = useCallback(
     async (e) => {
@@ -92,11 +104,20 @@ export default function CharacterCardNode({ id, data, selected }) {
       const url = uploaded.image_url || ""
       const next = url ? [...images.filter(Boolean), url].slice(0, 4) : images
       setImages(next)
-      patchData({ referenceImages: next, assetId: uploaded.id || data.assetId })
+      patchData({ referenceImages: next, faceUrl: url || null, assetId: uploaded.id || data.assetId })
+      syncCastLibraryOnScriptTables(setNodes, {
+        name: name.trim() || uploaded.name,
+        appearance: appearance.trim(),
+        referenceImages: next,
+        faceUrl: url || null,
+        identityId: data.identityId || slugIdentityId(name.trim() || uploaded.name),
+        assetId: uploaded.id || data.assetId,
+        globalAssetId: data.globalAssetId,
+      })
       await loadAssets({ teamId })
       e.target.value = ""
     },
-    [appearance, data.assetId, id, images, loadAssets, name, patchData, readOnly]
+    [appearance, data.assetId, data.globalAssetId, data.identityId, id, images, loadAssets, name, patchData, readOnly, setNodes]
   )
 
   return (

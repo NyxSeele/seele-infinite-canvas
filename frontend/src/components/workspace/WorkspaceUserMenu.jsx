@@ -1,20 +1,24 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useAuth } from "../../contexts/AuthContext"
 import { useCanvasStore, useTeamStore } from "../../stores"
 import { LineIcon } from "../icons/LineIcons"
-import TeamAvatar from "./TeamAvatar"
 import CreateTeamModal from "./CreateTeamModal"
 import MenuFlyoutPortal from "./MenuFlyoutPortal"
+import IdentityInfoPopover from "./IdentityInfoPopover"
 import { showDevNotice } from "../common/ProductNoticeModal"
 import { useLocale } from "../../utils/locale"
 import { navigateWithReturn } from "../../utils/navReturn"
 import { restartOnboarding } from "../Onboarding/tourSteps"
+import { getThemePageClass, getThemePortalRoot } from "../../utils/themePortalRoot"
 import {
   MENU_FLYOUT_CLOSE_MS,
   MENU_FLYOUT_OPEN_MS,
 } from "../../utils/menuFlyoutTiming"
 import "./WorkspaceUserMenu.css"
+
+const MENU_WIDTH = 300
 
 const LANG_OPTIONS = [
   { value: "zh-CN", label: "简体中文" },
@@ -33,14 +37,6 @@ const HELP_LEGAL = [
   { id: "privacy", label: "隐私政策" },
   { id: "ai-rules", label: "AI功能使用规范" },
 ]
-
-function CheckIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M3.5 8.2 6.4 11 12.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
 
 export default function WorkspaceUserMenu({
   open,
@@ -64,25 +60,88 @@ export default function WorkspaceUserMenu({
   const allTeams = useTeamStore((s) => s.allTeams)
   const activeTeamId = useTeamStore((s) => s.activeTeamId)
   const ownedTeam = useTeamStore((s) => s.ownedTeam)
-  const setActiveTeamId = useTeamStore((s) => s.setActiveTeamId)
-  const switchToPersonal = useTeamStore((s) => s.switchToPersonal)
 
   const menuRef = useRef(null)
   const menuInnerRef = useRef(null)
-  const spaceAnchorRef = useRef(null)
+  const identityAnchorRef = useRef(null)
   const langAnchorRef = useRef(null)
   const helpAnchorRef = useRef(null)
   const flyoutTimerRef = useRef(null)
+  const identityTimerRef = useRef(null)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [activeFlyout, setActiveFlyout] = useState(null)
+  const [identityPopoverOpen, setIdentityPopoverOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 })
+
+  const updateMenuPosition = useCallback(() => {
+    const el = anchorRef?.current
+    if (!el) return false
+    const rect = el.getBoundingClientRect()
+    if (
+      rect.bottom < 0
+      || rect.top > window.innerHeight
+      || rect.right < 0
+      || rect.left > window.innerWidth
+    ) {
+      return false
+    }
+    let left = rect.right - MENU_WIDTH
+    if (left < 12) left = Math.max(12, rect.left)
+    const top = rect.bottom + 10
+    setMenuPos({ top, left })
+    return true
+  }, [anchorRef])
+
+  useLayoutEffect(() => {
+    if (!open) return undefined
+    updateMenuPosition()
+    const onReflow = () => updateMenuPosition()
+    window.addEventListener("resize", onReflow)
+    window.addEventListener("scroll", onReflow, true)
+    return () => {
+      window.removeEventListener("resize", onReflow)
+      window.removeEventListener("scroll", onReflow, true)
+    }
+  }, [open, updateMenuPosition])
 
   const clearFlyoutTimer = () => {
     if (flyoutTimerRef.current) clearTimeout(flyoutTimerRef.current)
   }
 
+  const clearIdentityTimer = () => {
+    if (identityTimerRef.current) clearTimeout(identityTimerRef.current)
+  }
+
+  const closeIdentityPopover = () => {
+    clearIdentityTimer()
+    setIdentityPopoverOpen(false)
+  }
+
+  const openIdentityPopover = () => {
+    clearIdentityTimer()
+    clearFlyoutTimer()
+    setActiveFlyout(null)
+    setIdentityPopoverOpen(true)
+    onSubmenuLatch?.(true)
+    onMenuMouseEnter?.()
+  }
+
+  const scheduleIdentityClose = () => {
+    clearIdentityTimer()
+    identityTimerRef.current = setTimeout(() => {
+      closeIdentityPopover()
+    }, MENU_FLYOUT_CLOSE_MS)
+  }
+
+  const identityPopoverPanelProps = {
+    onMouseEnter: clearIdentityTimer,
+    onMouseLeave: scheduleIdentityClose,
+  }
+
   const openFlyout = (id) => {
     clearFlyoutTimer()
+    closeIdentityPopover()
     setActiveFlyout(id)
     onSubmenuLatch?.(true)
     onMenuMouseEnter?.()
@@ -97,7 +156,6 @@ export default function WorkspaceUserMenu({
     clearFlyoutTimer()
     flyoutTimerRef.current = setTimeout(() => {
       setActiveFlyout(null)
-      onSubmenuLatch?.(false)
     }, MENU_FLYOUT_CLOSE_MS)
   }
 
@@ -124,12 +182,12 @@ export default function WorkspaceUserMenu({
   const closeFlyout = () => {
     clearFlyoutTimer()
     setActiveFlyout(null)
-    onSubmenuLatch?.(false)
   }
 
   const dismissFlyout = () => {
     clearFlyoutTimer()
     if (activeFlyout) closeFlyout()
+    if (identityPopoverOpen) closeIdentityPopover()
   }
 
   const plainItemHover = {
@@ -137,44 +195,64 @@ export default function WorkspaceUserMenu({
   }
 
   const flyoutAnchorRef =
-    activeFlyout === "space" ? spaceAnchorRef
-      : activeFlyout === "lang" ? langAnchorRef
-        : activeFlyout === "help" ? helpAnchorRef
-          : null
+    activeFlyout === "lang" ? langAnchorRef
+      : activeFlyout === "help" ? helpAnchorRef
+        : null
 
   const flyoutWidth =
-    activeFlyout === "space" ? 272
-      : activeFlyout === "lang" ? 172
-        : activeFlyout === "help" ? 232
-          : 240
+    activeFlyout === "lang" ? 172
+      : activeFlyout === "help" ? 232
+        : 240
 
   const handleMenuMouseLeave = (e) => {
     const next = e.relatedTarget
-    if (next?.closest?.(".wum-flyout-portal") || next?.closest?.(".wum-flyout-bridge")) return
+    if (
+      next?.closest?.(".wum-flyout-portal")
+      || next?.closest?.(".wum-flyout-bridge")
+      || next?.closest?.(".wum-identity-popover")
+      || next?.closest?.(".wum-identity-popover-bridge")
+    ) return
     scheduleFlyoutClose()
-    if (!activeFlyout) onMenuMouseLeave?.()
+    scheduleIdentityClose()
+    if (!activeFlyout && !identityPopoverOpen) onMenuMouseLeave?.()
   }
 
-  useEffect(() => () => clearFlyoutTimer(), [])
+  const themeClass = getThemePageClass()
+
+  useEffect(() => () => {
+    clearFlyoutTimer()
+    clearIdentityTimer()
+  }, [])
 
   useEffect(() => {
-    const onTeamChange = () => void useTeamStore.getState().refreshTeams()
+    const onTeamChange = () => useTeamStore.getState().scheduleRefreshTeams()
     window.addEventListener("team-context-changed", onTeamChange)
     return () => window.removeEventListener("team-context-changed", onTeamChange)
   }, [])
 
   useEffect(() => {
+    if (!open) return
+    if (identityPopoverOpen || activeFlyout) onSubmenuLatch?.(true)
+    else onSubmenuLatch?.(false)
+  }, [open, identityPopoverOpen, activeFlyout, onSubmenuLatch])
+
+  useEffect(() => {
     if (!open) {
       closeFlyout()
+      closeIdentityPopover()
       return undefined
     }
-    void useTeamStore.getState().refreshTeams()
+    void useTeamStore.getState().ensureTeamsLoaded()
     const onDoc = (e) => {
       const inMenu = menuRef.current?.contains(e.target)
       const inAnchor = anchorRef?.current?.contains(e.target)
       const inFlyout = e.target.closest?.(".wum-flyout-portal")
         || e.target.closest?.(".wum-flyout-bridge")
-      if (!inMenu && !inAnchor && !inFlyout) onClose?.()
+        || e.target.closest?.(".wum-identity-popover")
+        || e.target.closest?.(".wum-identity-popover-bridge")
+      const inCreateTeamModal = e.target.closest?.(".ctm-backdrop")
+        || e.target.closest?.(".ctm-modal")
+      if (!inMenu && !inAnchor && !inFlyout && !inCreateTeamModal) onClose?.()
     }
     const onKey = (e) => { if (e.key === "Escape") onClose?.() }
     document.addEventListener("mousedown", onDoc)
@@ -189,7 +267,7 @@ export default function WorkspaceUserMenu({
   const activeTeam = activeTeamId
     ? allTeams.find((t) => t.id === activeTeamId)
     : null
-  const contextLabel = activeTeam?.name || displayName
+  const identityLabel = activeTeam ? activeTeam.name : t("menu.spacePersonal")
 
   const q = user?.quota
   const isUnlimited = q?.image_limit < 0
@@ -207,28 +285,6 @@ export default function WorkspaceUserMenu({
     onClose?.()
     await logout()
     navigate("/login")
-  }
-
-  const selectPersonal = () => {
-    switchToPersonal()
-    window.dispatchEvent(new CustomEvent("team-context-changed"))
-    closeFlyout()
-    onClose?.()
-  }
-
-  const selectTeam = (teamId) => {
-    setActiveTeamId(teamId)
-    window.dispatchEvent(new CustomEvent("team-context-changed"))
-    closeFlyout()
-    onClose?.()
-  }
-
-  const openTeamSettings = (teamId, e) => {
-    e.stopPropagation()
-    if (teamId) setActiveTeamId(teamId)
-    openProfileModal("team-settings")
-    closeFlyout()
-    onClose?.()
   }
 
   const openBenefits = () => {
@@ -249,18 +305,23 @@ export default function WorkspaceUserMenu({
     closeFlyout()
   }
 
-  if (!open) return null
-
-  return (
-    <>
-      <div
-        ref={menuRef}
-        className="wum-menu"
-        role="menu"
-        onMouseEnter={onMenuMouseEnter}
-        onMouseLeave={handleMenuMouseLeave}
-      >
-        <div className="wum-menu-inner" ref={menuInnerRef}>
+  const menuPortal = open
+    ? createPortal(
+        <div
+          ref={menuRef}
+          className={`wum-menu wum-menu--portal ws-overlay-root ${themeClass}`}
+          role="menu"
+          style={{
+            position: "fixed",
+            top: menuPos.top,
+            left: menuPos.left,
+            width: MENU_WIDTH,
+            zIndex: 530,
+          }}
+          onMouseEnter={onMenuMouseEnter}
+          onMouseLeave={handleMenuMouseLeave}
+        >
+          <div className="wum-menu-inner" ref={menuInnerRef}>
           <div className="wum-head wum-head--top">
             <div className="wum-avatar wum-avatar--lg">
               {avatarUrl ? (
@@ -270,31 +331,33 @@ export default function WorkspaceUserMenu({
               )}
             </div>
             <div className="wum-meta">
-              <div className="wum-name">{displayName}</div>
+              <div className="wum-name">
+                <span className="wum-name-text">{displayName}</span>
+                <span
+                  ref={identityAnchorRef}
+                  className={`wum-identity-tag${identityPopoverOpen ? " is-open" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onMouseEnter={openIdentityPopover}
+                  onMouseLeave={scheduleIdentityClose}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (identityPopoverOpen) scheduleIdentityClose()
+                    else openIdentityPopover()
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      if (identityPopoverOpen) scheduleIdentityClose()
+                      else openIdentityPopover()
+                    }
+                  }}
+                >
+                  （{identityLabel}）
+                </span>
+              </div>
               <div className="wum-email">{user?.email || `UID ${user?.id ?? "—"}`}</div>
             </div>
-          </div>
-
-          <div
-            ref={spaceAnchorRef}
-            className="wum-active-block"
-            {...flyoutTriggerProps("space")}
-          >
-            <button type="button" className={`wum-active-row${activeFlyout === "space" ? " is-open" : ""}`}>
-              {activeTeam ? (
-                <TeamAvatar teamId={activeTeam.id} name={activeTeam.name} size={28} />
-              ) : (
-                <span className="wum-space-avatar wum-space-avatar--personal wum-space-avatar--sm">
-                  {(displayName[0] || "U").toUpperCase()}
-                </span>
-              )}
-              <span className="wum-active-text">
-                <span className="wum-active-label">{contextLabel}</span>
-                <span className={`wum-space-kind${activeTeam ? " wum-space-kind--team" : " wum-space-kind--personal"}`}>
-                  {activeTeam ? t("menu.spaceTeam") : t("menu.spacePersonal")}
-                </span>
-              </span>
-            </button>
           </div>
 
           <button type="button" className="wum-quota-card" onClick={openBenefits} {...plainItemHover}>
@@ -419,82 +482,29 @@ export default function WorkspaceUserMenu({
             <LineIcon name="logout" size={18} />
             <span className="wum-item-label">{t("menu.logout")}</span>
           </button>
-        </div>
-      </div>
+          </div>
+        </div>,
+        getThemePortalRoot()
+      )
+    : null
 
+  return (
+    <>
+      {menuPortal}
+
+      {open && (
       <MenuFlyoutPortal
         open={!!activeFlyout}
         anchorRef={flyoutAnchorRef}
         menuAlignRef={menuInnerRef}
         width={flyoutWidth}
         className={
-          activeFlyout === "space" ? "wum-space-flyout"
-            : activeFlyout === "lang" ? "wum-lang-flyout"
-              : "wum-help-flyout"
+          activeFlyout === "lang" ? "wum-lang-flyout"
+            : activeFlyout === "help" ? "wum-help-flyout"
+              : ""
         }
         {...flyoutPanelProps}
       >
-        {activeFlyout === "space" && (
-          <>
-            <button
-              type="button"
-              className={`wum-space-item${!activeTeamId ? " is-active" : ""}`}
-              onClick={selectPersonal}
-            >
-              <span className="wum-space-avatar wum-space-avatar--personal">
-                {(displayName[0] || "U").toUpperCase()}
-              </span>
-              <span className="wum-space-text">
-                <span className="wum-space-label">{displayName}</span>
-                <span className="wum-space-kind wum-space-kind--personal">{t("menu.spacePersonal")}</span>
-              </span>
-              {!activeTeamId && <span className="wum-space-check"><CheckIcon /></span>}
-            </button>
-            {allTeams.map((team) => (
-              <div
-                key={team.id}
-                className={`wum-space-item${activeTeamId === team.id ? " is-active" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => selectTeam(team.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    selectTeam(team.id)
-                  }
-                }}
-              >
-                <TeamAvatar teamId={team.id} name={team.name} size={32} />
-                <span className="wum-space-text">
-                  <span className="wum-space-label">{team.name}</span>
-                  <span className="wum-space-kind wum-space-kind--team">{t("menu.spaceTeam")}</span>
-                </span>
-                <span className="wum-space-actions">
-                  <span
-                    className="wum-space-gear"
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => openTeamSettings(team.id, e)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        openTeamSettings(team.id, e)
-                      }
-                    }}
-                    title={t("menu.teamSettings")}
-                    aria-label={t("menu.teamSettings")}
-                  >
-                    <LineIcon name="settings" size={14} />
-                  </span>
-                  {activeTeamId === team.id && (
-                    <span className="wum-space-check"><CheckIcon /></span>
-                  )}
-                </span>
-              </div>
-            ))}
-          </>
-        )}
         {activeFlyout === "lang" && LANG_OPTIONS.map((opt) => (
           <button
             key={opt.value}
@@ -503,7 +513,11 @@ export default function WorkspaceUserMenu({
             onClick={() => pickLanguage(opt.value)}
           >
             {opt.label}
-            {locale === opt.value && <CheckIcon />}
+            {locale === opt.value && (
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+                <path d="M3.5 8.2 6.4 11 12.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
           </button>
         ))}
         {activeFlyout === "help" && (
@@ -545,8 +559,45 @@ export default function WorkspaceUserMenu({
           </>
         )}
       </MenuFlyoutPortal>
+      )}
 
-      <CreateTeamModal open={createOpen} onClose={() => setCreateOpen(false)} />
+      <IdentityInfoPopover
+        open={open && identityPopoverOpen}
+        anchorRef={identityAnchorRef}
+        themeClass={themeClass}
+        {...identityPopoverPanelProps}
+      >
+        {activeTeam ? (
+          <>
+            <div className="wum-identity-detail-title">{activeTeam.name}</div>
+            <div className="wum-identity-detail-line">
+              {t("menu.identityMemberCount", { count: activeTeam.member_count ?? 0 })}
+            </div>
+            {activeTeam.my_role ? (
+              <div className="wum-identity-detail-line">
+                {t("menu.identityRole", { role: activeTeam.my_role })}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div className="wum-identity-detail-title">{displayName}</div>
+            <div className="wum-identity-detail-line">{user?.email || `UID ${user?.id ?? "—"}`}</div>
+            <div className="wum-identity-plan">
+              <span className="wum-identity-plan-label">{t("menu.identityPlanFree")}</span>
+              <span className="wum-quota-badge">FREE</span>
+            </div>
+            <div className="wum-identity-detail-line wum-identity-credits">
+              {isUnlimited ? t("menu.unlimitedQuota") : `${t("menu.remainingCredits")} ${creditNum}`}
+            </div>
+          </>
+        )}
+      </IdentityInfoPopover>
+
+      <CreateTeamModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+      />
     </>
   )
 }

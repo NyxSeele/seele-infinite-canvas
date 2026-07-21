@@ -19,6 +19,7 @@ function CastPickPopover({ anchorEl, open, onClose, children }) {
     if (!open || !anchorEl) return undefined
 
     const update = () => {
+      if (!anchorEl?.isConnected) return
       const rect = anchorEl.getBoundingClientRect()
       const popW = 168
       let left = rect.left

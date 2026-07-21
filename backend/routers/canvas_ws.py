@@ -11,6 +11,7 @@ from services.canvas_presence import leave_presence, touch_presence
 from services.canvas_ws_messages import handle_client_message
 from services.user_profile import presence_meta_for_user, presence_meta_for_user_id
 from services.canvas_ws_hub import broadcast_json, register, unregister
+from services.project_collaborators import touch_collaborator_throttled
 from services.redis_client import get_redis
 
 router = APIRouter(tags=["canvas-ws"])
@@ -53,6 +54,7 @@ async def canvas_events_ws(websocket: WebSocket, project_id: str):
         display_name=display_name,
         email=email,
     )
+    touch_collaborator_throttled(project_id, user_id)
     try:
         await websocket.send_json(
             {"type": "presence_changed", "project_id": project_id, "members": members}
@@ -80,6 +82,7 @@ async def canvas_events_ws(websocket: WebSocket, project_id: str):
                         display_name=label,
                         email=email,
                     )
+                    touch_collaborator_throttled(project_id, user_id)
                     await broadcast_json(
                         project_id,
                         {
@@ -145,6 +148,7 @@ async def canvas_events_ws(websocket: WebSocket, project_id: str):
                         display_name=label,
                         email=email,
                     )
+                    touch_collaborator_throttled(project_id, user_id)
                     await websocket.send_json(
                         {
                             "type": "presence_changed",

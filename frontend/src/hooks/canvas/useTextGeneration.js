@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef } from "react"
 import { addEdge } from "reactflow"
 import api from "../../services/api"
+import { isNetworkError } from "../../components/canvas/taskNetworkError"
 import { teamIdPayload } from "../../utils/teamContext"
 import { cancelCanvasTask } from "../../services/cancelTask"
 import { TASK_POLL_TIMEOUT_MS } from "../../components/canvas/taskPollTimeout"
+import { createRateLimitBackoffState } from "../../utils/canvas/rateLimitBackoff"
 import { normalizeTextResponseNode } from "../../utils/canvas/nodeNormalize"
 import { TEXT_NOTE_WIDTH, TEXT_MODES } from "../../utils/canvas/nodeHelpers"
 import { getT } from "../../utils/locale"
 
-const TASK_POLL_INTERVAL_MS = 2000
+const TASK_POLL_INTERVAL_MS = 5000
 
 function extractTextTaskResult(task) {
   const raw = task?.result
@@ -77,15 +79,20 @@ export function useTextGeneration({ setNodes, setEdges, getNode, buildData, setS
 
   const startPolling = useCallback((taskId, responseNodeId) => {
     stopPolling(responseNodeId)
+    const rateLimit = createRateLimitBackoffState()
 
     const interval = setInterval(async () => {
+      if (rateLimit.paused) return
       try {
         const res = await api.get(`/api/tasks/${taskId}`)
         const task = res.data
+        rateLimit.reset()
         if (applyTextTaskPollResult(task, taskId, responseNodeId)) {
           stopPolling(responseNodeId)
         }
       } catch (err) {
+        if (isNetworkError(err)) return
+        if (rateLimit.apply(err)) return
         console.error("poll task error:", err)
         stopPolling(responseNodeId)
         updateResponseNodeData(responseNodeId, {

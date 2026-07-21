@@ -11,19 +11,66 @@ export function makeCastRefId() {
   return `cast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 }
 
+/** Velora 自有 identity 约定：{slugName}_{variant} */
+export function slugIdentityId(name, variant = "default") {
+  const base = String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^\w\u4e00-\u9fff-]/g, "")
+  return `${base || "char"}_${variant}`
+}
+
+/** 参考图优先级：threeView > face > costume > imageUrl */
+export function pickCastReferenceUrls(entry, { max = 3 } = {}) {
+  if (!entry) return []
+  const slots = ["threeViewUrl", "faceUrl", "costumeUrl", "imageUrl"]
+  const seen = new Set()
+  const out = []
+  for (const key of slots) {
+    const url = normImageUrl(entry[key])
+    if (url && !seen.has(url)) {
+      seen.add(url)
+      out.push(url)
+    }
+  }
+  return out.slice(0, max)
+}
+
+export function pickCastFaceUrl(entry) {
+  const face = normImageUrl(entry?.faceUrl)
+  if (face) return face
+  return normImageUrl(entry?.imageUrl) || null
+}
+
+export function castEntryHasReferenceImage(entry) {
+  return pickCastReferenceUrls(entry, { max: 1 }).length > 0
+}
+
 export function normalizeCastLibraryEntry(item) {
   if (!item || !String(item.name || "").trim()) return null
-  const imageUrl = item.imageUrl || null
+  const name = String(item.name).trim()
+  const faceUrl = normImageUrl(item.faceUrl) || normImageUrl(item.imageUrl) || null
+  const threeViewUrl = normImageUrl(item.threeViewUrl) || null
+  const costumeUrl = normImageUrl(item.costumeUrl) || null
+  const imageUrl = faceUrl || threeViewUrl || costumeUrl || normImageUrl(item.imageUrl) || null
+  const identityId =
+    String(item.identityId || item.identity_id || "").trim() || slugIdentityId(name)
   return {
     id: item.id || makeCastRefId(),
-    name: String(item.name).trim(),
+    name,
     type: item.type === "scene" ? "scene" : "character",
+    identityId,
+    faceUrl,
+    threeViewUrl,
+    costumeUrl,
     imageUrl,
     description: item.description ? String(item.description).trim() : "",
-    pendingImage: !imageUrl,
+    pendingImage: !castEntryHasReferenceImage({ faceUrl, threeViewUrl, costumeUrl, imageUrl }),
     lastUsedAt: item.lastUsedAt != null ? Number(item.lastUsedAt) : null,
     useCount: Number(item.useCount) || 0,
     ...(item.globalAssetId ? { globalAssetId: item.globalAssetId } : {}),
+    ...(item.assetId ? { assetId: item.assetId } : {}),
   }
 }
 
@@ -31,7 +78,7 @@ export function normalizeCastLibrary(list, { requireImage = true } = {}) {
   const entries = (Array.isArray(list) ? list : [])
     .map(normalizeCastLibraryEntry)
     .filter(Boolean)
-  return requireImage ? entries.filter((e) => e.imageUrl) : entries
+  return requireImage ? entries.filter((e) => castEntryHasReferenceImage(e)) : entries
 }
 
 /**
@@ -71,6 +118,8 @@ function globalAssetsAsCastEntries(globalAssets = []) {
       name: String(a.name).trim(),
       type: assetKindToCastType(a.kind),
       imageUrl: a.imageUrl,
+      faceUrl: a.imageUrl,
+      identityId: slugIdentityId(a.name),
       global: true,
     }))
     .filter((item) => {
@@ -83,7 +132,7 @@ function globalAssetsAsCastEntries(globalAssets = []) {
 
 /** 合并 @ 提及与文本匹配，得到本镜关联的设定项（含全局资产库） */
 export function resolveCastRefsForRow(row, castLibrary = [], globalAssets = []) {
-  const local = normalizeCastLibrary(castLibrary)
+  const local = normalizeCastLibrary(castLibrary, { requireImage: false })
   const localNames = new Set(local.map((c) => c.name.toLowerCase()))
   const globals = globalAssetsAsCastEntries(globalAssets).filter(
     (g) => !localNames.has(g.name.toLowerCase())
@@ -95,9 +144,18 @@ export function resolveCastRefsForRow(row, castLibrary = [], globalAssets = []) 
   const out = []
 
   const push = (item) => {
-    if (!item?.id || seen.has(item.id)) return
-    seen.add(item.id)
+    const key = item?.identityId || item?.id
+    if (!key || seen.has(key)) return
+    seen.add(key)
     out.push(item)
+  }
+
+  const rowIdentityIds = row?.identityIds || row?.identity_ids || []
+  for (const iid of rowIdentityIds) {
+    const idStr = String(iid || "").trim()
+    if (!idStr) continue
+    const hit = lib.find((c) => c.identityId === idStr || c.id === idStr)
+    if (hit) push(hit)
   }
 
   for (const m of allPromptMentionsForRow(row)) {
@@ -113,11 +171,10 @@ export function resolveCastRefsForRow(row, castLibrary = [], globalAssets = []) 
   return out
 }
 
-/** 生成写入 build-shot theme_context 的设定说明 */
 /** 从文本中解析与设定库匹配的 @ 提及（用于高亮渲染） */
 export function resolveCastMentionsInText(text, castLibrary = [], globalAssets = []) {
   const lib = [
-    ...normalizeCastLibrary(castLibrary),
+    ...normalizeCastLibrary(castLibrary, { requireImage: false }),
     ...(globalAssets || [])
       .filter((a) => a?.name && a?.imageUrl)
       .map((a) => ({
@@ -125,6 +182,7 @@ export function resolveCastMentionsInText(text, castLibrary = [], globalAssets =
         name: a.name,
         type: a.kind === "scene" ? "scene" : "character",
         imageUrl: a.imageUrl,
+        identityId: slugIdentityId(a.name),
         source: "global",
       })),
   ]
@@ -141,6 +199,7 @@ export function resolveCastMentionsInText(text, castLibrary = [], globalAssets =
         id: item.id,
         type: item.source === "global" ? "asset" : "cast",
         name: item.name,
+        identityId: item.identityId,
       })
     }
   }
@@ -158,11 +217,12 @@ export function unwrapCastRefsFromText(text, castItem) {
 
 /** 构图参考图不应自动使用设定库图片；清除与设定库 URL 相同的参考图 */
 export function stripCastImagesFromCompositionRefs(rows, castLibrary = []) {
-  const castUrls = new Set(
-    normalizeCastLibrary(castLibrary)
-      .map((c) => normImageUrl(c.imageUrl))
-      .filter(Boolean)
-  )
+  const castUrls = new Set()
+  for (const c of normalizeCastLibrary(castLibrary, { requireImage: false })) {
+    for (const url of pickCastReferenceUrls(c, { max: 4 })) {
+      castUrls.add(url)
+    }
+  }
   if (!castUrls.size || !Array.isArray(rows)) return rows
 
   const isCastUrl = (url) => castUrls.has(normImageUrl(url))
@@ -196,11 +256,15 @@ export function stripCastFromRow(row, removedCastItems = []) {
   if (!removedCastItems.length) return row
   const removedIds = new Set(removedCastItems.map((c) => c.id))
   const removedNames = new Set(removedCastItems.map((c) => c.name))
+  const removedIdentityIds = new Set(
+    removedCastItems.map((c) => c.identityId).filter(Boolean)
+  )
 
   let prompt = row.prompt || row.description || ""
   let promptMentions = (row.promptMentions || []).filter(
     (m) => !removedIds.has(m.id) && !removedNames.has(m.name)
   )
+  let identityIds = (row.identityIds || []).filter((iid) => !removedIdentityIds.has(iid))
   for (const item of removedCastItems) {
     const r = unwrapCastRefsFromText(prompt, item)
     prompt = r.text
@@ -227,6 +291,7 @@ export function stripCastFromRow(row, removedCastItems = []) {
     prompt,
     description: prompt,
     promptMentions,
+    identityIds,
     keyframes,
   }
 }
@@ -243,10 +308,11 @@ export function buildCastThemeContext(castLibrary = []) {
     .map((item) => {
       const kind = item.type === "scene" ? "场景" : "角色"
       const desc = item.description ? `，${item.description}` : ""
-      const visual = item.imageUrl
+      const idNote = item.identityId ? `（identity: ${item.identityId}）` : ""
+      const visual = castEntryHasReferenceImage(item)
         ? "保持与设定参考图一致的视觉特征"
         : "（待配图，以文字描述为准）"
-      return `${kind}「${item.name}」${desc}：${visual}`
+      return `${kind}「${item.name}」${idNote}${desc}：${visual}`
     })
     .join("；")
 }

@@ -18,6 +18,18 @@ export function isNetworkError(err) {
   return !err.response && Boolean(err.request)
 }
 
+/** 网关瞬态错误（后端重启、反代断连等） */
+export function isTransientGatewayError(err) {
+  if (!err) return false
+  const status = err.response?.status ?? err.status
+  return status === 502 || status === 503 || status === 504
+}
+
+/** 轮询可自动重试的瞬态错误 */
+export function isTransientPollError(err) {
+  return isNetworkError(err) || isTransientGatewayError(err)
+}
+
 export function networkErrorMessage() {
   return getT()("canvas.error.noBackend")
 }

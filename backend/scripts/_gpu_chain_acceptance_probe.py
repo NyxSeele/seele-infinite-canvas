@@ -52,10 +52,6 @@ def main() -> int:
     need = {
         "flux": COMFY / "diffusion_models/flux1-dev-fp8.safetensors",
         "wan_t2v": COMFY / "diffusion_models/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
-        "hv15": COMFY / "diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors",
-        "hv15_vae": COMFY / "vae/hunyuanvideo15_vae_fp16.safetensors",
-        "hv15_qwen": COMFY / "text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
-        "hv15_byt5": COMFY / "text_encoders/byt5_small_glyphxl_fp16.safetensors",
         "seedvr2": COMFY / "SEEDVR2/seedvr2_ema_3b_fp8_e4m3fn.safetensors",
     }
     for k, p in need.items():
@@ -145,64 +141,7 @@ def main() -> int:
                 report["ok"] = False
                 report["errors"].append(f"wan failed: {task.get('error') or task.get('status')}")
 
-        # ── 3. Hunyuan 1.5：workflow 构建 + ComfyUI 校验提交后中断（不全量 50 步）──
-        try:
-            from comfyui.client import (
-                HUNYUAN15_CKPT,
-                build_hunyuan_video_workflow,
-            )
-
-            wf = build_hunyuan_video_workflow(
-                "chain probe street rain",
-                "blur",
-                width=848,
-                height=480,
-                duration_sec=3,
-                seed=42,
-                model_filename=HUNYUAN15_CKPT,
-                use_distilled=True,
-                cfg_distilled=True,
-                use_cache=True,
-            )
-            types = {n.get("class_type") for n in wf.values()}
-            need_types = {"UNETLoader", "DualCLIPLoader", "EmptyHunyuanVideo15Latent", "KSampler", "MagCache"}
-            missing_t = sorted(need_types - types)
-            # Validate with ComfyUI /prompt then interrupt
-            payload = {"prompt": wf, "client_id": str(uuid.uuid4())}
-            pr = client.post(f"{comfyui_http_url()}/prompt", json=payload, timeout=60)
-            pdata = pr.json() if pr.content else {}
-            prompt_id = pdata.get("prompt_id")
-            node_errors = pdata.get("node_errors") or pdata.get("error")
-            ok_submit = pr.status_code < 400 and prompt_id and not node_errors
-            if prompt_id:
-                # interrupt immediately — we only need accept/validate
-                try:
-                    client.post(f"{comfyui_http_url()}/interrupt", timeout=10)
-                    client.post(
-                        f"{comfyui_http_url()}/queue",
-                        json={"delete": [prompt_id]},
-                        timeout=10,
-                    )
-                except Exception:
-                    pass
-            report["steps"].append({
-                "check": "hunyuan15_workflow_validate",
-                "ok": ok_submit and not missing_t,
-                "missing_nodes": missing_t,
-                "prompt_id": prompt_id,
-                "http": pr.status_code,
-                "node_errors": node_errors,
-                "note": "submitted then interrupted (not full render)",
-            })
-            if not (ok_submit and not missing_t):
-                report["ok"] = False
-                report["errors"].append(f"hunyuan15 validate failed: {node_errors or missing_t}")
-        except Exception as exc:
-            report["ok"] = False
-            report["errors"].append(f"hunyuan15: {exc}")
-            report["steps"].append({"check": "hunyuan15_workflow_validate", "ok": False, "error": str(exc)})
-
-        # ── 4. Agent：创意卡片/大纲意图（真实 LLM，非 mock）────────
+        # ── 3. Agent：创意卡片/大纲意图（真实 LLM，非 mock）────────
         t0 = time.time()
         project_id = str(uuid.uuid4())
         # create project if API requires

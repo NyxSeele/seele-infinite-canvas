@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import time
 from typing import Literal
 
 from sqlalchemy.orm import Session
@@ -20,8 +21,11 @@ DEFAULT_ROUTING_MODE = "fixed"
 VALID_MODES = frozenset({"fixed", "cheapest", "balanced"})
 USAGE_KEY_PREFIX = "llm:usage:24h:"
 USAGE_TTL_SEC = 86400
+QUOTA_EXHAUSTED_KEY_PREFIX = "llm:quota_exhausted:"
+QUOTA_EXHAUSTED_TTL_SEC = 86400
 
 _memory_usage: dict[str, int] = {}
+_memory_quota_exhausted: dict[str, float] = {}
 _memory_lock = threading.Lock()
 
 
@@ -63,8 +67,16 @@ def set_routing_mode(mode: str, db: Session | None = None) -> str:
             db.close()
 
 
+def _is_vision_text_model(row: RegisteredModel) -> bool:
+    """视觉专用模型不应作为纯文本翻译/优化候选。"""
+    mid = (row.id or "").strip().lower()
+    mstr = (getattr(row, "model_string", None) or "").strip().lower()
+    blob = f"{mid} {mstr}"
+    return "-vl-" in blob or blob.endswith("-vl") or "vl-max" in blob or "vision" in blob
+
+
 def _list_enabled_text_api(db: Session) -> list[RegisteredModel]:
-    return (
+    rows = (
         db.query(RegisteredModel)
         .filter(
             RegisteredModel.enabled.is_(True),
@@ -74,6 +86,7 @@ def _list_enabled_text_api(db: Session) -> list[RegisteredModel]:
         .order_by(RegisteredModel.id)
         .all()
     )
+    return [r for r in rows if not _is_vision_text_model(r)]
 
 
 def _default_text_model(db: Session, enabled: list[RegisteredModel]) -> RegisteredModel | None:
@@ -102,6 +115,64 @@ def get_usage_24h(model_id: str) -> int:
         return int(_memory_usage.get(model_id, 0))
 
 
+def _quota_exhausted_key(model_id: str) -> str:
+    return f"{QUOTA_EXHAUSTED_KEY_PREFIX}{model_id}"
+
+
+def mark_model_quota_exhausted(model_id: str) -> None:
+    """默认模型免费额度用尽时标记，fixed 模式下自动降级到均衡分流。"""
+    if not model_id:
+        return
+    logger.warning(
+        "[LLM_QUOTA_FALLBACK] model=%s marked quota exhausted ttl=%ss",
+        model_id,
+        QUOTA_EXHAUSTED_TTL_SEC,
+    )
+    r = get_redis()
+    if r is not None:
+        try:
+            r.setex(_quota_exhausted_key(model_id), QUOTA_EXHAUSTED_TTL_SEC, "1")
+            return
+        except Exception as exc:
+            logger.warning("Redis 写入额度用尽标记失败 model=%s: %s", model_id, exc)
+    expires_at = time.time() + QUOTA_EXHAUSTED_TTL_SEC
+    with _memory_lock:
+        _memory_quota_exhausted[model_id] = expires_at
+
+
+def is_model_quota_exhausted(model_id: str) -> bool:
+    if not model_id:
+        return False
+    r = get_redis()
+    if r is not None:
+        try:
+            return bool(r.get(_quota_exhausted_key(model_id)))
+        except Exception as exc:
+            logger.warning("Redis 读取额度用尽标记失败 model=%s: %s", model_id, exc)
+    with _memory_lock:
+        expires_at = _memory_quota_exhausted.get(model_id)
+        if not expires_at:
+            return False
+        if expires_at <= time.time():
+            _memory_quota_exhausted.pop(model_id, None)
+            return False
+        return True
+
+
+def clear_model_quota_exhausted(model_id: str) -> None:
+    """测试或 Admin 手动恢复默认模型时清除标记。"""
+    if not model_id:
+        return
+    r = get_redis()
+    if r is not None:
+        try:
+            r.delete(_quota_exhausted_key(model_id))
+        except Exception as exc:
+            logger.warning("Redis 清除额度用尽标记失败 model=%s: %s", model_id, exc)
+    with _memory_lock:
+        _memory_quota_exhausted.pop(model_id, None)
+
+
 def record_usage(model_id: str, tokens: int) -> None:
     if not model_id or tokens <= 0:
         return
@@ -120,44 +191,102 @@ def record_usage(model_id: str, tokens: int) -> None:
         _memory_usage[model_id] = _memory_usage.get(model_id, 0) + int(tokens)
 
 
-def resolve_text_model(db: Session | None = None) -> RegisteredModel | None:
-    """按 Admin 配置选择下一个文本 API 模型。"""
+def _balanced_score(row: RegisteredModel, *, min_price: float) -> float:
+    usage = float(get_usage_24h(row.id))
+    price = _price_or_inf(row)
+    if price == math.inf:
+        price = min_price * 10.0
+    ratio = price / min_price if min_price > 0 else 1.0
+    return usage * ratio
+
+
+def _min_price_for_rows(rows: list[RegisteredModel]) -> float:
+    prices = [_price_or_inf(r) for r in rows]
+    finite_prices = [p for p in prices if p < math.inf]
+    return min(finite_prices) if finite_prices else 1.0
+
+
+def _resolve_balanced_model(
+    enabled: list[RegisteredModel],
+    *,
+    exclude_ids: set[str] | None = None,
+) -> RegisteredModel | None:
+    exclude = exclude_ids or set()
+    pool = [
+        r
+        for r in enabled
+        if r.id not in exclude and not is_model_quota_exhausted(r.id)
+    ]
+    if not pool:
+        return None
+    min_price = _min_price_for_rows(pool)
+    return min(pool, key=lambda row: _balanced_score(row, min_price=min_price))
+
+
+def _resolve_balanced_ranked(
+    enabled: list[RegisteredModel],
+    *,
+    exclude_ids: set[str] | None = None,
+) -> list[RegisteredModel]:
+    exclude = exclude_ids or set()
+    pool = [
+        r
+        for r in enabled
+        if r.id not in exclude and not is_model_quota_exhausted(r.id)
+    ]
+    if not pool:
+        return []
+    min_price = _min_price_for_rows(pool)
+    return sorted(pool, key=lambda row: _balanced_score(row, min_price=min_price))
+
+
+def resolve_text_model_candidates(db: Session | None = None) -> list[RegisteredModel]:
+    """按优先级返回可尝试的文本模型：fixed 下默认优先，额度用尽后均衡其余。"""
     own = db is None
     if own:
         db = SessionLocal()
     try:
         enabled = _list_enabled_text_api(db)
         if not enabled:
-            return None
+            return []
 
         mode = get_routing_mode(db)
 
-        if mode == "fixed":
-            return _default_text_model(db, enabled)
-
         if mode == "cheapest":
             priced = [r for r in enabled if _price_or_inf(r) < math.inf]
-            if priced:
-                return min(priced, key=_price_or_inf)
-            return _default_text_model(db, enabled)
+            pool = priced or list(enabled)
+            ranked = sorted(pool, key=_price_or_inf)
+            return ranked
 
-        # balanced: score = usage_24h * (price / min_price)
-        prices = [_price_or_inf(r) for r in enabled]
-        finite_prices = [p for p in prices if p < math.inf]
-        min_price = min(finite_prices) if finite_prices else 1.0
+        if mode == "balanced":
+            # 返回完整排序列表，供调用方在超时/失败时故障转移
+            return _resolve_balanced_ranked(enabled)
 
-        def _balanced_score(row: RegisteredModel) -> float:
-            usage = float(get_usage_24h(row.id))
-            price = _price_or_inf(row)
-            if price == math.inf:
-                price = min_price * 10.0
-            ratio = price / min_price if min_price > 0 else 1.0
-            return usage * ratio
+        candidates: list[RegisteredModel] = []
+        default = _default_text_model(db, enabled)
+        if default and not is_model_quota_exhausted(default.id):
+            candidates.append(default)
 
-        return min(enabled, key=_balanced_score)
+        exclude = {row.id for row in candidates}
+        for row in _resolve_balanced_ranked(enabled, exclude_ids=exclude):
+            candidates.append(row)
+
+        if candidates:
+            return candidates
+
+        # 全部标记用尽时仍返回默认，由调用方处理硬错误
+        if default:
+            return [default]
+        return enabled
     finally:
         if own:
             db.close()
+
+
+def resolve_text_model(db: Session | None = None) -> RegisteredModel | None:
+    """按 Admin 配置选择下一个文本 API 模型。"""
+    candidates = resolve_text_model_candidates(db)
+    return candidates[0] if candidates else None
 
 
 def set_default_text_model(model_id: str, db: Session | None = None) -> RegisteredModel:

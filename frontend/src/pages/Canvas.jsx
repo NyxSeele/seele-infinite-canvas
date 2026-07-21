@@ -7,12 +7,13 @@ import ReactFlow, {
   MiniMap,
   Panel,
   useReactFlow,
-  useViewport,
+  useStore,
   addEdge,
 } from "reactflow"
 import "reactflow/dist/style.css"
 import GenerationCardNode from "../components/canvas/GenerationCardNode"
 import VideoGenerationNode from "../components/canvas/VideoGenerationNode"
+import ShortVideoFactoryNode from "../components/canvas/ShortVideoFactoryNode"
 import TextNode from "../components/canvas/TextNode"
 import TextResponseNode from "../components/canvas/TextResponseNode"
 import ScriptTableNode from "../components/canvas/ScriptTableNode"
@@ -57,6 +58,7 @@ import { TEXT_MODES, sortScriptRows } from "../utils/canvas/nodeHelpers"
 import { wsManager } from "../services/ws"
 import { useAuth } from "../contexts/AuthContext"
 import { useAssetStore, useCanvasStore, useModelStore, useTaskStore, useTeamStore } from "../stores"
+import { pickDefaultModel } from "../utils/canvas/modelCatalog"
 import {
   DEFAULT_KEYFRAMES,
   getImageNodeImages,
@@ -76,9 +78,9 @@ import { useLocale } from "../utils/locale"
 import { normalizeCanvasNode } from "../utils/canvas/nodeNormalize"
 import { getCanvasNavFlowProps } from "../utils/canvas/canvasNavMode"
 import { organizeCanvasNodes } from "../utils/canvas/organizeCanvasNodes"
-import { createCanvasProject, deleteCanvasProject, loadCanvasProject, migrateCanvasProjectToTeam } from "../services/canvasApi"
+import { createCanvasProject, deleteCanvasProject, migrateCanvasProjectToTeam } from "../services/canvasApi"
 import { useCanvasNodes } from "../hooks/canvas/useCanvasNodes"
-import { useCanvasSave } from "../hooks/canvas/useCanvasSave"
+import { useCanvasSave, writeLocalViewport } from "../hooks/canvas/useCanvasSave"
 import { useCanvasSession } from "../hooks/canvas/useCanvasSession"
 import { useTextGeneration } from "../hooks/canvas/useTextGeneration"
 import { useScreenplay } from "../hooks/canvas/useScreenplay"
@@ -91,7 +93,9 @@ import CanvasDragGhost from "../components/canvas/CanvasDragGhost"
 import CanvasProfileModal from "../components/canvas/CanvasProfileModal"
 import MigrateToTeamModal, { getMigratableTeams } from "../components/workspace/MigrateToTeamModal"
 import AgentPanel, { AGENT_REF_SOURCE_ID } from "../components/canvas/AgentPanel"
+import PipelinePanel from "../components/canvas/PipelinePanel"
 import CanvasAgentFab from "../components/canvas/CanvasAgentFab"
+import CanvasErrorBoundary from "../components/canvas/CanvasErrorBoundary"
 import OnboardingTour from "../components/Onboarding/OnboardingTour"
 import { CANVAS_STEPS } from "../components/Onboarding/tourSteps"
 import "./Canvas.css"
@@ -99,6 +103,7 @@ import "../styles/promptBarTokens.css"
 import "../components/canvas/menus-portal.css"
 import "../components/canvas/textWorkflowTheme.css"
 import "../components/canvas/AgentPanel.css"
+import "../components/canvas/PipelinePanel.css"
 import "../components/canvas/CanvasAgentFab.css"
 
 function PendingConnectionLine({ pickerMenu, theme }) {
@@ -135,6 +140,7 @@ function PendingConnectionLine({ pickerMenu, theme }) {
 const NODE_TYPES = {
   "image-gen": GenerationCardNode,
   "video-gen": VideoGenerationNode,
+  "short-video-factory": ShortVideoFactoryNode,
   "text-note": TextNode,
   "text-response": TextResponseNode,
   "script-table": ScriptTableNode,
@@ -263,6 +269,11 @@ function CanvasInner() {
   const agentSendRef = useRef(null)
   const agentRefPickRef = useRef(null)
   const savePauseRef = useRef(false)
+  const [viewportSnapshot, setViewportSnapshot] = useState(null)
+  const viewportReadyRef = useRef(false)
+  const restoreTargetRef = useRef(null)
+  const appliedRestoreNonceRef = useRef(0)
+  const [viewportRestoreNonce, setViewportRestoreNonce] = useState(0)
 
   const { user } = useAuth()
   const {
@@ -298,8 +309,17 @@ function CanvasInner() {
       setHighlightMessageIds((prev) => [...new Set([...prev, ...mentionIds])])
     }
   }, [projectId, commentTargetNodeId, threadsByNode, user?.id])
-  const { screenToFlowPosition, getNode, fitView, setCenter, getZoom } = useReactFlow()
-  const { x: vpX, y: vpY, zoom } = useViewport()
+  const { screenToFlowPosition, getNode, fitView, setCenter, getZoom, setViewport, getViewport } = useReactFlow()
+  // 仅评论面板打开时订阅视口；否则平移/缩放会拖垮整页 CanvasInner 重渲染
+  const NO_VP = useMemo(() => Object.freeze({ x: 0, y: 0, zoom: 1 }), [])
+  const viewportForComments = useStore(
+    useCallback(
+      (s) => (commentTargetNodeId ? { x: s.transform[0], y: s.transform[1], zoom: s.transform[2] } : NO_VP),
+      [commentTargetNodeId, NO_VP]
+    ),
+    (a, b) => a.x === b.x && a.y === b.y && a.zoom === b.zoom
+  )
+  const { x: vpX, y: vpY, zoom } = viewportForComments
   const setCanvasId = useCanvasStore((s) => s.setCanvasId)
   const setProjectName = useCanvasStore((s) => s.setProjectName)
   const snapToGrid = useCanvasStore((s) => s.snapToGrid)
@@ -543,9 +563,9 @@ function CanvasInner() {
     runTextGeneration: _runTextGeneration,
     onGenerateScriptTable: (outlineId) =>
       screenplayHandlersRef.current.onGenerateScriptTable?.(outlineId),
-    getDefaultTextModelId: () => useModelStore.getState().textModels[0]?.id,
-    getDefaultImageModelId: () => useModelStore.getState().imageModels[0]?.id,
-    getDefaultVideoModelId: () => useModelStore.getState().videoModels[0]?.id,
+    getDefaultTextModelId: () => pickDefaultModel(useModelStore.getState().textModels, { category: "text" }),
+    getDefaultImageModelId: () => pickDefaultModel(useModelStore.getState().imageModels, { category: "image" }),
+    getDefaultVideoModelId: () => pickDefaultModel(useModelStore.getState().videoModels, { category: "video", vidMode: "文生" }),
     patchScriptTableRow,
     runScriptTableRowGenerate,
     runScriptTableDirectImageGenerate,
@@ -559,6 +579,62 @@ function CanvasInner() {
     fitView: (opts) => fitView(opts),
     setCenter: (x, y, opts) => setCenter(x, y, opts),
   }
+
+  const handleViewportRestore = useCallback((vp) => {
+    // Always bump nonce (even null) so hydrate can apply setViewport and mark ready
+    restoreTargetRef.current = vp || null
+    if (vp) {
+      setViewportSnapshot(vp)
+      if (projectId) writeLocalViewport(projectId, vp)
+    }
+    // Unpause saves once server/local viewport is in useCanvasSave.viewportRef;
+    // keep viewportReadyRef false until rAF apply so onMoveEnd ignores default {0,0,1}
+    savePauseRef.current = false
+    setViewportRestoreNonce((n) => n + 1)
+  }, [projectId])
+
+  const handleMoveEnd = useCallback((_event, viewport) => {
+    if (!viewportReadyRef.current) return
+    const next = viewport || getViewport()
+    if (!next) return
+    const x = Number(next.x)
+    const y = Number(next.y)
+    const z = Number(next.zoom)
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || z <= 0) return
+    const normalized = { x, y, zoom: z }
+    setViewportSnapshot((prev) => {
+      if (prev && prev.x === x && prev.y === y && prev.zoom === z) return prev
+      return normalized
+    })
+    if (projectId) writeLocalViewport(projectId, normalized)
+  }, [getViewport, projectId])
+
+  // Apply restored viewport once per load nonce (do NOT depend on nodes —
+  // selection/onNodesChange would re-jump the camera during normal editing).
+  useEffect(() => {
+    if (viewportRestoreNonce === 0) return undefined
+    if (appliedRestoreNonceRef.current === viewportRestoreNonce) return undefined
+    let cancelled = false
+    let raf2 = 0
+    viewportReadyRef.current = false
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        if (cancelled) return
+        if (appliedRestoreNonceRef.current === viewportRestoreNonce) return
+        appliedRestoreNonceRef.current = viewportRestoreNonce
+        const vp = restoreTargetRef.current
+        if (vp) {
+          setViewport(vp, { duration: 0 })
+        }
+        viewportReadyRef.current = true
+      })
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf1)
+      if (raf2) cancelAnimationFrame(raf2)
+    }
+  }, [viewportRestoreNonce, setViewport])
 
   const { reloadFromServer } = useCanvasSave({
     projectId,
@@ -579,6 +655,7 @@ function CanvasInner() {
     },
     onProjectLoaded: (res) => {
       if (res?.id) setCanvasId(res.id)
+      setProjectTeamId(res?.team_id || null)
       resetHistory()
     },
     onVersionConflict: (detail) => {
@@ -589,6 +666,8 @@ function CanvasInner() {
       }
     },
     savePauseRef,
+    viewportSnapshot,
+    onViewportRestore: handleViewportRestore,
   })
 
   useEffect(() => {
@@ -603,9 +682,15 @@ function CanvasInner() {
 
   useEffect(() => {
     if (!projectId || shareToken) return
+    savePauseRef.current = true
+    viewportReadyRef.current = false
+    restoreTargetRef.current = null
+    appliedRestoreNonceRef.current = 0
+    setViewportRestoreNonce(0)
     setNodes([])
     setEdges([])
     setSelectedNodeId(null)
+    setViewportSnapshot(null)
     setProjectName(t("ws.default.canvasName"))
   }, [projectId, shareToken, setNodes, setEdges, setSelectedNodeId, setProjectName, t])
 
@@ -825,20 +910,6 @@ function CanvasInner() {
     username: user?.username || "",
   })
 
-  useEffect(() => {
-    if (!projectId || shareReadOnly) return undefined
-    let cancelled = false
-    loadCanvasProject(projectId)
-      .then((res) => {
-        if (cancelled) return
-        setProjectTeamId(res?.team_id || null)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [projectId, shareReadOnly, setProjectTeamId])
-
   const commentDisplayName = useMemo(
     () => readDisplayName(user?.username),
     [user?.username]
@@ -880,6 +951,7 @@ function CanvasInner() {
     handleAddNodeOfType,
     handleQuickCreate,
     handleUploadImage,
+    handleUploadVideo,
     handleFlyoutDragOver,
     handleFlyoutDrop,
     onConnect,
@@ -1465,9 +1537,13 @@ function CanvasInner() {
       nodesWithCommentClass.map((n) => {
         const normalized = normalizeCanvasNode(n)
         const z = normalized.zIndex ?? normalized.data?.zIndex ?? normalized.style?.zIndex ?? 0
+        const existingData = normalized.data
+        const nextData = existingData?.readOnly === readOnly
+          ? existingData
+          : { ...existingData, readOnly }
         return {
           ...normalized,
-          data: { ...normalized.data, readOnly },
+          data: nextData,
           zIndex: z,
           style: { ...normalized.style, zIndex: z },
         }
@@ -1515,6 +1591,7 @@ function CanvasInner() {
         onEdgesChange={handleEdgesChangeWrapped}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
+        onMoveEnd={handleMoveEnd}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         nodesDraggable={!refSelectMode.active && !commentMode && !readOnly}
@@ -1522,6 +1599,7 @@ function CanvasInner() {
         snapToGrid={snapToGrid && !commentMode && !readOnly}
         snapGrid={[24, 24]}
         fitView={false}
+        onlyRenderVisibleElements
         proOptions={{ hideAttribution: true }}
         deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
         onPaneClick={handlePaneClick}
@@ -1537,7 +1615,7 @@ function CanvasInner() {
         zoomOnDoubleClick={false}
         selectNodesOnDrag={false}
         {...navFlowProps}
-        connectionRadius={60}
+        connectionRadius={80}
         connectionLineStyle={connectionLineStyle}
       >
         <Background
@@ -1710,6 +1788,7 @@ function CanvasInner() {
           <CanvasLeftToolbar
             onAddNodeOfType={handleAddNodeOfType}
             onUploadImage={handleUploadImage}
+            onUploadVideo={handleUploadVideo}
             isFullscreen={isFullscreen}
             onToggleFullscreen={toggleFullscreen}
             hasUnreadComments={unreadCommentNodes > 0}
@@ -1841,6 +1920,7 @@ function CanvasInner() {
             setContextMenu(null)
           }}
           onUploadImage={() => { setContextMenu(null); handleUploadImage() }}
+          onUploadVideo={() => { setContextMenu(null); handleUploadVideo() }}
           onUndo={() => { if (undo()) setSelectedNodeId(null) }}
           onRedo={() => { if (redo()) setSelectedNodeId(null) }}
           onPaste={() => document.execCommand("paste")}
@@ -1855,6 +1935,15 @@ function CanvasInner() {
           open={agentOpen}
           disabled={!projectId || readOnly}
           onToggle={() => setAgentOpen((v) => !v)}
+        />
+      )}
+
+      {projectId && (
+        <PipelinePanel
+          projectId={projectId}
+          readOnly={readOnly}
+          agentSendRef={agentSendRef}
+          selectedNodeId={selectedNodeId}
         />
       )}
 
@@ -1901,10 +1990,12 @@ export default function Canvas() {
   }, [])
 
   return (
-    <CanvasThemeProvider>
-      <ReactFlowProvider>
-        <CanvasInner />
-      </ReactFlowProvider>
-    </CanvasThemeProvider>
+    <CanvasErrorBoundary>
+      <CanvasThemeProvider>
+        <ReactFlowProvider>
+          <CanvasInner />
+        </ReactFlowProvider>
+      </CanvasThemeProvider>
+    </CanvasErrorBoundary>
   )
 }

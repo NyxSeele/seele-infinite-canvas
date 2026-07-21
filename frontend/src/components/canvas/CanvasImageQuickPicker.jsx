@@ -3,6 +3,7 @@ import { useStore } from "reactflow"
 import { useCanvasStore } from "../../stores"
 import { useLocale } from "../../utils/locale"
 import { ensureMediaUrl } from "../../utils/mediaTicket"
+import { IMAGE_ACCEPT } from "../../utils/uploadFileKind"
 import { getImageNodeImages } from "./videoReferenceHelpers"
 import "./CanvasImageQuickPicker.css"
 
@@ -101,7 +102,7 @@ export default function CanvasImageQuickPicker({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
+              accept={IMAGE_ACCEPT}
               className="quick-picker-file-input"
               onChange={handleFileChange}
             />
@@ -134,7 +135,7 @@ export default function CanvasImageQuickPicker({
               }}
             >
               <img
-                src={item.url}
+                src={ensureMediaUrl(item.url)}
                 alt=""
                 draggable={false}
                 onDragStart={(e) => e.preventDefault()}

@@ -1,5 +1,6 @@
 /** 上传前压缩：缩小体积加快 Tunnel 传输；返回宽高供画布按比例展示。 */
 import { ratioStringFromDimensions } from "./canvas/aspectRatioLayout"
+import { isVideoFile } from "./uploadFileKind"
 
 const DEFAULT_MAX_EDGE = 1280
 const R2_MAX_EDGE = 2048
@@ -57,6 +58,10 @@ export async function prepareImageForUpload(file, options = {}) {
       aspectRatio: "1:1",
       compressed: false,
     }
+  }
+
+  if (isVideoFile(file)) {
+    throw new Error("所选文件是视频。上传视频请使用「上传视频」")
   }
 
   if (isHeicFile(file)) {

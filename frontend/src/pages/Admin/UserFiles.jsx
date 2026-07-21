@@ -63,6 +63,7 @@ function formatBytes(n) {
   return `${(v / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+/** Admin 预览走 Tunnel 同源 + mt（不用 ensureMediaUrl / AutoDL 跨域） */
 function mediaUrl(raw) {
   if (!raw) return ""
   if (raw.startsWith("http://") || raw.startsWith("https://")) {
@@ -74,14 +75,7 @@ function mediaUrl(raw) {
   const relative = stripped.startsWith("/") ? stripped : `/${stripped}`
   const base = API_BASE || ""
   const target = base ? `${base}${relative}` : relative
-  if (
-    target.includes("/api/view") ||
-    target.includes("/api/uploads") ||
-    target.includes("/api/admin/files/")
-  ) {
-    return appendMediaTicket(target)
-  }
-  return target
+  return appendMediaTicket(target)
 }
 
 function previewUrl(file) {

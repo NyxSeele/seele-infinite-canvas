@@ -74,7 +74,7 @@ async def queue_video_lut_task(
 
         _mark_stale_node_tasks_terminal(db, node_id, user.id)
 
-    check_concurrent_generations(db, user, slots_needed=1, team_id=team_id)
+    await check_concurrent_generations(db, user, slots_needed=1, team_id=team_id)
     try:
         check_and_consume(db, user.id, "video")
     except QuotaExceededError as e:

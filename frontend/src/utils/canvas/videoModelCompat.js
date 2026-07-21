@@ -5,19 +5,27 @@
  * - 首尾帧 → flf2v / fun_inpaint / 单帧 image2video
  */
 
+/** 已下线 Hunyuan 本地模型：旧画布 JSON 降级到 Wan */
+const DEPRECATED_VIDEO_MODEL_PREFIX = "hunyuan"
+
 /** 可走 text2video 的模型 */
 export const T2V_MODELS = new Set([
   "wan-2.6",
   "ltx-video",
   "ltx2-fp4",
-  "hunyuan-video",
-  "hunyuan-video-1.5",
+  "seedance-2.0",
+])
+
+/** 图+音 / 纯图生视频（需参考图，不能文生） */
+export const I2AV_MODELS = new Set([
+  "ltx23-i2av",
 ])
 
 /** 可走 image2video 的模型（全能参考 = 图生视频） */
 export const I2V_MODELS = new Set([
   "wan-i2v",
   "ltx2-fp4",
+  "ltx23-i2av",
 ])
 
 /** 可走首尾帧（FLF2V / Fun Inpaint）的模型 */
@@ -41,9 +49,33 @@ export const I2V_ONLY = new Set(
   [...I2V_MODELS].filter((id) => !T2V_MODELS.has(id)),
 )
 
-const PREFER_T2V = ["wan-2.6", "ltx2-fp4", "hunyuan-video-1.5", "hunyuan-video", "ltx-video"]
+/** 仅 I2AV，不能文生/首尾帧 */
+export const I2AV_ONLY = new Set(
+  [...I2AV_MODELS].filter((id) => !T2V_MODELS.has(id)),
+)
+
+const PREFER_T2V = ["wan-2.6", "ltx2-fp4", "ltx-video", "seedance-2.0"]
 const PREFER_KEYFRAME = ["wan-i2v", "wan-fun-inpaint"]
-const PREFER_I2V = ["wan-i2v", "ltx2-fp4"]
+const PREFER_I2V = ["wan-i2v", "ltx2-fp4", "ltx23-i2av"]
+
+function isDeprecatedVideoModel(modelId) {
+  const id = String(modelId || "").toLowerCase()
+  return id.startsWith(DEPRECATED_VIDEO_MODEL_PREFIX) || id.includes("hunyuanvideo")
+}
+
+/** 旧 Hunyuan modelId → wan-2.6 / wan-i2v */
+export function remapDeprecatedVideoModel(modelId, vidMode) {
+  const id = String(modelId || "")
+  if (!isDeprecatedVideoModel(id)) return id
+  if (vidMode === "首尾帧" || vidMode === "参考") return "wan-i2v"
+  return "wan-2.6"
+}
+
+/** ltx2 默认关闭音频（嘈杂音轨是高频差评）；用户可手动开启 */
+export function defaultVidAudioForModel(modelId) {
+  void modelId
+  return "关闭"
+}
 
 export function referenceModeForVidMode(vidMode) {
   if (vidMode === "参考") return "freeref"
@@ -77,6 +109,26 @@ export function isVideoModelCompatible(modelId, vidMode) {
   return T2V_MODELS.has(id)
 }
 
+/** 当前已启用模型目录里，哪些生成方式至少有一个可用权重 */
+/** 分镜表出视频：首尾同图 I2V 或 keyframe 模型均可 */
+export function isScriptTableVideoModelCompatible(modelId) {
+  return isVideoModelCompatible(modelId, "首尾帧") || isVideoModelCompatible(modelId, "参考")
+}
+
+export function preferredScriptTableVideoModel(models = []) {
+  return preferredModelForMode("首尾帧", models)
+    || preferredModelForMode("参考", models)
+    || models[0]?.id
+    || null
+}
+
+export function videoModesForCatalog(models = []) {
+  const ids = models.map((m) => m?.id).filter(Boolean)
+  return ["文生", "首尾帧", "参考"].filter((mode) =>
+    ids.some((id) => isVideoModelCompatible(id, mode))
+  )
+}
+
 /**
  * 为当前模式挑选首选兼容模型。
  * @param {string} vidMode
@@ -101,7 +153,7 @@ export function preferredModelForMode(vidMode, models = []) {
  */
 export function reconcileVideoModelAndMode({ modelId, vidMode, models = [] }) {
   const mode = vidMode || "首尾帧"
-  const id = String(modelId || "")
+  let id = remapDeprecatedVideoModel(String(modelId || ""), mode)
 
   if (id === "wan-fun-inpaint" && mode !== "首尾帧") {
     return { modelId: id, vidMode: "首尾帧" }
@@ -109,6 +161,14 @@ export function reconcileVideoModelAndMode({ modelId, vidMode, models = [] }) {
 
   if (id && isVideoModelCompatible(id, mode)) {
     return { modelId: id, vidMode: mode }
+  }
+
+  // 用户切到文生：优先换 T2V 权重，而不是偷偷改回图生模式
+  if (mode === "文生" && id && !T2V_MODELS.has(id)) {
+    const next = preferredModelForMode("文生", models)
+    if (next && isVideoModelCompatible(next, "文生")) {
+      return { modelId: next, vidMode: "文生" }
+    }
   }
 
   // 文生权重用在图生/首尾帧 → 换兼容模型
@@ -120,8 +180,12 @@ export function reconcileVideoModelAndMode({ modelId, vidMode, models = [] }) {
     return { modelId: id, vidMode: "文生" }
   }
 
-  // 图生专用权重不能文生 → 全能参考（I2V）
-  if (id && I2V_ONLY.has(id) && mode === "文生") {
+  // 图生 / I2AV 专用权重切到文生：换 T2V 模型（保留文生模式）
+  if (id && (I2V_ONLY.has(id) || I2AV_ONLY.has(id)) && mode === "文生") {
+    const next = preferredModelForMode("文生", models)
+    if (next && isVideoModelCompatible(next, "文生")) {
+      return { modelId: next, vidMode: "文生" }
+    }
     return { modelId: id, vidMode: "参考" }
   }
 

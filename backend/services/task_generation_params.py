@@ -36,9 +36,12 @@ def build_image_generation_params(
     reference_images: list | None = None,
     use_reactor: bool = False,
     mock: bool = False,
+    project_id: str | None = None,
+    identity_ids: list | None = None,
+    entity_ref_audit: list | None = None,
 ) -> dict[str, Any]:
     refs = reference_images or []
-    return {
+    params: dict[str, Any] = {
         "ratio": ratio,
         "quality": quality,
         "width": width,
@@ -47,7 +50,13 @@ def build_image_generation_params(
         "reference_count": len(refs),
         "use_reactor": bool(use_reactor),
         "mock": bool(mock),
+        "project_id": project_id,
     }
+    if identity_ids:
+        params["identity_ids"] = identity_ids
+    if entity_ref_audit:
+        params["entity_ref_audit"] = entity_ref_audit
+    return params
 
 
 def build_video_generation_params(
@@ -61,9 +70,12 @@ def build_video_generation_params(
     reference_images: list | None = None,
     use_reactor: bool = False,
     mock: bool = False,
+    project_id: str | None = None,
+    identity_ids: list | None = None,
+    entity_ref_audit: list | None = None,
 ) -> dict[str, Any]:
     refs = reference_images or []
-    return {
+    params: dict[str, Any] = {
         "ratio": ratio,
         "resolution": resolution,
         "duration": duration,
@@ -74,4 +86,10 @@ def build_video_generation_params(
         "reference_count": len(refs),
         "use_reactor": bool(use_reactor),
         "mock": bool(mock),
+        "project_id": project_id,
     }
+    if identity_ids:
+        params["identity_ids"] = identity_ids
+    if entity_ref_audit:
+        params["entity_ref_audit"] = entity_ref_audit
+    return params

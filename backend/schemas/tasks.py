@@ -16,7 +16,7 @@ class SubmitRequest(BaseModel):
     team_id: str | None = Field(default=None, description="团队上下文")
     prompt: str = Field(..., description="画面描述")
     negative_prompt: str = Field(
-        default="模糊, 低质量, 水印, 文字",
+        default="blurry, low quality, watermark, text",
         description="不想要的元素",
     )
     style: str = Field(default="realistic", description="realistic | anime | oil")
@@ -137,12 +137,20 @@ class CanvasImageRequest(BaseModel):
         default=False,
         description="G40：flux-pulid 出图后接 ReActor 单帧换脸（需角色正脸参考图）",
     )
+    identity_ids: list[str] | None = Field(
+        default=None,
+        description="本镜绑定的 identityId 列表（任务审计）",
+    )
+    entity_ref_audit: list[dict] | None = Field(
+        default=None,
+        description="角色参考图注入审计",
+    )
 
 
 class CanvasVideoRequest(BaseModel):
     team_id: str | None = Field(default=None, description="团队上下文")
     """画布视频生成卡片请求体。
-    model: 视频模型标识，如 wan-2.6 / ltx-video / hunyuan-video
+    model: 视频模型标识，如 wan-2.6 / ltx-video / seedance-2.0
     prompt: 画面描述
     generation_mode: 生成方式，首尾帧 | 参考
     ratio: 宽高比，16:9 | 9:16 | 1:1
@@ -183,8 +191,8 @@ class CanvasVideoRequest(BaseModel):
         default=None, description="画布项目 ID，用于解析 @mentions"
     )
     sampling_profile: Optional[Literal["fast", "quality"]] = Field(
-        default="fast",
-        description="Wan 采样档位：fast=4步；quality=8步（有运镜时建议 quality）",
+        default="quality",
+        description="采样档位：Wan fast=4步/quality=8步；LTX2 默认 quality",
     )
     camera_move: Optional[str] = Field(
         default="auto",
@@ -210,7 +218,19 @@ class CanvasVideoRequest(BaseModel):
         default=None,
         ge=1,
         le=100,
-        description="可选采样步数（探针/高级覆盖；Hunyuan 默认 50）",
+        description="可选采样步数（探针/高级覆盖）",
+    )
+    use_cache: Optional[bool] = Field(
+        default=None,
+        description="保留字段（历史兼容；当前未使用）",
+    )
+    identity_ids: Optional[list[str]] = Field(
+        default=None,
+        description="本镜绑定的 identityId 列表（任务审计）",
+    )
+    entity_ref_audit: Optional[list[dict]] = Field(
+        default=None,
+        description="角色参考图注入审计",
     )
     width: Optional[int] = Field(
         default=None,
@@ -253,8 +273,8 @@ class VideoEnhanceRequest(BaseModel):
         description="SeedVR2 色彩校正",
     )
     model_size: Literal["3b", "7b"] = Field(
-        default="3b",
-        description="SeedVR2 DiT 模型规模",
+        default="7b",
+        description="SeedVR2 DiT 规模；默认 7b（H800 顶配 FP16）",
     )
     node_id: str | None = Field(default=None, description="前端 video-gen 节点 ID")
     client_id: Optional[str] = Field(
@@ -277,6 +297,23 @@ class VideoEnhanceRecommendRequest(BaseModel):
 class VideoEnhanceRecommendResponse(BaseModel):
     params: dict
     reasoning: str
+
+
+class ImageEnhanceRequest(BaseModel):
+    image_url: str = Field(..., description="待增强静帧 URL")
+    upscale_factor: float = Field(default=2.0, description="1.0 / 1.5 / 2.0 / 3.0")
+    strength: Literal["normal", "sharp"] = Field(default="normal")
+    input_noise_scale: float = Field(default=0.25, ge=0.0, le=1.0)
+    color_correction: Literal["lab", "none"] = Field(default="lab")
+    model_size: Literal["3b", "7b"] = Field(
+        default="7b",
+        description="SeedVR2 DiT 规模；默认 7b FP16 顶配",
+    )
+    node_id: str | None = Field(default=None, description="前端 image-gen 节点 ID")
+    project_id: Optional[str] = Field(default=None, description="画布项目 ID")
+    team_id: Optional[str] = Field(default=None)
+    client_id: Optional[str] = Field(default=None)
+    trace_id: Optional[str] = Field(default=None)
 
 
 class VideoLutRequest(BaseModel):

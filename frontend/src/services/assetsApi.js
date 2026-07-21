@@ -1,4 +1,5 @@
 import api from "./api"
+import { mediaClientFor } from "./mediaApi"
 
 export async function fetchUserAssets({ kind = null, teamId = null } = {}) {
   const params = {}
@@ -23,6 +24,7 @@ export async function uploadUserAsset({
   source_node_id,
   team_id,
 }) {
+  const client = await mediaClientFor("canvas")
   const form = new FormData()
   form.append("file", file)
   form.append("name", name)
@@ -32,7 +34,7 @@ export async function uploadUserAsset({
   if (source_canvas_name) form.append("source_canvas_name", source_canvas_name)
   if (source_node_id) form.append("source_node_id", source_node_id)
   if (team_id) form.append("team_id", team_id)
-  const res = await api.post("/api/assets/upload", form, {
+  const res = await client.post("/api/assets/upload", form, {
     timeout: 120_000,
   })
   return res.data

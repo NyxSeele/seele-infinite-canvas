@@ -178,7 +178,7 @@
   },
   "50": {
     "inputs": {
-      "model_path": "svdq-int4_r32-flux.1-dev.safetensors",
+      "model_path": "svdq-fp4_r32-flux.1-dev.safetensors",
       "cache_threshold": 0.09000000000000002,
       "attention": "nunchaku-fp16",
       "cpu_offload": "auto",

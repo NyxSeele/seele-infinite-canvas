@@ -7,9 +7,11 @@ import {
 import { canvasWsManager } from "../../services/canvasWs"
 import { readDisplayName } from "../../utils/canvas/commentUserDisplay"
 import { AVATAR_CHANGED_EVENT } from "../../utils/canvas/userAvatar"
+import { createRateLimitBackoffState } from "../../utils/canvas/rateLimitBackoff"
 
-const PING_MS = 3000
-const HTTP_POLL_MS = 3000
+const PING_MS = 10000
+/** HTTP 兜底拉取；有 WS presence_changed 时不必与 ping 同频 */
+const HTTP_POLL_MS = 30000
 
 function normalizeMembers(list) {
   if (!Array.isArray(list)) return []
@@ -32,9 +34,9 @@ function normalizeMembers(list) {
 
 export function useCanvasPresence(projectId, { enabled = true, isEditor = false, username = "" } = {}) {
   const [members, setMembers] = useState([])
-  const [avatarTick, setAvatarTick] = useState(0)
   const isEditorRef = useRef(isEditor)
   const usernameRef = useRef(username)
+  const sendPingRef = useRef(null)
 
   useEffect(() => {
     isEditorRef.current = isEditor
@@ -49,7 +51,10 @@ export function useCanvasPresence(projectId, { enabled = true, isEditor = false,
   }, [])
 
   useEffect(() => {
-    const onAvatar = () => setAvatarTick((n) => n + 1)
+    const onAvatar = () => {
+      // 头像变更只刷新一次 ping payload，勿重建整套 interval
+      void sendPingRef.current?.()
+    }
     window.addEventListener(AVATAR_CHANGED_EVENT, onAvatar)
     return () => window.removeEventListener(AVATAR_CHANGED_EVENT, onAvatar)
   }, [])
@@ -57,10 +62,12 @@ export function useCanvasPresence(projectId, { enabled = true, isEditor = false,
   useEffect(() => {
     if (!enabled || !projectId) {
       setMembers([])
+      sendPingRef.current = null
       return undefined
     }
 
     let cancelled = false
+    const rateLimit = createRateLimitBackoffState()
 
     const buildPayload = () => ({
       is_editor: isEditorRef.current,
@@ -69,22 +76,32 @@ export function useCanvasPresence(projectId, { enabled = true, isEditor = false,
     })
 
     const sendPing = async () => {
-      void avatarTick
+      if (rateLimit.paused) return
       const payload = buildPayload()
       canvasWsManager.sendPresence(payload)
       try {
         const list = await pingCanvasPresence(projectId, payload)
-        if (!cancelled) applyMembers(list)
+        if (!cancelled) {
+          rateLimit.reset()
+          applyMembers(list)
+        }
       } catch (err) {
+        if (rateLimit.apply(err)) return
         console.warn("[presence] ping failed", err?.response?.status || err?.message)
       }
     }
+    sendPingRef.current = sendPing
 
     const pollHttp = async () => {
+      if (rateLimit.paused) return
       try {
         const list = await fetchCanvasPresence(projectId)
-        if (!cancelled) applyMembers(list)
+        if (!cancelled) {
+          rateLimit.reset()
+          applyMembers(list)
+        }
       } catch (err) {
+        if (rateLimit.apply(err)) return
         console.warn("[presence] poll failed", err?.response?.status || err?.message)
       }
     }
@@ -92,7 +109,6 @@ export function useCanvasPresence(projectId, { enabled = true, isEditor = false,
     const refreshNow = () => {
       if (cancelled) return
       void sendPing()
-      void pollHttp()
     }
 
     const off = canvasWsManager.addListener((msg) => {
@@ -102,23 +118,28 @@ export function useCanvasPresence(projectId, { enabled = true, isEditor = false,
     })
 
     const onVisible = () => {
-      if (document.visibilityState === "visible") refreshNow()
+      if (document.visibilityState === "visible") {
+        refreshNow()
+        void pollHttp()
+      }
     }
     document.addEventListener("visibilitychange", onVisible)
 
     refreshNow()
+    void pollHttp()
     const pingTimer = window.setInterval(sendPing, PING_MS)
     const httpTimer = window.setInterval(pollHttp, HTTP_POLL_MS)
 
     return () => {
       cancelled = true
+      sendPingRef.current = null
       off()
       document.removeEventListener("visibilitychange", onVisible)
       window.clearInterval(pingTimer)
       window.clearInterval(httpTimer)
       void leaveCanvasPresence(projectId).catch(() => {})
     }
-  }, [enabled, projectId, isEditor, username, applyMembers, avatarTick])
+  }, [enabled, projectId, applyMembers])
 
   return { members, count: members.length }
 }

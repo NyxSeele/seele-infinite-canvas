@@ -41,7 +41,7 @@
 }
 
 .wds-menu-portal {
-  position: fixed;
+  position: fixed !important;
   background: var(--tl-card-bg, #ffffff);
   border: 1px solid var(--tl-card-border, #e5e5e5);
   box-shadow: var(--tl-menu-shadow, 0 12px 40px rgba(0, 0, 0, 0.12));

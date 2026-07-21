@@ -27,7 +27,9 @@ function CommentAuthorPreview({ open, anchorRef, member, authorName, avatar, img
   useEffect(() => {
     if (!open || !anchorRef?.current) return undefined
     const update = () => {
-      const r = anchorRef.current.getBoundingClientRect()
+      const anchor = anchorRef.current
+      if (!anchor) return
+      const r = anchor.getBoundingClientRect()
       setPos({ top: r.bottom + 6, left: r.left })
     }
     update()

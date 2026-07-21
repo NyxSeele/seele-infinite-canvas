@@ -10,11 +10,12 @@ import { Z_NODE_DOTS_MENU } from "../../utils/zIndexLayers"
 const NODE_ITEM_KEYS = [
   { type: "image-gen", icon: "sparkle", labelKey: "canvas.menu.imageGen" },
   { type: "video-gen", icon: "video", labelKey: "canvas.menu.videoGen" },
+  { type: "short-video-factory", icon: "video", labelKey: "canvas.menu.shortVideoFactory" },
   { type: "text-note", icon: "text", labelKey: "canvas.menu.textNote" },
   { type: "script-table", icon: "script", labelKey: "canvas.menu.scriptTable" },
 ]
 
-export default function CanvasRightClickMenu({ x, y, onCreateNode, onUploadImage, onUndo, onRedo, onPaste, onClose }) {
+export default function CanvasRightClickMenu({ x, y, onCreateNode, onUploadImage, onUploadVideo, onUndo, onRedo, onPaste, onClose }) {
   const { t } = useLocale()
   const ref = useRef(null)
   const [addNodeHover, setAddNodeHover] = useState(false)
@@ -87,6 +88,10 @@ export default function CanvasRightClickMenu({ x, y, onCreateNode, onUploadImage
       <button className="tl-context-item" onClick={() => { requestClose(); onUploadImage?.() }}>
         <span className="tl-context-icon"><LineIcon name="upload" size={16} /></span>
         <span>{t("canvas.menu.uploadImage")}</span>
+      </button>
+      <button className="tl-context-item" onClick={() => { requestClose(); onUploadVideo?.() }}>
+        <span className="tl-context-icon"><LineIcon name="video" size={16} /></span>
+        <span>{t("canvas.menu.uploadVideo")}</span>
       </button>
 
       <div

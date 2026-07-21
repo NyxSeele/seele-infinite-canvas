@@ -1,4 +1,9 @@
 import api, { API_BASE } from "./api"
+import {
+  getUploadCapabilities,
+  mediaClientFor,
+  shouldUseMediaBase,
+} from "./mediaApi"
 import { setMediaTicket } from "../utils/mediaTicket"
 import {
   isHeicFile,
@@ -7,6 +12,13 @@ import {
 } from "../utils/compressImageForUpload"
 import { ratioStringFromDimensions, sizeForAspectRatio } from "../utils/canvas/aspectRatioLayout"
 import { encodePublicMediaUrl } from "../utils/encodePublicMediaUrl"
+import { assertImageUploadFile } from "../utils/uploadFileKind"
+import { ensureMediaUrl } from "../utils/mediaTicket"
+import {
+  fetchR2PublicBase,
+  rememberR2PublicBaseFromUrl,
+  resolveCanvasR2MediaUrl,
+} from "../utils/r2MediaUrl"
 import { uploadToPresignedUrl } from "./teamFilesApi"
 
 const UPLOAD_TIMEOUT_MS = 120_000
@@ -44,6 +56,13 @@ function resolveUploadMeta(prep, data) {
   return { width, height, aspectRatio }
 }
 
+function normalizeUploadedUrl(path) {
+  if (!path) return path
+  if (path.startsWith("http")) return ensureMediaUrl(path)
+  const sameOrigin = `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`
+  return ensureMediaUrl(sameOrigin)
+}
+
 /** 仅当后端明确返回 R2 不可用时才走 Tunnel 回退 */
 function shouldFallbackToServerUpload(err) {
   const status = err?.response?.status
@@ -51,9 +70,10 @@ function shouldFallbackToServerUpload(err) {
 }
 
 async function postImageFile(file, { onProgress } = {}) {
+  const client = await mediaClientFor("canvas")
   const formData = new FormData()
   formData.append("file", file)
-  const res = await api.post("/api/upload/image", formData, {
+  const res = await client.post("/api/upload/image", formData, {
     timeout: UPLOAD_TIMEOUT_MS,
     onUploadProgress: onProgress
       ? (event) => {
@@ -67,10 +87,7 @@ async function postImageFile(file, { onProgress } = {}) {
   if (res.data?.media_ticket) {
     setMediaTicket(res.data.media_ticket, res.data.expires_at)
   }
-  const url = path.startsWith("http")
-    ? path
-    : `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`
-  return { res, url }
+  return { res, url: normalizeUploadedUrl(path) }
 }
 
 async function uploadImageViaR2Direct(file, { onProgress, onPhase, width, height } = {}) {
@@ -98,6 +115,7 @@ async function uploadImageViaR2Direct(file, { onProgress, onPhase, width, height
   )
   const data = registerRes.data
   const url = encodePublicMediaUrl(data.url)
+  rememberR2PublicBaseFromUrl(url)
   return {
     url,
     width: data.width,
@@ -127,11 +145,34 @@ export function buildUploadedImageNodePatch(meta) {
   }
 }
 
-/** 上传图片并返回 URL + 宽高比（画布上传用；优先 R2 直传，大图先压缩） */
+/** 上传图片并返回 URL + 宽高比（画布上传用；local 优先 AutoDL 公网，否则 R2 直传） */
 export async function uploadImageFileWithMeta(file, { onProgress, onPhase } = {}) {
+  assertImageUploadFile(file)
+  await getUploadCapabilities()
+
   if (isHeicFile(file)) {
     onPhase?.("prepare")
     const prep = await prepareImageForUpload(file)
+    try {
+      onPhase?.("upload")
+      const { res, url } = await postImageFile(prep.file, { onProgress })
+      const meta = resolveUploadMeta(prep, res.data)
+      return { url, ...meta }
+    } catch (err) {
+      const msg = uploadErrorMessage(err)
+      const wrapped = new Error(msg)
+      wrapped.cause = err
+      wrapped.response = err?.response
+      throw wrapped
+    }
+  }
+
+  if (shouldUseMediaBase("canvas")) {
+    onPhase?.("prepare")
+    const prep = await prepareImageForUpload(file, {
+      maxEdge: 2048,
+      skipBelowBytes: 2 * 1024 * 1024,
+    })
     try {
       onPhase?.("upload")
       const { res, url } = await postImageFile(prep.file, { onProgress })
@@ -188,6 +229,19 @@ export async function resolveReferenceUrlForApi(url) {
   const trimmed = url.trim()
   if (!trimmed) return null
   if (trimmed.startsWith("http") && !isDataUrl(trimmed)) {
+    rememberR2PublicBaseFromUrl(trimmed)
+    const resolved = resolveCanvasR2MediaUrl(trimmed)
+    if (resolved.startsWith("http")) {
+      try {
+        const parsed = new URL(resolved)
+        if (parsed.pathname.startsWith("/api/uploads/") || parsed.pathname.startsWith("/uploads/")) {
+          return parsed.pathname.split("?")[0]
+        }
+      } catch {
+        /* keep resolved */
+      }
+      return resolved
+    }
     try {
       const parsed = new URL(trimmed)
       if (parsed.pathname.startsWith("/api/uploads/") || parsed.pathname.startsWith("/uploads/")) {
@@ -198,7 +252,12 @@ export async function resolveReferenceUrlForApi(url) {
     }
     return trimmed
   }
-  if (!isDataUrl(trimmed) && !isBlobUrl(trimmed)) return trimmed
+  if (!isDataUrl(trimmed) && !isBlobUrl(trimmed)) {
+    await fetchR2PublicBase(api)
+    const resolved = resolveCanvasR2MediaUrl(trimmed)
+    if (resolved.startsWith("http")) return resolved
+    return trimmed
+  }
 
   const res = await fetch(trimmed)
   const blob = await res.blob()

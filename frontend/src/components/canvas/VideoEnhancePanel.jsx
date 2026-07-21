@@ -54,6 +54,7 @@ function AdvancedFields({
   onColorCorrectionChange,
   onModelSizeChange,
   compact = false,
+  availableModelSizes = ["3b", "7b"],
 }) {
   const [openTipKey, setOpenTipKey] = useState(null)
   const toggleTip = (key) => {
@@ -190,8 +191,8 @@ function AdvancedFields({
             disabled={disabled}
             onChange={(e) => onModelSizeChange?.(e.target.value)}
           >
-            <option value="3b">3B</option>
-            <option value="7b">7B</option>
+            {availableModelSizes.includes("3b") ? <option value="3b">3B</option> : null}
+            {availableModelSizes.includes("7b") ? <option value="7b">7B</option> : null}
           </select>
         </div>
       </FieldBlock>
@@ -226,6 +227,7 @@ export default function VideoEnhancePanel({
   batchSize = 8,
   colorCorrection = "lab",
   modelSize = "7b",
+  availableModelSizes = ["3b", "7b"],
   error = null,
   onManualModeChange,
   onAdvancedOpenChange,
@@ -284,6 +286,7 @@ export default function VideoEnhancePanel({
         batchSize={batchSize}
         colorCorrection={colorCorrection}
         modelSize={modelSize}
+        availableModelSizes={availableModelSizes}
         onUpscaleChange={onUpscaleChange}
         onStrengthChange={onStrengthChange}
         onInputNoiseScaleChange={onInputNoiseScaleChange}

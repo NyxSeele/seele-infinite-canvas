@@ -24,7 +24,9 @@ _memory_output_grants: dict[str, float] = {}
 
 _FILENAME_SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 _UPLOAD_PATH = re.compile(
-    r"^(?:images|videos|audio)/[A-Za-z0-9._-]+$|^luts/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.cube$"
+    r"^(?:images|videos|audio)/[A-Za-z0-9._-]+"
+    r"|^luts/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.cube$"
+    r"|^team/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
 )
 
 
@@ -246,6 +248,23 @@ def user_can_access_comfy_output(
 def user_can_access_upload(db: Session, user: User, rel_path: str) -> bool:
     if user.role == "admin":
         return True
+    if rel_path.startswith("team/"):
+        parts = rel_path.split("/")
+        if len(parts) >= 3:
+            team_id = parts[1]
+            from models.team import TeamMember
+
+            member = (
+                db.query(TeamMember)
+                .filter(
+                    TeamMember.team_id == team_id,
+                    TeamMember.user_id == user.id,
+                    TeamMember.role.in_(("owner", "admin", "editor")),
+                )
+                .first()
+            )
+            return member is not None
+        return False
     filename = rel_path.split("/")[-1]
     if (
         db.query(Task.id)

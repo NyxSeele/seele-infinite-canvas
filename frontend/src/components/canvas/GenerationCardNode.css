@@ -80,6 +80,35 @@
   flex-shrink: 0;
 }
 
+.gn2-pulid-face-hint {
+  margin: 0 4px 6px 2px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ff6b6b;
+  background: rgba(255, 80, 80, 0.1);
+  border: 1px solid rgba(255, 80, 80, 0.35);
+  pointer-events: none;
+}
+
+.gn2-reactor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 4px 6px 2px;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.gn2-reactor-toggle-input {
+  margin: 0;
+  cursor: pointer;
+}
+
 /* 标签行：浮在卡片上方 */
 .gn2-label-row {
   display: flex;
@@ -879,6 +908,110 @@ body:has(.rf-page--light) .cell-menu-portal .cell-dots-submenu-title {
   color: rgba(255, 255, 255, 0.7);
   font-size: 12px;
   cursor: pointer;
+}
+
+.gn2-promote-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  pointer-events: all;
+}
+
+.gn2-promote-btn {
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(180, 150, 80, 0.35);
+  background: rgba(140, 110, 50, 0.2);
+  color: rgba(230, 210, 160, 0.95);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  width: 100%;
+}
+
+.gn2-promote-btn:hover {
+  background: rgba(140, 110, 50, 0.32);
+}
+
+.rf-page--light .gn2-promote-row {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+.rf-page--light .gn2-promote-btn {
+  border-color: rgba(140, 110, 50, 0.3);
+  background: rgba(180, 140, 60, 0.12);
+  color: rgba(80, 60, 20, 0.9);
+}
+
+.gn2-promote-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.rf-page--light .gn2-promote-popover {
+  border-color: rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.gn2-promote-popover-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gn2-promote-popover-hint {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.rf-page--light .gn2-promote-popover-hint {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.gn2-promote-select {
+  min-height: 36px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+}
+
+.rf-page--light .gn2-promote-select {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.gn2-promote-confirm {
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 180, 255, 0.35);
+  background: rgba(80, 140, 220, 0.2);
+  color: rgba(200, 220, 255, 0.95);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.gn2-promote-confirm:hover {
+  background: rgba(80, 140, 220, 0.32);
+}
+
+.rf-page--light .gn2-promote-confirm {
+  color: rgba(30, 60, 120, 0.95);
+  background: rgba(80, 140, 220, 0.12);
 }
 
 /* ── Plus zone: fixed at card vertical center, slides out on hover ── */

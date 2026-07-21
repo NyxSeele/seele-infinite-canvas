@@ -1,0 +1,245 @@
+{
+  "pass": true,
+  "started_at": "2026-07-21T09:16:03.601944+00:00",
+  "base": "http://127.0.0.1:7788",
+  "chapters": {
+    "A_openmontage": {
+      "checks": [
+        {
+          "name": "pipeline_velora_canvas_9_stages",
+          "pass": true,
+          "status": 200,
+          "stage_count": 9,
+          "stage_names": [
+            "create_text_note",
+            "start_text_generation",
+            "generate_outline",
+            "generate_script_table",
+            "split_shot_beats",
+            "generate_storyboard",
+            "generate_video",
+            "manage_cast",
+            "manage_scene"
+          ]
+        },
+        {
+          "name": "tool_envelope_9_steps",
+          "pass": true,
+          "step_count": 9,
+          "steps": [
+            "create_text_note",
+            "start_text_generation",
+            "generate_outline",
+            "generate_script_table",
+            "split_shot_beats",
+            "generate_storyboard",
+            "generate_video",
+            "manage_cast",
+            "manage_scene"
+          ]
+        },
+        {
+          "name": "manifest_recorded_steps",
+          "pass": true,
+          "recorded": [
+            "create_text_note",
+            "start_text_generation",
+            "generate_outline"
+          ],
+          "expected_relative": [
+            "create_text_note",
+            "start_text_generation",
+            "generate_outline"
+          ],
+          "subprocess_verdict": "PASS"
+        },
+        {
+          "name": "text_generation_mode_real",
+          "pass": true,
+          "mode": "real_completed",
+          "soft": true
+        }
+      ],
+      "skip": [
+        {
+          "name": "A2_skill_menu",
+          "status": "SKIP",
+          "reason": "no-browser"
+        },
+        {
+          "name": "A3_pipeline_panel",
+          "status": "SKIP",
+          "reason": "no-browser"
+        }
+      ],
+      "warnings": [],
+      "pass": true
+    },
+    "B_dramaclaw": {
+      "checks": [
+        {
+          "name": "pytest_entity_identity_and_prompt_builder",
+          "pass": true,
+          "soft": false
+        },
+        {
+          "name": "build_shot_missing_identity_422",
+          "pass": true,
+          "status": 422,
+          "code": "missing_identity"
+        },
+        {
+          "name": "build_shot_with_refs_no_missing_identity",
+          "pass": true,
+          "status": 200
+        }
+      ],
+      "skip": [
+        {
+          "name": "B3_video_metadata_identity_ids",
+          "status": "SKIP",
+          "reason": "no dedicated test"
+        },
+        {
+          "name": "B4_explore_track_ui",
+          "status": "SKIP",
+          "reason": "no-browser"
+        }
+      ],
+      "warnings": [],
+      "pass": true
+    },
+    "C_short_video": {
+      "checks": [
+        {
+          "name": "pytest_short_video_suite",
+          "pass": true
+        },
+        {
+          "name": "short_video_factory_probe_slide",
+          "pass": true,
+          "exit_code": 0,
+          "stdout_tail": "al\": \"/root/autodl-tmp/AIStudio/data/short_video/77307083-5c66-4482-8ae3-7222e667e743/final.mp4\", \"visual_source\": \"slide\", \"durations\": [2.16, 2.16], \"cues\": [{\"text\": \"Velora 探针短视频 · 第1段\", \"start\": 0.0, \"end\": 2.16}, {\"text\": \"Velora 探针短视频 · 第2段\", \"start\": 2.16, \"end\": 4.32}], \"non_uniform\": true}"
+        },
+        {
+          "name": "short_video_factory_probe_stock",
+          "pass": true,
+          "exit_code": 0,
+          "stdout_tail": "al\": \"/root/autodl-tmp/AIStudio/data/short_video/c0a70a80-d4e2-4014-8f84-71ab7ea66ff2/final.mp4\", \"visual_source\": \"stock\", \"durations\": [2.16, 2.16], \"cues\": [{\"text\": \"Velora 探针短视频 · 第1段\", \"start\": 0.0, \"end\": 2.16}, {\"text\": \"Velora 探针短视频 · 第2段\", \"start\": 2.16, \"end\": 4.32}], \"non_uniform\": true}"
+        },
+        {
+          "name": "backend_mock_env_for_http",
+          "pass": true,
+          "detail": "injected MOCK into supervisor env; health ok"
+        },
+        {
+          "name": "short_video_http_completed",
+          "pass": true,
+          "task_id": "2c0894ac-cee3-4647-beab-f2b2828084db",
+          "status": "completed",
+          "file_bytes": 23455,
+          "enable_tts": true,
+          "burn_captions": true
+        }
+      ],
+      "skip": [
+        {
+          "name": "C1_canvas_node_ui",
+          "status": "SKIP",
+          "reason": "no-browser"
+        }
+      ],
+      "warnings": [],
+      "pass": true
+    },
+    "D_gateway": {
+      "checks": [
+        {
+          "name": "get_admin_model_gateway",
+          "pass": true,
+          "status": 200,
+          "fields": [
+            "enabled",
+            "base_url",
+            "default_model",
+            "api_key_masked"
+          ],
+          "gateway": {
+            "enabled": false,
+            "base_url": "",
+            "default_model": "",
+            "api_key_masked": null
+          }
+        },
+        {
+          "name": "pytest_model_gateway_resolver",
+          "pass": true
+        }
+      ],
+      "skip": [],
+      "warnings": [],
+      "pass": true
+    }
+  },
+  "pytest": {
+    "commands": [
+      "/root/autodl-tmp/AIStudio/backend/.venv/bin/pytest tests/test_tool_registry.py -q --tb=no",
+      "/root/autodl-tmp/AIStudio/backend/.venv/bin/pytest tests/test_entity_identity_injection.py tests/test_prompt_builder.py -q --tb=no",
+      "/root/autodl-tmp/AIStudio/backend/.venv/bin/pytest tests/test_edge_tts_service.py tests/test_short_video_factory.py tests/test_stock_material_service.py -q --tb=no",
+      "/root/autodl-tmp/AIStudio/backend/.venv/bin/pytest tests/test_model_gateway_resolver.py -q --tb=no"
+    ],
+    "passed": 65,
+    "failed": 0,
+    "all_pass": true,
+    "runs": [
+      {
+        "label": "A_tool_registry",
+        "command": "/root/autodl-tmp/AIStudio/backend/.venv/bin/pytest tests/test_tool_registry.py -q --tb=no",
+        "passed": 5,
+        "failed": 0,
+        "exit_code": 0,
+        "summary_tail": ".....                                                                    [100%]\n5 passed in 0.04s"
+      },
+      {
+        "label": "B_dramaclaw",
+        "command": "/root/autodl-tmp/AIStudio/backend/.venv/bin/pytest tests/test_entity_identity_injection.py tests/test_prompt_builder.py -q --tb=no",
+        "passed": 39,
+        "failed": 0,
+        "exit_code": 0,
+        "summary_tail": ".......................................                                  [100%]\n39 passed in 0.76s"
+      },
+      {
+        "label": "C_short_video",
+        "command": "/root/autodl-tmp/AIStudio/backend/.venv/bin/pytest tests/test_edge_tts_service.py tests/test_short_video_factory.py tests/test_stock_material_service.py -q --tb=no",
+        "passed": 17,
+        "failed": 0,
+        "exit_code": 0,
+        "summary_tail": ".................                                                        [100%]\n17 passed in 0.83s"
+      },
+      {
+        "label": "D_gateway",
+        "command": "/root/autodl-tmp/AIStudio/backend/.venv/bin/pytest tests/test_model_gateway_resolver.py -q --tb=no",
+        "passed": 4,
+        "failed": 0,
+        "exit_code": 0,
+        "summary_tail": "....                                                                     [100%]\n4 passed in 0.27s"
+      }
+    ]
+  },
+  "issues": [],
+  "login_user": "seele",
+  "health": {
+    "pass": true,
+    "detail": "health ok"
+  },
+  "slots": {
+    "user_id": 1,
+    "active_before": 0,
+    "stale_released": 0,
+    "zombie_failed": 0,
+    "active_after": 0,
+    "redis_slots_after": 0
+  },
+  "duration_s": 119.0,
+  "finished_at": "2026-07-21T09:18:02.597750+00:00"
+}

@@ -86,7 +86,11 @@ async def get_model_capabilities(
     model = MODEL_MAP.get(model_id)
     if not model:
         raise HTTPException(status_code=404, detail="模型不存在")
-    return model.get("capabilities") or {}
+    caps = dict(model.get("capabilities") or {})
+    backend = (model.get("video_backend") or model.get("workflow_type") or "").strip().lower()
+    if backend:
+        caps["video_backend"] = backend
+    return caps
 
 
 @router.post("/select")

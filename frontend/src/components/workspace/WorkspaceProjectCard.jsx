@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ProjectThumb, formatProjectDate } from "./workspaceProjectUtils"
+import { ProjectThumb, formatProjectActivityTime, getProjectActivityLabels, hashProjectAccent } from "./workspaceProjectUtils"
+import CollaboratorAvatars from "./CollaboratorAvatars"
 import { useLocale } from "../../utils/locale"
 import { useTeamStore } from "../../stores"
 import MigrateToTeamModal, { getMigratableTeams } from "./MigrateToTeamModal"
@@ -47,6 +48,7 @@ export default function WorkspaceProjectCard({
   onDelete,
   onMigrateToTeam,
   variant = "grid",
+  isRecentEdited = false,
 }) {
   const { t } = useLocale()
   const allTeams = useTeamStore((s) => s.allTeams)
@@ -124,11 +126,18 @@ export default function WorkspaceProjectCard({
   const bodyClass = isPreview ? "ws-project-body" : "ws-grid-body"
   const nameClass = isPreview ? "ws-project-name" : "ws-grid-name"
   const timeClass = isPreview ? "ws-project-time" : "ws-grid-time"
+  const accent = hashProjectAccent(project.id)
+  const activityLabels = getProjectActivityLabels(t)
 
   return (
     <>
       <div
         className={cardClass}
+        style={{
+          "--ws-accent": accent.from,
+          "--ws-thumb-from": accent.from,
+          "--ws-thumb-to": accent.to,
+        }}
         role="button"
         tabIndex={0}
         onClick={() => !renaming && onOpen()}
@@ -137,7 +146,11 @@ export default function WorkspaceProjectCard({
         }}
       >
         <div className={thumbClass}>
-          <ProjectThumb previewUrl={project.preview_url} />
+          <ProjectThumb
+            previewUrl={project.preview_url}
+            coverMediaType={project.cover_media_type}
+            projectId={project.id}
+          />
         </div>
         <div className={bodyClass}>
           {isPreview ? (
@@ -186,8 +199,17 @@ export default function WorkspaceProjectCard({
               <span className="ws-grid-episodes">{t("ws.projects.episode")}</span>
             </div>
           )}
-          <div className={timeClass}>
-            {formatProjectDate(project.updated_at, t("ws.project.neverEdited"))}
+          <div className="ws-project-meta">
+            <div className={timeClass}>
+              <span>{formatProjectActivityTime(project.updated_at, activityLabels)}</span>
+              {isRecentEdited && (
+                <span className="ws-project-recent">{t("ws.project.recentEdited")}</span>
+              )}
+            </div>
+            <CollaboratorAvatars
+              collaborators={project.recent_collaborators}
+              extraCount={project.collaborator_extra_count}
+            />
           </div>
         </div>
 

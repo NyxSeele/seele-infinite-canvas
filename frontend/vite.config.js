@@ -5,6 +5,10 @@ import { resolve } from 'node:path'
 
 const buildId = `${Date.now()}`
 
+/** 生产混合 CDN：Tunnel 吐 HTML，JS/CSS 走 AutoDL 公网（VITE_ASSET_PUBLIC_BASE） */
+const assetBase = (process.env.VITE_ASSET_PUBLIC_BASE || "").replace(/\/$/, "")
+const viteBase = assetBase ? `${assetBase}/` : "/"
+
 const VENDOR_CHUNKS = {
   'vendor-react': ['react', 'react-dom', 'react-router', 'react-router-dom'],
   'vendor-flow': ['reactflow', '@reactflow/background', '@reactflow/controls'],
@@ -47,6 +51,7 @@ function versionJsonPlugin() {
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: viteBase,
   plugins: [react(), versionJsonPlugin()],
   define: {
     'import.meta.env.VITE_APP_BUILD_ID': JSON.stringify(buildId),

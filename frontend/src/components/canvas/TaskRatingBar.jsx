@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { submitTaskRating } from "../../services/tasksApi"
 import { RATING_TAG_OTHER, ratingTagsForTaskType } from "../../constants/ratingTags"
 import "./TaskRatingBar.css"
@@ -11,26 +11,33 @@ export default function TaskRatingBar({
   userRating = null,
   ratingTags = [],
   ratingComment = "",
-  defaultExpanded = false,
   onRated,
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded)
+  const [satisfaction, setSatisfaction] = useState(null)
   const [selectedTags, setSelectedTags] = useState([])
   const [comment, setComment] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
+  const otherInputRef = useRef(null)
 
   const tagOptions = useMemo(() => ratingTagsForTaskType(taskType), [taskType])
+  const regularTags = useMemo(
+    () => tagOptions.filter((tag) => tag !== RATING_TAG_OTHER),
+    [tagOptions]
+  )
   const hasRated = userRating === 0 || userRating === 1
   const storedTags = Array.isArray(ratingTags) ? ratingTags : []
   const needsComment = selectedTags.includes(RATING_TAG_OTHER)
   const canSubmitNegative = selectedTags.length > 0 && (!needsComment || comment.trim().length > 0)
+  const canSubmit =
+    satisfaction === 1 || (satisfaction === 0 && canSubmitNegative)
 
-  useEffect(() => {
-    if (defaultExpanded && !hasRated) {
-      setExpanded(true)
-    }
-  }, [defaultExpanded, hasRated])
+  const resetForm = useCallback(() => {
+    setSatisfaction(null)
+    setSelectedTags([])
+    setComment("")
+    setError("")
+  }, [])
 
   const finishRating = useCallback(
     async (rating, tags, ratingCommentText = "") => {
@@ -48,40 +55,51 @@ export default function TaskRatingBar({
           ratingTags: tags,
           ratingComment: ratingCommentText.trim() || "",
         })
-        setExpanded(false)
-        setSelectedTags([])
-        setComment("")
+        resetForm()
       } catch (err) {
         setError(err?.response?.data?.detail || err?.message || "提交失败")
       } finally {
         setSubmitting(false)
       }
     },
-    [taskId, submitting, hasRated, onRated]
+    [taskId, submitting, hasRated, onRated, resetForm]
   )
 
-  const handlePositive = useCallback(() => {
-    finishRating(1, [])
-  }, [finishRating])
-
-  const handleNegativeOpen = useCallback(() => {
+  const selectSatisfaction = useCallback((rating) => {
     if (submitting || hasRated) return
-    setExpanded(true)
-    setSelectedTags([])
-    setComment("")
-    setError("")
+    setSatisfaction((prev) => {
+      if (prev === rating) return prev
+      setSelectedTags([])
+      setComment("")
+      setError("")
+      return rating
+    })
   }, [submitting, hasRated])
 
   const toggleTag = useCallback((tag) => {
-    setSelectedTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-    )
+    setSelectedTags((prev) => {
+      if (prev.includes(tag)) {
+        if (tag === RATING_TAG_OTHER) setComment("")
+        return prev.filter((t) => t !== tag)
+      }
+      return [...prev, tag]
+    })
   }, [])
 
-  const handleNegativeConfirm = useCallback(() => {
-    if (!canSubmitNegative) return
+  useEffect(() => {
+    if (needsComment) {
+      otherInputRef.current?.focus()
+    }
+  }, [needsComment])
+
+  const handleConfirm = useCallback(() => {
+    if (!canSubmit || satisfaction == null) return
+    if (satisfaction === 1) {
+      finishRating(1, [])
+      return
+    }
     finishRating(0, selectedTags, comment)
-  }, [finishRating, selectedTags, comment, canSubmitNegative])
+  }, [canSubmit, satisfaction, finishRating, selectedTags, comment])
 
   if (!taskId) return null
 
@@ -103,29 +121,31 @@ export default function TaskRatingBar({
 
   return (
     <div className="gn2-rating nodrag nopan" onPointerDown={(e) => e.stopPropagation()}>
-      <div className="gn2-rating-actions">
-        <button
-          type="button"
-          className="gn2-rating-btn"
-          disabled={submitting}
-          onClick={handlePositive}
-        >
-          👍 满意
-        </button>
-        <button
-          type="button"
-          className="gn2-rating-btn"
-          disabled={submitting}
-          onClick={handleNegativeOpen}
-        >
-          👎 不满意
-        </button>
+      <div className="gn2-rating-section">
+        <div className="gn2-rating-actions">
+          <button
+            type="button"
+            className={`gn2-rating-btn${satisfaction === 1 ? " gn2-rating-btn--active" : ""}`}
+            disabled={submitting}
+            onClick={() => selectSatisfaction(1)}
+          >
+            👍 满意
+          </button>
+          <button
+            type="button"
+            className={`gn2-rating-btn${satisfaction === 0 ? " gn2-rating-btn--active" : ""}`}
+            disabled={submitting}
+            onClick={() => selectSatisfaction(0)}
+          >
+            👎 不满意
+          </button>
+        </div>
       </div>
 
-      {expanded && (
-        <div className="gn2-rating-panel">
+      {satisfaction === 0 && (
+        <div className="gn2-rating-section gn2-rating-section--reasons">
           <div className="gn2-rating-tags">
-            {tagOptions.map((tag) => (
+            {regularTags.map((tag) => (
               <button
                 key={tag}
                 type="button"
@@ -136,40 +156,54 @@ export default function TaskRatingBar({
                 {tag}
               </button>
             ))}
-          </div>
-          {needsComment ? (
-            <textarea
-              className="gn2-rating-comment"
-              rows={2}
-              maxLength={200}
-              placeholder="请简要说明问题（必填，最多200字）"
-              value={comment}
-              disabled={submitting}
-              onChange={(e) => setComment(e.target.value)}
-            />
-          ) : null}
-          <div className="gn2-rating-panel-actions">
-            <button
-              type="button"
-              className="gn2-rating-confirm"
-              disabled={submitting || !canSubmitNegative}
-              onClick={handleNegativeConfirm}
+            <div
+              className={`gn2-rating-tag-other${needsComment ? " gn2-rating-tag-other--active" : ""}`}
             >
-              确认
-            </button>
-            <button
-              type="button"
-              className="gn2-rating-cancel"
-              disabled={submitting}
-              onClick={() => {
-                setExpanded(false)
-                setSelectedTags([])
-                setComment("")
-              }}
-            >
-              取消
-            </button>
+              <button
+                type="button"
+                className={`gn2-rating-tag${needsComment ? " gn2-rating-tag--active" : ""}`}
+                disabled={submitting}
+                onClick={() => toggleTag(RATING_TAG_OTHER)}
+              >
+                {RATING_TAG_OTHER}
+              </button>
+              {needsComment ? (
+                <input
+                  ref={otherInputRef}
+                  type="text"
+                  className="gn2-rating-other-input nodrag"
+                  maxLength={200}
+                  placeholder="请输入"
+                  value={comment}
+                  disabled={submitting}
+                  onChange={(e) => setComment(e.target.value)}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                />
+              ) : null}
+            </div>
           </div>
+        </div>
+      )}
+
+      {satisfaction != null && (
+        <div className="gn2-rating-panel-actions">
+          <button
+            type="button"
+            className="gn2-rating-confirm"
+            disabled={submitting || !canSubmit}
+            onClick={handleConfirm}
+          >
+            确认
+          </button>
+          <button
+            type="button"
+            className="gn2-rating-cancel"
+            disabled={submitting}
+            onClick={resetForm}
+          >
+            取消
+          </button>
         </div>
       )}
 

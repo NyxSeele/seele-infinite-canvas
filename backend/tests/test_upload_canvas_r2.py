@@ -38,7 +38,7 @@ def test_assert_canvas_key_accepts_canvas_prefix():
 
 
 def test_validate_client_dimensions_accepts_reasonable():
-    assert _validate_client_dimensions(1920, 1080, object_size=500_000) == (1920, 1080)
+    assert _validate_client_dimensions(1920, 1080, object_size=600_000) == (1920, 1080)
 
 
 def test_validate_client_dimensions_rejects_too_small_file():

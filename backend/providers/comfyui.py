@@ -7,6 +7,7 @@ import json
 import logging
 import random
 import re
+from copy import deepcopy
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from core.comfyui_settings import comfyui_http_url
 from core.logging_setup import studio_print
+from comfyui.workflow_registry import load_workflow_template
 from model_registry import resolve_generation_profile
 from models import User
 from services.api_key_service import get_registered_model_api_key
@@ -98,6 +100,91 @@ _HIDREAM_T5 = "t5xxl_fp8_e4m3fn_scaled.safetensors"
 _HIDREAM_LLAMA = "llama_3.1_8b_instruct_fp8_scaled.safetensors"
 _HIDREAM_VAE = "ae.safetensors"
 
+# Qwen-Image 专用节点 ID（与云绘 fp4 smoke workflow 一致）
+QWEN_VAE = "1"
+QWEN_EMPTY_LATENT = "4"
+QWEN_CLIP_NEG = "5"
+QWEN_CLIP_LOADER = "7"
+QWEN_AURA_FLOW = "8"
+QWEN_CLIP_POS = "9"
+QWEN_SAMPLER = "12"
+QWEN_DIT = "13"
+QWEN_VAE_DECODE = "2"
+QWEN_SAVE_IMAGE = "3"
+
+_QWEN_CLIP = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+_QWEN_VAE = "qwen_image_vae.safetensors"
+_QWEN_EDIT_UNET = "qwen_image_edit_2511_fp8mixed.safetensors"
+_QWEN_EDIT_LORA_LIGHTNING = "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+_QWEN_EDIT_LORA_ANGLES = "qwen-image-edit-2511-multiple-angles-lora.safetensors"
+
+# Qwen-Image-Edit 专用节点 ID（对齐云绘 Edit 2511 fp4 结构）
+QIE_LOAD = "qe1"
+QIE_SCALE = "qe2"
+QIE_VAE = "qe3"
+QIE_CLIP = "qe4"
+QIE_UNET = "qe5"
+QIE_LORA = "qe6"
+QIE_AURA = "qe7"
+QIE_CFG = "qe8"
+QIE_VAE_ENCODE = "qe9"
+QIE_POS_ENCODE = "qe10"
+QIE_NEG_ENCODE = "qe11"
+QIE_POS_METHOD = "qe12"
+QIE_NEG_METHOD = "qe13"
+QIE_SAMPLER = "qe14"
+QIE_VAE_DECODE = "qe15"
+QIE_SAVE = "qe16"
+
+# Qwen-Image-Restore 专用节点 ID（老照片修复：双 LoRA）
+QIR_LOAD = "qr1"
+QIR_SCALE = "qr2"
+QIR_VAE = "qr3"
+QIR_CLIP = "qr4"
+QIR_UNET = "qr5"
+QIR_LORA_ANGLES = "qr6"
+QIR_LORA_LIGHTNING = "qr7"
+QIR_AURA = "qr8"
+QIR_CFG = "qr9"
+QIR_VAE_ENCODE = "qr10"
+QIR_POS_ENCODE = "qr11"
+QIR_NEG_ENCODE = "qr12"
+QIR_POS_METHOD = "qr13"
+QIR_NEG_METHOD = "qr14"
+QIR_SAMPLER = "qr15"
+QIR_VAE_DECODE = "qr16"
+QIR_SAVE = "qr17"
+
+# Qwen-Image-Material 专用节点 ID（材质替换：三图输入）
+QIM_LOAD1 = "qm1"
+QIM_SCALE1 = "qm2"
+QIM_LOAD2 = "qm3"
+QIM_SCALE2 = "qm4"
+QIM_LOAD3 = "qm5"
+QIM_VAE = "qm6"
+QIM_CLIP = "qm7"
+QIM_UNET = "qm8"
+QIM_LORA = "qm9"
+QIM_AURA = "qm10"
+QIM_CFG = "qm11"
+QIM_VAE_ENCODE = "qm12"
+QIM_POS_ENCODE = "qm13"
+QIM_NEG_ENCODE = "qm14"
+QIM_POS_METHOD = "qm15"
+QIM_NEG_METHOD = "qm16"
+QIM_SAMPLER = "qm17"
+QIM_VAE_DECODE = "qm18"
+QIM_SAVE = "qm19"
+
+_QWEN_REF_WORKFLOW_TYPES = frozenset(
+    {
+        "flux_pulid",
+        "qwen-image-edit",
+        "qwen-image-restore",
+        "qwen-image-material",
+    }
+)
+
 
 class ComfyUIError(Exception):
     """ComfyUI 调用失败。"""
@@ -105,6 +192,21 @@ class ComfyUIError(Exception):
 
 class ComfyUIConnectionError(ComfyUIError):
     """无法连接 ComfyUI。"""
+
+
+async def _pick_reachable_comfyui_url(urls: list[str]) -> str:
+    last_error: Exception | None = None
+    for url in urls:
+        base = url.rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                res = await client.get(f"{base}/system_stats")
+                res.raise_for_status()
+            return base
+        except (httpx.ConnectError, httpx.HTTPError, httpx.TimeoutException) as exc:
+            last_error = exc
+            continue
+    raise ComfyUIError("ComfyUI 服务未启动，请检查 COMFYUI_URL") from last_error
 
 
 def _first_enabled_text_model_id() -> str | None:
@@ -178,24 +280,32 @@ async def _translate_via_http(model_id: str, prompt: str, max_tokens: int = 500)
 
 
 async def translate_if_chinese(text: str) -> str:
-    """含中文时调用文本模型翻译为英文 prompt；失败则原样返回。"""
+    """含中文时调用文本模型翻译为英文 prompt；失败则抛 ComfyUIError。"""
+    from services.prompt import (
+        PromptTranslationError,
+        _l3_fallback_translate,
+        contains_cjk,
+        ensure_generation_prompt_english,
+    )
+
     text = strip_mention_tokens(text)
     if not text:
         return text
-    if not re.search(r"[\u4e00-\u9fff]", text):
+    if not contains_cjk(text):
         return text
 
+    translated, note = await _l3_fallback_translate(
+        text, mode="image", reason="comfyui_submit_fallback"
+    )
+    if not translated:
+        raise ComfyUIError(
+            note or "Prompt translation failed; configure a text LLM in admin"
+        )
     try:
-        model_id = _first_enabled_text_model_id()
-        if not model_id:
-            return text
-
-        user_content = f"{TRANSLATE_SYSTEM_PROMPT}\n\n{text}"
-        translated = await _translate_via_http(model_id, user_content, max_tokens=500)
-        cleaned = (translated or "").strip()
-        return cleaned if cleaned else text
-    except Exception:
-        return text
+        ensure_generation_prompt_english(translated, "")
+    except PromptTranslationError as exc:
+        raise ComfyUIError(str(exc)) from exc
+    return translated
 
 
 def _normalize_reference_url(image_url: str) -> str:
@@ -707,9 +817,7 @@ def _resolve_pulid_t5_encoder() -> str:
 
 _REACTOR_SWAP_MODEL = "inswapper_128.onnx"
 _REACTOR_RESTORE_MODEL = "GFPGANv1.4.pth"
-_FLUX_PULID_REACTOR_TEMPLATE = (
-    Path(__file__).resolve().parent.parent / "comfyui" / "workflows" / "flux_pulid_reactor.json"
-)
+FLUX_PULID_REACTOR_KEY = "flux_pulid_reactor.json"
 
 
 def _attach_reactor_face_swap(workflow: dict) -> dict:
@@ -814,7 +922,7 @@ def _build_flux_pulid_workflow(
     guidance = _flux_guidance_value(profile, schnell=False)
     weight = float(pulid_weight if pulid_weight is not None else gen_defaults.get("pulid_weight", 0.8))
     t5_name = _resolve_pulid_t5_encoder()
-    dit_name = model_filename or "svdq-int4_r32-flux.1-dev.safetensors"
+    dit_name = model_filename or "svdq-fp4_r32-flux.1-dev.safetensors"
 
     studio_print(
         "comfyui-image",
@@ -822,6 +930,25 @@ def _build_flux_pulid_workflow(
         f"pulid={weight} use_reactor={bool(use_reactor)}",
     )
 
+    if use_reactor:
+        workflow = deepcopy(load_workflow_template(FLUX_PULID_REACTOR_KEY))
+        workflow["6"]["inputs"]["text"] = str(prompt_text).strip()
+        workflow["49"]["inputs"]["image"] = reference_face_image
+        workflow["25"]["inputs"]["noise_seed"] = int(seed)
+        workflow["27"]["inputs"]["width"] = int(width)
+        workflow["27"]["inputs"]["height"] = int(height)
+        workflow["30"]["inputs"]["width"] = int(width)
+        workflow["30"]["inputs"]["height"] = int(height)
+        workflow["50"]["inputs"]["model_path"] = dit_name
+        workflow["52"]["inputs"]["weight"] = weight
+        workflow["17"]["inputs"]["steps"] = steps
+        workflow["17"]["inputs"]["scheduler"] = scheduler
+        workflow["16"]["inputs"]["sampler_name"] = sampler_name
+        workflow["26"]["inputs"]["guidance"] = guidance
+        workflow["54"]["inputs"]["text_encoder2"] = t5_name
+        return workflow
+
+    # 无 ReActor 路径仍为 Python builder；sd15/flux/qwen 等待导出 JSON 后再迁 registry。
     workflow = {
         "6": {
             "class_type": "CLIPTextEncode",
@@ -934,11 +1061,6 @@ def _build_flux_pulid_workflow(
             },
         },
     }
-    if use_reactor:
-        # 模板文件供文档/探针对照；运行时以动态拼装为准
-        if _FLUX_PULID_REACTOR_TEMPLATE.is_file():
-            pass
-        workflow = _attach_reactor_face_swap(workflow)
     return workflow
 
 
@@ -1052,6 +1174,645 @@ def _build_hidream_workflow(
     }
 
 
+def _build_qwen_image_workflow(
+    prompt_text: str,
+    model_filename: str,
+    width: int,
+    height: int,
+    seed: int,
+    profile: dict,
+) -> dict:
+    """
+    Qwen-Image txt2img：NunchakuQwenImageDiTLoader + ModelSamplingAuraFlow + KSampler。
+    负向固定空格（KSampler 需接 negative 输入，产品不暴露负向框）。
+    """
+    gen_defaults = profile.get("generation_defaults") or {}
+    steps = int(gen_defaults.get("steps", 4))
+    cfg = float(gen_defaults.get("cfg", 1.0))
+    sampler_name = str(gen_defaults.get("sampler_name", "euler"))
+    scheduler = str(gen_defaults.get("scheduler", "simple"))
+    aura_shift = float(gen_defaults.get("aura_shift", 3.1))
+    denoise = float(gen_defaults.get("denoise_txt2img", 1.0))
+
+    print(
+        f"[comfyui] Qwen-Image workflow model={model_filename!r} "
+        f"size={width}x{height} steps={steps} cfg={cfg} shift={aura_shift}"
+    )
+    studio_print(
+        "comfyui-image",
+        f"Qwen-Image workflow: {model_filename} {width}x{height} steps={steps}",
+    )
+
+    return {
+        QWEN_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": _QWEN_VAE},
+        },
+        QWEN_EMPTY_LATENT: {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {
+                "width": int(width),
+                "height": int(height),
+                "batch_size": 1,
+            },
+        },
+        QWEN_CLIP_NEG: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": [QWEN_CLIP_LOADER, 0], "text": " "},
+        },
+        QWEN_CLIP_LOADER: {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": _QWEN_CLIP,
+                "type": "qwen_image",
+                "device": "default",
+            },
+        },
+        QWEN_AURA_FLOW: {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {"model": [QWEN_DIT, 0], "shift": aura_shift},
+        },
+        QWEN_CLIP_POS: {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "clip": [QWEN_CLIP_LOADER, 0],
+                "text": str(prompt_text).strip(),
+            },
+        },
+        QWEN_SAMPLER: {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": [QWEN_AURA_FLOW, 0],
+                "positive": [QWEN_CLIP_POS, 0],
+                "negative": [QWEN_CLIP_NEG, 0],
+                "latent_image": [QWEN_EMPTY_LATENT, 0],
+                "seed": int(seed),
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
+            },
+        },
+        QWEN_DIT: {
+            "class_type": "NunchakuQwenImageDiTLoader",
+            "inputs": {
+                "model_name": model_filename,
+                "cpu_offload": "auto",
+                "num_blocks_on_gpu": 1,
+                "use_pin_memory": "disable",
+            },
+        },
+        QWEN_VAE_DECODE: {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": [QWEN_SAMPLER, 0], "vae": [QWEN_VAE, 0]},
+        },
+        QWEN_SAVE_IMAGE: {
+            "class_type": "SaveImage",
+            "inputs": {
+                "images": [QWEN_VAE_DECODE, 0],
+                "filename_prefix": "AIStudio_QwenImage",
+            },
+        },
+    }
+
+
+def _build_qwen_image_edit_workflow(
+    prompt_text: str,
+    model_filename: str,
+    width: int,
+    height: int,
+    seed: int,
+    profile: dict,
+    reference_image: str,
+) -> dict:
+    """
+    Qwen-Image-Edit：UNET + Lightning LoRA + TextEncodeQwenImageEditPlus。
+    结构参照云绘 Edit2509/2511（单图编辑，不含多角度 LoRA）。
+    """
+    if not reference_image:
+        raise ComfyUIError("qwen-image-edit 需要参考图 (reference_image)")
+
+    gen_defaults = profile.get("generation_defaults") or {}
+    steps = int(gen_defaults.get("steps", 4))
+    cfg = float(gen_defaults.get("cfg", 1.0))
+    sampler_name = str(gen_defaults.get("sampler_name", "euler"))
+    scheduler = str(gen_defaults.get("scheduler", "simple"))
+    aura_shift = float(gen_defaults.get("aura_shift", 3.1))
+    denoise = float(gen_defaults.get("denoise_img2img", 1.0))
+    megapixels = float(gen_defaults.get("megapixels", 1.0))
+    unet_name = model_filename or _QWEN_EDIT_UNET
+
+    print(
+        f"[comfyui] Qwen-Image-Edit workflow unet={unet_name!r} ref={reference_image!r} "
+        f"steps={steps} cfg={cfg} megapixels={megapixels}"
+    )
+    studio_print(
+        "comfyui-image",
+        f"Qwen-Image-Edit workflow: {unet_name} steps={steps} ref={reference_image}",
+    )
+
+    return {
+        QIE_LOAD: {
+            "class_type": "LoadImage",
+            "inputs": {"image": reference_image},
+        },
+        QIE_SCALE: {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {
+                "image": [QIE_LOAD, 0],
+                "upscale_method": "lanczos",
+                "megapixels": megapixels,
+                "resolution_steps": 1,
+            },
+        },
+        QIE_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": _QWEN_VAE},
+        },
+        QIE_CLIP: {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": _QWEN_CLIP,
+                "type": "stable_diffusion",
+                "device": "default",
+            },
+        },
+        QIE_UNET: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": unet_name,
+                "weight_dtype": "default",
+            },
+        },
+        QIE_LORA: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [QIE_UNET, 0],
+                "lora_name": _QWEN_EDIT_LORA_LIGHTNING,
+                "strength_model": 1.0,
+            },
+        },
+        QIE_AURA: {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {"model": [QIE_LORA, 0], "shift": aura_shift},
+        },
+        QIE_CFG: {
+            "class_type": "CFGNorm",
+            "inputs": {"model": [QIE_AURA, 0], "strength": 1.0},
+        },
+        QIE_VAE_ENCODE: {
+            "class_type": "VAEEncode",
+            "inputs": {
+                "pixels": [QIE_SCALE, 0],
+                "vae": [QIE_VAE, 0],
+            },
+        },
+        QIE_NEG_ENCODE: {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {
+                "clip": [QIE_CLIP, 0],
+                "vae": [QIE_VAE, 0],
+                "image1": [QIE_SCALE, 0],
+                "prompt": "",
+            },
+        },
+        QIE_POS_ENCODE: {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {
+                "clip": [QIE_CLIP, 0],
+                "vae": [QIE_VAE, 0],
+                "image1": [QIE_SCALE, 0],
+                "prompt": str(prompt_text).strip(),
+            },
+        },
+        QIE_NEG_METHOD: {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {
+                "conditioning": [QIE_NEG_ENCODE, 0],
+                "reference_latents_method": "index_timestep_zero",
+            },
+        },
+        QIE_POS_METHOD: {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {
+                "conditioning": [QIE_POS_ENCODE, 0],
+                "reference_latents_method": "index_timestep_zero",
+            },
+        },
+        QIE_SAMPLER: {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": [QIE_CFG, 0],
+                "positive": [QIE_POS_METHOD, 0],
+                "negative": [QIE_NEG_METHOD, 0],
+                "latent_image": [QIE_VAE_ENCODE, 0],
+                "seed": int(seed),
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
+            },
+        },
+        QIE_VAE_DECODE: {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": [QIE_SAMPLER, 0],
+                "vae": [QIE_VAE, 0],
+            },
+        },
+        QIE_SAVE: {
+            "class_type": "SaveImage",
+            "inputs": {
+                "images": [QIE_VAE_DECODE, 0],
+                "filename_prefix": "AIStudio_QwenImageEdit",
+            },
+        },
+    }
+
+
+def _qwen_edit_encode_inputs(
+    *,
+    clip_node: str,
+    vae_node: str,
+    image1_node: str,
+    image1_slot: int,
+    prompt: str,
+    image2_node: str | None = None,
+    image2_slot: int = 0,
+    image3_node: str | None = None,
+    image3_slot: int = 0,
+) -> dict:
+    inputs: dict = {
+        "clip": [clip_node, 0],
+        "vae": [vae_node, 0],
+        "image1": [image1_node, image1_slot],
+        "prompt": prompt,
+    }
+    if image2_node is not None:
+        inputs["image2"] = [image2_node, image2_slot]
+    if image3_node is not None:
+        inputs["image3"] = [image3_node, image3_slot]
+    return inputs
+
+
+def _build_qwen_image_restore_workflow(
+    prompt_text: str,
+    model_filename: str,
+    width: int,
+    height: int,
+    seed: int,
+    profile: dict,
+    reference_image: str,
+) -> dict:
+    """
+    Qwen-Image-Restore：老照片修复。
+    UNET + 多角度 LoRA + Lightning LoRA + TextEncodeQwenImageEditPlus，单图输入。
+    """
+    if not reference_image:
+        raise ComfyUIError("qwen-image-restore 需要参考图 (reference_image)")
+
+    gen_defaults = profile.get("generation_defaults") or {}
+    steps = int(gen_defaults.get("steps", 4))
+    cfg = float(gen_defaults.get("cfg", 1.0))
+    sampler_name = str(gen_defaults.get("sampler_name", "euler"))
+    scheduler = str(gen_defaults.get("scheduler", "simple"))
+    aura_shift = float(gen_defaults.get("aura_shift", 3.1))
+    denoise = float(gen_defaults.get("denoise_img2img", 1.0))
+    megapixels = float(gen_defaults.get("megapixels", 1.2))
+    unet_name = model_filename or _QWEN_EDIT_UNET
+
+    print(
+        f"[comfyui] Qwen-Image-Restore workflow unet={unet_name!r} ref={reference_image!r} "
+        f"steps={steps} cfg={cfg} megapixels={megapixels}"
+    )
+    studio_print(
+        "comfyui-image",
+        f"Qwen-Image-Restore workflow: {unet_name} steps={steps} ref={reference_image}",
+    )
+
+    return {
+        QIR_LOAD: {
+            "class_type": "LoadImage",
+            "inputs": {"image": reference_image},
+        },
+        QIR_SCALE: {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {
+                "image": [QIR_LOAD, 0],
+                "upscale_method": "lanczos",
+                "megapixels": megapixels,
+                "resolution_steps": 1,
+            },
+        },
+        QIR_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": _QWEN_VAE},
+        },
+        QIR_CLIP: {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": _QWEN_CLIP,
+                "type": "stable_diffusion",
+                "device": "default",
+            },
+        },
+        QIR_UNET: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": unet_name,
+                "weight_dtype": "default",
+            },
+        },
+        QIR_LORA_ANGLES: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [QIR_UNET, 0],
+                "lora_name": _QWEN_EDIT_LORA_ANGLES,
+                "strength_model": 1.0,
+            },
+        },
+        QIR_LORA_LIGHTNING: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [QIR_LORA_ANGLES, 0],
+                "lora_name": _QWEN_EDIT_LORA_LIGHTNING,
+                "strength_model": 1.0,
+            },
+        },
+        QIR_AURA: {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {"model": [QIR_LORA_LIGHTNING, 0], "shift": aura_shift},
+        },
+        QIR_CFG: {
+            "class_type": "CFGNorm",
+            "inputs": {"model": [QIR_AURA, 0], "strength": 1.0},
+        },
+        QIR_VAE_ENCODE: {
+            "class_type": "VAEEncode",
+            "inputs": {
+                "pixels": [QIR_SCALE, 0],
+                "vae": [QIR_VAE, 0],
+            },
+        },
+        QIR_NEG_ENCODE: {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": _qwen_edit_encode_inputs(
+                clip_node=QIR_CLIP,
+                vae_node=QIR_VAE,
+                image1_node=QIR_SCALE,
+                image1_slot=0,
+                prompt="",
+            ),
+        },
+        QIR_POS_ENCODE: {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": _qwen_edit_encode_inputs(
+                clip_node=QIR_CLIP,
+                vae_node=QIR_VAE,
+                image1_node=QIR_SCALE,
+                image1_slot=0,
+                prompt=str(prompt_text).strip(),
+            ),
+        },
+        QIR_NEG_METHOD: {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {
+                "conditioning": [QIR_NEG_ENCODE, 0],
+                "reference_latents_method": "index_timestep_zero",
+            },
+        },
+        QIR_POS_METHOD: {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {
+                "conditioning": [QIR_POS_ENCODE, 0],
+                "reference_latents_method": "index_timestep_zero",
+            },
+        },
+        QIR_SAMPLER: {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": [QIR_CFG, 0],
+                "positive": [QIR_POS_METHOD, 0],
+                "negative": [QIR_NEG_METHOD, 0],
+                "latent_image": [QIR_VAE_ENCODE, 0],
+                "seed": int(seed),
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
+            },
+        },
+        QIR_VAE_DECODE: {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": [QIR_SAMPLER, 0],
+                "vae": [QIR_VAE, 0],
+            },
+        },
+        QIR_SAVE: {
+            "class_type": "SaveImage",
+            "inputs": {
+                "images": [QIR_VAE_DECODE, 0],
+                "filename_prefix": "AIStudio_QwenImageRestore",
+            },
+        },
+    }
+
+
+def _build_qwen_image_material_workflow(
+    prompt_text: str,
+    model_filename: str,
+    width: int,
+    height: int,
+    seed: int,
+    profile: dict,
+    *,
+    image1: str,
+    image2: str,
+    image3: str | None = None,
+) -> dict:
+    """
+    Qwen-Image-Material：材质替换。
+    主图 image1 + 材质参考 image2 必填，image3 可选；仅 Lightning LoRA。
+    """
+    if not image1 or not image2:
+        raise ComfyUIError("qwen-image-material 需要主图与材质参考图")
+
+    gen_defaults = profile.get("generation_defaults") or {}
+    steps = int(gen_defaults.get("steps", 4))
+    cfg = float(gen_defaults.get("cfg", 1.0))
+    sampler_name = str(gen_defaults.get("sampler_name", "euler"))
+    scheduler = str(gen_defaults.get("scheduler", "simple"))
+    aura_shift = float(gen_defaults.get("aura_shift", 3.1))
+    denoise = float(gen_defaults.get("denoise_img2img", 1.0))
+    megapixels = float(gen_defaults.get("megapixels", 1.0))
+    unet_name = model_filename or _QWEN_EDIT_UNET
+
+    print(
+        f"[comfyui] Qwen-Image-Material workflow unet={unet_name!r} "
+        f"image1={image1!r} image2={image2!r} image3={image3!r} "
+        f"steps={steps} cfg={cfg}"
+    )
+    studio_print(
+        "comfyui-image",
+        f"Qwen-Image-Material workflow: {unet_name} steps={steps} "
+        f"refs={1 + bool(image2) + bool(image3)}",
+    )
+
+    pos_encode_inputs = _qwen_edit_encode_inputs(
+        clip_node=QIM_CLIP,
+        vae_node=QIM_VAE,
+        image1_node=QIM_SCALE1,
+        image1_slot=0,
+        image2_node=QIM_SCALE2,
+        image2_slot=0,
+        prompt=str(prompt_text).strip(),
+    )
+    neg_encode_inputs = _qwen_edit_encode_inputs(
+        clip_node=QIM_CLIP,
+        vae_node=QIM_VAE,
+        image1_node=QIM_SCALE1,
+        image1_slot=0,
+        image2_node=QIM_SCALE2,
+        image2_slot=0,
+        prompt="",
+    )
+    if image3:
+        pos_encode_inputs["image3"] = [QIM_LOAD3, 0]
+        neg_encode_inputs["image3"] = [QIM_LOAD3, 0]
+
+    workflow: dict = {
+        QIM_LOAD1: {
+            "class_type": "LoadImage",
+            "inputs": {"image": image1},
+        },
+        QIM_SCALE1: {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {
+                "image": [QIM_LOAD1, 0],
+                "upscale_method": "lanczos",
+                "megapixels": megapixels,
+                "resolution_steps": 1,
+            },
+        },
+        QIM_LOAD2: {
+            "class_type": "LoadImage",
+            "inputs": {"image": image2},
+        },
+        QIM_SCALE2: {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {
+                "image": [QIM_LOAD2, 0],
+                "upscale_method": "lanczos",
+                "megapixels": megapixels,
+                "resolution_steps": 1,
+            },
+        },
+        QIM_VAE: {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": _QWEN_VAE},
+        },
+        QIM_CLIP: {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": _QWEN_CLIP,
+                "type": "stable_diffusion",
+                "device": "default",
+            },
+        },
+        QIM_UNET: {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": unet_name,
+                "weight_dtype": "default",
+            },
+        },
+        QIM_LORA: {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [QIM_UNET, 0],
+                "lora_name": _QWEN_EDIT_LORA_LIGHTNING,
+                "strength_model": 1.0,
+            },
+        },
+        QIM_AURA: {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {"model": [QIM_LORA, 0], "shift": aura_shift},
+        },
+        QIM_CFG: {
+            "class_type": "CFGNorm",
+            "inputs": {"model": [QIM_AURA, 0], "strength": 1.0},
+        },
+        QIM_VAE_ENCODE: {
+            "class_type": "VAEEncode",
+            "inputs": {
+                "pixels": [QIM_SCALE1, 0],
+                "vae": [QIM_VAE, 0],
+            },
+        },
+        QIM_NEG_ENCODE: {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": neg_encode_inputs,
+        },
+        QIM_POS_ENCODE: {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": pos_encode_inputs,
+        },
+        QIM_NEG_METHOD: {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {
+                "conditioning": [QIM_NEG_ENCODE, 0],
+                "reference_latents_method": "index_timestep_zero",
+            },
+        },
+        QIM_POS_METHOD: {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {
+                "conditioning": [QIM_POS_ENCODE, 0],
+                "reference_latents_method": "index_timestep_zero",
+            },
+        },
+        QIM_SAMPLER: {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": [QIM_CFG, 0],
+                "positive": [QIM_POS_METHOD, 0],
+                "negative": [QIM_NEG_METHOD, 0],
+                "latent_image": [QIM_VAE_ENCODE, 0],
+                "seed": int(seed),
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
+            },
+        },
+        QIM_VAE_DECODE: {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": [QIM_SAMPLER, 0],
+                "vae": [QIM_VAE, 0],
+            },
+        },
+        QIM_SAVE: {
+            "class_type": "SaveImage",
+            "inputs": {
+                "images": [QIM_VAE_DECODE, 0],
+                "filename_prefix": "AIStudio_QwenImageMaterial",
+            },
+        },
+    }
+    if image3:
+        workflow[QIM_LOAD3] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": image3},
+        }
+    return workflow
+
+
 def _build_ksampler_workflow(
     prompt_text: str,
     model_filename: str,
@@ -1102,6 +1863,7 @@ def _build_workflow(
     height: int,
     seed: int | None = None,
     reference_filename: str | None = None,
+    reference_filenames: list[str] | None = None,
     reference_images: list[str] | None = None,
     model_id: str | None = None,
     *,
@@ -1126,7 +1888,7 @@ def _build_workflow(
     if (
         reference_filename
         and profile.get("img2img_support") == "unsupported"
-        and workflow_type != "flux_pulid"
+        and workflow_type not in _QWEN_REF_WORKFLOW_TYPES
     ):
         print(
             "[comfyui] 警告: 当前模型不支持传统 img2img，已降级为 txt2img "
@@ -1162,6 +1924,51 @@ def _build_workflow(
         )
         return workflow, "pulid_reactor" if use_reactor else "pulid"
 
+    if workflow_type == "qwen-image-edit":
+        if not effective_reference:
+            raise ComfyUIError("qwen-image-edit 需要参考图 (reference_image)")
+        workflow = _build_qwen_image_edit_workflow(
+            prompt_text,
+            model_filename,
+            width,
+            height,
+            seed,
+            profile,
+            reference_image=effective_reference,
+        )
+        return workflow, "qwen_image_edit"
+
+    if workflow_type == "qwen-image-restore":
+        if not effective_reference:
+            raise ComfyUIError("qwen-image-restore 需要参考图 (reference_image)")
+        workflow = _build_qwen_image_restore_workflow(
+            prompt_text,
+            model_filename,
+            width,
+            height,
+            seed,
+            profile,
+            reference_image=effective_reference,
+        )
+        return workflow, "qwen_image_restore"
+
+    if workflow_type == "qwen-image-material":
+        refs = [r for r in (reference_filenames or []) if r]
+        if len(refs) < 2:
+            raise ComfyUIError("qwen-image-material 需要主图与材质参考图")
+        workflow = _build_qwen_image_material_workflow(
+            prompt_text,
+            model_filename,
+            width,
+            height,
+            seed,
+            profile,
+            image1=refs[0],
+            image2=refs[1],
+            image3=refs[2] if len(refs) > 2 else None,
+        )
+        return workflow, "qwen_image_material"
+
     if workflow_type == "flux":
         workflow = _build_flux_workflow(
             prompt_text,
@@ -1184,6 +1991,26 @@ def _build_workflow(
                 f"HiDream img2img 不支持，降级 txt2img: {model_filename}",
             )
         workflow = _build_hidream_workflow(
+            prompt_text,
+            model_filename,
+            width,
+            height,
+            seed,
+            profile,
+        )
+        return workflow, "txt2img"
+
+    if workflow_type == "qwen-image":
+        if effective_reference:
+            print(
+                "[comfyui] 警告: Qwen-Image 不支持 img2img，已降级为 txt2img "
+                f"(model={model_filename!r})"
+            )
+            studio_print(
+                "comfyui-image",
+                f"Qwen-Image img2img 不支持，降级 txt2img: {model_filename}",
+            )
+        workflow = _build_qwen_image_workflow(
             prompt_text,
             model_filename,
             width,
@@ -1238,11 +2065,22 @@ async def submit_image_prompt(
     task_id: str | None = None,
 ) -> tuple[str, dict, str]:
     """提交 ComfyUI 工作流，返回 (prompt_id, trace_meta, node_url)。"""
-    from services.gpu_pool import get_gpu_pool
+    from services.gpu_pool import CAP_IMAGE, get_gpu_pool
 
     pool = get_gpu_pool()
-    gpu_node = pool.get_available_node(required_vram=16, prefer_short=True)
-    node_url = gpu_node.comfyui_url.rstrip("/")
+    # 生图仅走具备 image capability 的节点（本机 5090）；禁止落到仅视频的 H800
+    preferred = pool.get_available_node(
+        required_vram=16, prefer_short=True, capability=CAP_IMAGE
+    )
+    candidate_urls = [preferred.comfyui_url.rstrip("/")]
+    for node in pool.nodes:
+        if CAP_IMAGE not in node.capabilities:
+            continue
+        url = node.comfyui_url.rstrip("/")
+        if url not in candidate_urls:
+            candidate_urls.append(url)
+
+    node_url = await _pick_reachable_comfyui_url(candidate_urls)
     original_prompt = prompt_text
     if skip_translate:
         translated_prompt = prompt_text
@@ -1252,33 +2090,49 @@ async def submit_image_prompt(
 
     ref_urls = [u.strip() for u in (reference_images or []) if u and str(u).strip()]
     primary_ref = (reference_image or "").strip() or (ref_urls[0] if ref_urls else None)
-    reference_count = len(ref_urls) if ref_urls else (1 if primary_ref else 0)
+    unique_ref_urls: list[str] = []
+    seen_refs: set[str] = set()
+    for candidate in ([primary_ref] if primary_ref else []) + ref_urls:
+        if candidate and candidate not in seen_refs:
+            seen_refs.add(candidate)
+            unique_ref_urls.append(candidate)
+    reference_count = len(unique_ref_urls)
+
+    profile = resolve_generation_profile(model_id, model_filename)
+    workflow_type = profile.get("workflow_type", "sd15")
+    upload_targets = (
+        unique_ref_urls
+        if workflow_type == "qwen-image-material"
+        else unique_ref_urls[:1]
+    )
 
     print(
         f"[comfyui] submit_image_prompt reference_image="
         f"{'set' if primary_ref else 'none'} "
-        f"reference_images count: {len(ref_urls)}"
+        f"reference_images count: {len(ref_urls)} workflow_type={workflow_type}"
     )
     print(
         f"[comfyui] mode: {'img2img' if primary_ref else 'txt2img'} "
         f"(before upload)"
     )
 
-    reference_filename: str | None = None
-    if primary_ref:
+    reference_filenames: list[str] = []
+    for ref_url in upload_targets:
         try:
-            reference_filename = await _upload_reference_image(
-                primary_ref, db=db, user=user, base_url=node_url
+            uploaded = await _upload_reference_image(
+                ref_url, db=db, user=user, base_url=node_url
             )
+            reference_filenames.append(uploaded)
             studio_print(
                 "comfyui-image",
-                f"参考图已上传 filename={reference_filename} count={reference_count}",
+                f"参考图已上传 filename={uploaded} ({len(reference_filenames)}/{len(upload_targets)})",
             )
         except ComfyUIError:
             raise
         except Exception as exc:
             raise ComfyUIError(f"参考图上传失败: {exc}") from exc
 
+    reference_filename = reference_filenames[0] if reference_filenames else None
     workflow_mode = "img2img" if reference_filename else "txt2img"
     print(f"[comfyui] mode: {workflow_mode} (after upload)")
 
@@ -1299,7 +2153,8 @@ async def submit_image_prompt(
         width,
         height,
         reference_filename=reference_filename,
-        reference_images=ref_urls or ([primary_ref] if primary_ref else None),
+        reference_filenames=reference_filenames,
+        reference_images=unique_ref_urls or None,
         model_id=model_id,
         denoise_override=denoise_override,
         negative_prompt=negative_prompt,
@@ -1332,27 +2187,48 @@ async def submit_image_prompt(
     )
 
     studio_print("comfyui-image", f"POST {node_url}/prompt …")
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            response = await client.post(
-                f"{node_url}/prompt",
-                json={"prompt": workflow},
-            )
-    except httpx.ConnectError as exc:
-        studio_print("comfyui-image", f"连接失败: {exc}")
-        raise ComfyUIError("ComfyUI 服务未启动，请检查 COMFYUI_URL") from exc
-    except httpx.TimeoutException as exc:
-        studio_print("comfyui-image", f"请求超时: {exc}")
-        raise ComfyUIError("ComfyUI 请求超时") from exc
-
-    if response.status_code != 200:
+    response = None
+    last_error: Exception | None = None
+    last_http_error: ComfyUIError | None = None
+    for idx, try_url in enumerate(candidate_urls):
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                response = await client.post(
+                    f"{try_url}/prompt",
+                    json={"prompt": workflow},
+                )
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            last_error = exc
+            studio_print("comfyui-image", f"连接失败 {try_url}: {exc}")
+            response = None
+            continue
+        if response.status_code == 200:
+            node_url = try_url
+            break
         studio_print(
             "comfyui-image",
-            f"HTTP {response.status_code}: {response.text[:500]}",
+            f"HTTP {response.status_code} @ {try_url}: {response.text[:500]}",
         )
-        raise ComfyUIError(
+        last_http_error = ComfyUIError(
             f"ComfyUI 返回错误: {response.status_code} {response.text}"
         )
+        # 权重缺失 / 校验失败时尝试下一个生图节点，避免卡在错误节点
+        if response.status_code == 400 and idx < len(candidate_urls) - 1:
+            studio_print(
+                "comfyui-image",
+                f"节点 {try_url} 校验失败，尝试下一候选…",
+            )
+            response = None
+            continue
+        raise last_http_error
+    if response is None:
+        if last_http_error is not None:
+            raise last_http_error
+        if isinstance(last_error, httpx.TimeoutException):
+            studio_print("comfyui-image", f"请求超时: {last_error}")
+            raise ComfyUIError("ComfyUI 请求超时") from last_error
+        studio_print("comfyui-image", f"连接失败: {last_error}")
+        raise ComfyUIError("ComfyUI 服务未启动，请检查 COMFYUI_URL") from last_error
 
     try:
         data = response.json()

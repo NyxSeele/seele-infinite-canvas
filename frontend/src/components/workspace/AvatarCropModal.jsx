@@ -233,7 +233,7 @@ export default function AvatarCropModal({ open, imageSrc, onConfirm, onCancel })
     mounted,
     closing,
     open: open && Boolean(imageSrc),
-    base: `acm-backdrop rf-page--${theme}`,
+    base: `acm-backdrop ws-overlay-root rf-page--${theme}`,
     enterClass: open && !closing ? "motion-modal-overlay-in" : "",
     exitClass: closing ? "motion-modal-overlay-out" : "",
   })

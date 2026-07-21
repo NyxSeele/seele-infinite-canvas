@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from core.datetime_utils import to_utc_iso
 from core.dependencies import get_current_user
@@ -34,6 +34,17 @@ from services.canvas_lock import (
     release_lock,
 )
 from services.canvas_presence import leave_presence, list_presence, touch_presence
+from services.project_collaborators import (
+    list_recent_collaborators_batch,
+    list_recent_collaborators_for_project,
+    touch_collaborator,
+    touch_collaborator_throttled,
+)
+from services.canvas_save_guard import (
+    is_empty_overwrite,
+    write_nonempty_backup,
+)
+from services.project_cover import apply_cover_from_data, extract_cover_from_data
 from services.team_service import require_team_editor
 
 router = APIRouter(prefix="/api/canvas", tags=["canvas"])
@@ -49,6 +60,20 @@ def _migrate_canvas_nodes(nodes: list) -> None:
             node["type"] = "image-gen"
 
 
+def _parse_viewport(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        x = float(raw.get("x"))
+        y = float(raw.get("y"))
+        zoom = float(raw.get("zoom"))
+    except (TypeError, ValueError):
+        return None
+    if not (zoom > 0):
+        return None
+    return {"x": x, "y": y, "zoom": zoom}
+
+
 def _parse_canvas_data(data_str: str) -> dict:
     try:
         data = json.loads(data_str or "{}")
@@ -57,31 +82,21 @@ def _parse_canvas_data(data_str: str) -> dict:
         nodes = data.get("nodes")
         if isinstance(nodes, list):
             _migrate_canvas_nodes(nodes)
-        return {
+        out = {
             "nodes": data.get("nodes") or [],
             "edges": data.get("edges") or [],
         }
+        viewport = _parse_viewport(data.get("viewport"))
+        if viewport:
+            out["viewport"] = viewport
+        return out
     except Exception:
         return {"nodes": [], "edges": []}
 
 
 def _preview_from_data(data_str: str) -> str | None:
-    try:
-        data = json.loads(data_str or "{}")
-        for node in data.get("nodes") or []:
-            payload = node.get("data") or {}
-            for key in ("imageUrl", "uploadedImage", "generatedImage", "videoUrl"):
-                val = payload.get(key)
-                if isinstance(val, str) and val.strip():
-                    return val.strip()
-            results = payload.get("results")
-            if isinstance(results, list):
-                for item in results:
-                    if isinstance(item, str) and item.strip():
-                        return item.strip()
-    except Exception:
-        return None
-    return None
+    url, _ = extract_cover_from_data(data_str)
+    return url
 
 
 def _node_count(data_str: str) -> int:
@@ -93,17 +108,46 @@ def _node_count(data_str: str) -> int:
         return 0
 
 
-def _project_summary(row: CanvasProject) -> dict:
-    return {
+def _project_summary(
+    row: CanvasProject,
+    collab: dict | None = None,
+    *,
+    light: bool = False,
+) -> dict:
+    """light=True：列表场景，禁止解析 data JSON（依赖 cover_url 列）。"""
+    if light:
+        preview_url = row.cover_url
+        node_count = 0
+    else:
+        preview_url = row.cover_url or _preview_from_data(row.data)
+        node_count = _node_count(row.data)
+    out = {
         "id": row.id,
         "name": row.name,
         "team_id": row.team_id,
         "version": int(row.version or 1),
         "updated_at": to_utc_iso(row.updated_at),
         "last_modified_by": row.last_modified_by,
-        "node_count": _node_count(row.data),
-        "preview_url": _preview_from_data(row.data),
+        "node_count": node_count,
+        "preview_url": preview_url,
+        "cover_media_type": row.cover_media_type,
+        "recent_collaborators": (collab or {}).get("recent_collaborators", []),
+        "collaborator_extra_count": int((collab or {}).get("collaborator_extra_count", 0)),
     }
+    return out
+
+
+def _ensure_legacy_migrated(db: Session, user: User) -> None:
+    """列表热路径：仅检查是否已有项目，避免加载 data 大字段。"""
+    exists = (
+        db.query(CanvasProject.id)
+        .filter(CanvasProject.user_id == user.id, CanvasProject.team_id.is_(None))
+        .limit(1)
+        .first()
+    )
+    if exists:
+        return
+    _legacy_migrate_user(db, user)
 
 
 def _latest_project(db: Session, user_id: int) -> CanvasProject | None:
@@ -157,6 +201,8 @@ class ProjectUpdateRequest(BaseModel):
     canvas_data: dict | None = None
     name: str | None = Field(default=None, max_length=256)
     version: int | None = None
+    # 显式确认才允许用空 nodes 覆盖已有内容，防止加载失败后自动保存写空
+    confirm_empty_overwrite: bool = False
 
 
 class ProjectMigrateToTeamRequest(BaseModel):
@@ -201,13 +247,26 @@ class CommentUpdateRequest(BaseModel):
 @router.get("/projects")
 def list_canvas_projects(
     team_id: str | None = Query(default=None),
+    limit: int | None = Query(default=None, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if team_id is None:
-        _legacy_migrate_user(db, user)
-    rows = list_projects_query(db, user, team_id).all()
-    return {"projects": [_project_summary(row) for row in rows]}
+        _ensure_legacy_migrated(db, user)
+    query = list_projects_query(db, user, team_id).options(
+        defer(CanvasProject.data),
+        defer(CanvasProject.generation_memory),
+    )
+    if limit is not None:
+        query = query.offset(offset).limit(limit)
+    rows = query.all()
+    collab_map = list_recent_collaborators_batch(db, [row.id for row in rows])
+    return {
+        "projects": [
+            _project_summary(row, collab_map.get(row.id), light=True) for row in rows
+        ]
+    }
 
 
 @router.post("/projects")
@@ -234,9 +293,14 @@ def create_canvas_project(
         created_at=now,
         updated_at=now,
     )
+    apply_cover_from_data(row)
     db.add(row)
+    db.flush()
+    touch_collaborator(db, row.id, user.id)
     db.commit()
-    return _project_summary(row)
+    db.refresh(row)
+    collab = list_recent_collaborators_for_project(db, row.id)
+    return _project_summary(row, collab)
 
 
 @router.get("/projects/{project_id}")
@@ -248,8 +312,9 @@ def get_canvas_project(
     row = get_accessible_project(db, user, project_id)
     canvas_data = _parse_canvas_data(row.data)
     lock = get_lock(project_id)
+    collab = list_recent_collaborators_for_project(db, project_id)
     return {
-        **_project_summary(row),
+        **_project_summary(row, collab),
         "canvas_data": canvas_data,
         "lock": lock,
     }
@@ -291,6 +356,7 @@ def ping_canvas_presence(
         display_name=label,
         email=(user.email or "").strip(),
     )
+    touch_collaborator_throttled(project_id, user.id)
     return {"members": members}
 
 
@@ -334,13 +400,29 @@ def update_canvas_project(
         row.name = (body.name or "未命名画布").strip()[:256] or "未命名画布"
     author_label = (display_name or "").strip() or user.username
     if body.canvas_data is not None:
+        if is_empty_overwrite(row.data, body.canvas_data) and not body.confirm_empty_overwrite:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "拒绝用空画布覆盖已有内容，请刷新后重试",
+                    "code": "empty_overwrite_blocked",
+                    "version": int(row.version or 1),
+                    "canvas_data": _parse_canvas_data(row.data),
+                    "name": row.name,
+                    "node_count": _node_count(row.data),
+                },
+            )
         nodes = body.canvas_data.get("nodes")
         if isinstance(nodes, list):
             _migrate_canvas_nodes(nodes)
+        # 写入前备份当前非空版本，便于事故恢复
+        write_nonempty_backup(project_id, row.data)
         row.data = json.dumps(body.canvas_data, ensure_ascii=False)
         row.last_modified_by = author_label[:64] if author_label else None
+        apply_cover_from_data(row)
     row.version = int(row.version or 1) + 1
     row.updated_at = _utcnow()
+    touch_collaborator(db, project_id, user.id)
     db.commit()
     db.refresh(row)
     publish_canvas_updated(
@@ -351,7 +433,8 @@ def update_canvas_project(
         display_name=author_label,
         name=row.name,
     )
-    return _project_summary(row)
+    collab = list_recent_collaborators_for_project(db, project_id)
+    return _project_summary(row, collab)
 
 
 @router.delete("/projects/{project_id}")
@@ -447,11 +530,24 @@ def save_canvas(
     db: Session = Depends(get_db),
 ):
     row = _latest_project(db, user.id) or _legacy_migrate_user(db, user)
+    if row and is_empty_overwrite(row.data, body.canvas_data):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "拒绝用空画布覆盖已有内容，请刷新后重试",
+                "code": "empty_overwrite_blocked",
+                "version": int(row.version or 1),
+                "canvas_data": _parse_canvas_data(row.data),
+                "name": row.name,
+                "node_count": _node_count(row.data),
+            },
+        )
     data_str = json.dumps(body.canvas_data, ensure_ascii=False)
     nodes = body.canvas_data.get("nodes")
     if isinstance(nodes, list):
         _migrate_canvas_nodes(nodes)
     if row:
+        write_nonempty_backup(row.id, row.data)
         row.data = data_str
         row.version = int(row.version or 1) + 1
         row.updated_at = _utcnow()

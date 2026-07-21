@@ -259,6 +259,39 @@ def main() -> int:
                                     f"asset image_url should start with {public}, got {url}"
                                 )
 
+                    # ── 5. import-video (best-effort with tiny view URL) ─────
+                    import_check = {"ok": True, "skipped": True, "mode": "no_view_url"}
+                    if created_file_id is not None:
+                        view_url = f"{BASE}/api/view?filename=probe.mp4&type=output"
+                        imp = client.post(
+                            f"{BASE}/api/r2/import-video",
+                            headers=headers(user_token),
+                            json={"source_url": view_url},
+                            timeout=60,
+                        )
+                        if imp.status_code == 404:
+                            import_check = {
+                                "status": 404,
+                                "ok": True,
+                                "mode": "expected_missing_probe_file",
+                            }
+                        elif imp.status_code in (200, 403, 502):
+                            import_check = {
+                                "status": imp.status_code,
+                                "ok": True,
+                                "mode": "reachable",
+                            }
+                        else:
+                            import_check = {
+                                "status": imp.status_code,
+                                "ok": False,
+                                "body": imp.text[:200],
+                            }
+                            issues.append(
+                                f"import-video unexpected: {imp.status_code} {imp.text[:120]}"
+                            )
+                    results["checks"]["import_video"] = import_check
+
             # Cleanup via admin delete
             if created_file_id is not None:
                 d = client.delete(

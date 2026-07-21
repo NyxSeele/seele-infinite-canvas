@@ -72,6 +72,8 @@ def mix_sfx_into_video(
             "-b:a",
             "192k",
             "-shortest",
+            "-movflags",
+            "+faststart",
             str(output_path),
         ]
     else:
@@ -95,6 +97,8 @@ def mix_sfx_into_video(
             "-b:a",
             "192k",
             "-shortest",
+            "-movflags",
+            "+faststart",
             str(output_path),
         ]
 

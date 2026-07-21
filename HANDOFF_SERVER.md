@@ -4,7 +4,7 @@
 > **与仓库 HANDOFF 的关系**：本文件记录「这台机器上做了什么」；**产品功能、Phase 进度、探针清单、GPU 验收标准**仍以仓库根目录 [**`HANDOFF.md`**](HANDOFF.md) 为**后续开发主指南**（尤其 **§六 部署**、**§八 B 真实 GPU 验收**）。  
 > **部署操作细节**：[`backend/docs/AUTODL_DEPLOY_RUNBOOK.md`](backend/docs/AUTODL_DEPLOY_RUNBOOK.md) · 本机实操备忘 [`/root/autodl-tmp/AUTODL_ACTUAL_RUNBOOK.md`](/root/autodl-tmp/AUTODL_ACTUAL_RUNBOOK.md)
 
-最后更新：**2026-07-14 (UTC+8)**（Supervisor 五段硬约束 · 双 GPU comfyui0/1 · Tunnel 1033 事故备忘）
+最后更新：**2026-07-16 (UTC+8)**（混合 CDN · Tunnel 入口 + AutoDL 静态资源）
 
 ---
 
@@ -16,7 +16,7 @@
 | **公网** | **`https://velora.seele0420.cloud`** → Cloudflare Tunnel（`cloudflared`）→ Nginx `:6006` |
 | **pytest** | **121 passed**（2026-07-13） |
 | **迁移** | Alembic head **026**（025 R2 · 026 review） |
-| **磁盘** | `/root/autodl-tmp` **350G** · 已用 **~182G** · 可用 **~169G** |
+| **磁盘** | `/` 系统盘 **~4%**（~29G 可用）· `/root/autodl-tmp` **450G** · 已用 **~374G** · 可用 **~77G**（**83%**，>85% 需清理） |
 | **服务** | ComfyUI `:8000` · 后端 `:7788` · Nginx `:6006` · **cloudflared**（Supervisor；开机自启已修） |
 | **下轮优先** | ① 主观质量表（G47） ② 审阅加固（可选） ③ Seedance **最后再说** |
 
@@ -36,9 +36,149 @@
 | 前端 dist | ✅ | 生产须 **`VITE_API_BASE_URL=`**（空）再 `npm run build`；同域 `/api` |
 | 健康 | ✅ | 公网首页 **200**；本地 7788/8000/6006 正常 |
 
+### 0a-1. 2026-07-16 存储分流（R2 保留 + 本地盘 / AutoDL 公网）
+
+| 场景 | 主路径 | R2 |
+|------|--------|-----|
+| 审阅 `/review` | R2（不变） | 保留 |
+| 画布图片 | `uploads/images/` + `MEDIA_PUBLIC_BASE` | 可选回退 |
+| 团队文件 | `uploads/team/{team_id}/` + AutoDL 公网 | presign 仍可用 |
+| 生成结果 / 导出 | 本地（已是） | — |
+
+**`.env` 关键项**（与 Tunnel 并存）：
+
+```env
+MEDIA_PUBLIC_BASE=https://u1066791-81ad-fb224913.bjb2.seetacloud.com:8443
+STORAGE_CANVAS=auto
+STORAGE_TEAM=auto
+STORAGE_REVIEW=r2
+CORS_ORIGINS=https://velora.seele0420.cloud,https://u1066791-81ad-fb224913.bjb2.seetacloud.com:8443
+```
+
+> **换机/克隆后必核对**：控制台「自定义服务」公网 URL 与 `backend/.env` 中 `MEDIA_PUBLIC_BASE`、Tunnel 域名 `velora.seele0420.cloud` 一致；**勿复制旧实例 ID 的 URL**（当前实例见 §1 快照）。
+
+**验证**（Tunnel 打开 `https://velora.seele0420.cloud`，DevTools → Network）：
+
+1. `GET /api/upload/capabilities` → `canvas.backend=local`、`team.backend=local`、`review.backend=r2`
+2. 画布上传：POST host = AutoDL `:8443`（如 `/api/upload/image`）
+3. 团队大文件上传走 AutoDL；`r2_access=false` 的团队编辑者可上传（local 模式）
+4. `/review/:id` 播放仍走 R2 URL
+5. `STORAGE_TEAM=r2` 时 R2 presign 路径仍可用
+6. **Admin → 用户文件 / 反馈分析**：预览 `/api/view`、`/api/uploads`、`/api/admin/files/` 均 **Tunnel 同源 + `mt`**（不走 AutoDL 跨域；画布侧仍 `ensureMediaUrl`）
+7. **画布 / 团队上传与预览**：POST 与大图预览 host = AutoDL `:8443`
+8. **资产库上传**：POST `/api/assets/upload` host = AutoDL `:8443`
+9. **风格参考上传**：POST `…/style-reference` host = AutoDL `:8443`
+
+**内测日常检查**（顺手做，不改配置）：
+
+- `supervisorctl status` 五段齐全（含 `nginx`、`cloudflared`）
+- 数据盘 `df -h /root/autodl-tmp`；**>85%** 时安排清理 Comfy 输出或扩容
+- Tunnel 公网：`curl -s -o /dev/null -w "%{http_code}\n" https://velora.seele0420.cloud/api/health` → **200**
+
+**迁移 checklist**（换实例 / 克隆数据盘）：
+
+| 项 | 路径 / 动作 |
+|----|-------------|
+| 数据库 | `backend/aistudio.db`（或 PostgreSQL dump） |
+| 本地上传 | `backend/uploads/`（images、team、exports 等） |
+| Comfy 生成产物 | `ComfyUI/output/`（可选；可清） |
+| 模型权重 | `ComfyUI/models/`（通常已在数据盘，随盘克隆） |
+| R2 审阅媒资 | **仍在云端**，无需拷盘；确认 `.env` 中 `R2_*` |
+| 公网 URL | 更新 `MEDIA_PUBLIC_BASE` + `CORS_ORIGINS` + 前端 `npm run build` |
+| 迁移 DB | `alembic upgrade head`（当前含 **034** `storage_backend`） |
+| Supervisor | 五段齐全；**勿整文件覆盖** `aistudio.conf` |
+
+**磁盘大户**（2026-07-16 复核，`du` 定位）：
+
+| 路径 | 约占用 | 说明 |
+|------|--------|------|
+| `ComfyUI/models/diffusion_models/` | **213G** | 权重主力（Flux/Wan/HiDream/LTX 等） |
+| `ComfyUI/models/text_encoders/` | 46G | T5/Gemma 等 |
+| `ComfyUI/models/checkpoints/` | 46G | LTX 等 checkpoint |
+| `ComfyUI/models/loras/` | 26G | LoRA |
+| `ComfyUI/output/` | ~90M | 生成产物（可定期清） |
+| `AIStudio/backend/uploads/` | ~35M | 画布/团队本地上传 |
+
+迁移：**034**（`r2_files.storage_backend` / `local_rel_path`）；启动时 `mkdir uploads/team/`。
+
+**前端**：`VITE_MEDIA_PUBLIC_BASE_URL` 可选；留空则运行时读 capabilities。大流量 axios 实例见 `frontend/src/services/mediaApi.js`。
+
+### 0a-1b. 2026-07-16 混合 CDN（Tunnel 入口 + AutoDL 静态资源）
+
+**不整站切 AutoDL**：用户仍打开 `https://velora.seele0420.cloud`；**JS/CSS 字节量大头**走 AutoDL `:8443`。
+
+| 流量 | 路径 | Host |
+|------|------|------|
+| HTML、API、WebSocket | 控制面 | Tunnel `velora.seele0420.cloud` |
+| `/assets/*.js`、`.css` | 首屏静态（~0.5–1MB gzip） | AutoDL `:8443` |
+| 上传 / 预览 | 媒体（已有 §0a-1） | AutoDL `:8443` |
+
+**生产 build**（`MEDIA_PUBLIC_BASE` 与 `VITE_ASSET_PUBLIC_BASE` 对齐）：
+
+```bash
+cd frontend
+VITE_API_BASE_URL= \
+VITE_ASSET_PUBLIC_BASE=https://u1066791-81ad-fb224913.bjb2.seetacloud.com:8443 \
+npm run build
+```
+
+- `VITE_API_BASE_URL` 留空 → API/WS 仍同源 Tunnel
+- `index.html` 内 script/link 指向 AutoDL 绝对 URL
+- Nginx [`deploy/nginx-autodl.conf`](deploy/nginx-autodl.conf)：`/assets/` 加 `Access-Control-Allow-Origin: https://velora.seele0420.cloud`（跨域 ES module）
+
+**首屏瘦身**（同批）：Canvas `lazy()`；mammoth 动态 import；去掉 Google Fonts 外网依赖。
+
+**验证**（Tunnel 打开页面，DevTools → Network）：
+
+1. `index.html` host = Tunnel
+2. `*.js` / `*.css` host = AutoDL `:8443`
+3. `/api/*` host = Tunnel
+4. `curl -I -H "Origin: https://velora.seele0420.cloud" https://…:8443/assets/index-*.js` → 200 + CORS
+
+换机时同步更新 `VITE_ASSET_PUBLIC_BASE`、`MEDIA_PUBLIC_BASE`、`CORS_ORIGINS` 后 rebuild + reload nginx。
+
+### 0a-2. 2026-07-16 断连 / 弱网抽检（内测）
+
+**已有机制**（代码层，无自动化 pytest）：
+
+| 机制 | 位置 | 说明 |
+|------|------|------|
+| 任务/画布 WS 3s 重连 | `frontend/src/services/ws.js`、`canvasWs.js` | token 刷新后 `api.js` 触发 `reconnect()` |
+| 生成轮询网络错误静默重试 | `taskNetworkError.js` + 各 Generation 节点 | 10min 无进度才 stale timeout |
+| 画布锁心跳 | `useCanvasSession.js` | **连续 2 次**网络失败才失权（~50s 窗口） |
+| 画布本地草稿 | `useCanvasSave.js` | 401/无 token 写 `canvas-local-draft-*`；load 时确认恢复 |
+| Agent SSE 保活 | `agent_service.py` | 25s ping，规避 CF ~100s |
+
+**抽检清单**（换机 / 发版前可照做）：
+
+1. **Supervisor 五段**：`supervisorctl status` → 含 `nginx`、`cloudflared` 均为 RUNNING
+2. **Tunnel 断连**：`supervisorctl stop cloudflared` → 公网 `velora…/api/health` **502/超时**；`127.0.0.1:6006/api/health` 仍 **200** → `start cloudflared` 后公网恢复 **200**
+3. **capabilities**：登录后 `GET /api/upload/capabilities` → `canvas/team=local`、`review=r2`
+4. **生成中断网**（手测）：DevTools Offline ~30s → 恢复后任务轮询应续上，不误 fail
+5. **协作锁抖动**（手测）：编辑者断网 ~40s 内恢复 → 心跳重试后仍持锁（勿超过 2 次心跳间隔）
+6. **草稿恢复**（手测）：画布编辑中断网致 401 → 重登打开同项目 → 弹窗询问是否恢复草稿
+7. **风格参考大上传**：Network POST host = AutoDL `:8443`
+
+**2026-07-16 实测记录**：
+
+| 项 | 结果 |
+|----|------|
+| Supervisor 五段 | PASS（comfyui0/1、backend、nginx、cloudflared RUNNING） |
+| capabilities | PASS（canvas=local，review=r2，media_public_base=AutoDL :8443） |
+| stop cloudflared | PASS（公网 502，本地 :6006 仍 200） |
+| start cloudflared | PASS（公网 /api/health 恢复 200） |
+| 生成断网 / 协作锁 / 草稿恢复 | 待浏览器手测（代码已落地，见上表） |
+| 风格参考走 AutoDL | 代码已改 `styleReferenceApi` → `mediaClientFor("canvas")`；发版后 Network 抽检 |
+
+**已知未覆盖**（后续可选）：AutoDL 媒体 host 挂掉时自动回切 Tunnel；`/api/view` 仍经 Backend 代理 Comfy（预览双跳）；前端无 reconnect 单测。
+
+---
+
 **生产管理员账号（2026-07-14）**：**`seele`**（`role=admin`，由原 `admin` 更名；探针团队 A owner、无限配额等不变）· 密码 **`dfy042005`** · `SEED_ADMIN_PASSWORD` 已同步至 `backend/.env`。探针种子 **`testuser` / `testuser2`** 见 `.env`（勿写入 git）。临时注册测试号 `testinv2` / `testinv3` 已删除。
 
 **硬约束 · Admin 文本模型**：未经负责人明确同意，**禁止**修改 Admin 后台「模型管理」中的文本模型配置，也**勿重跑** `scripts/_enable_text_models.py`（会覆盖 DB 里已配默认/启用项）。详见 [`HANDOFF.md`](HANDOFF.md) 文首同条约束。
+
+**硬约束 · 系统盘（严禁无关文件）**：AutoDL **`/` 系统盘仅 30GB**，**严禁**将模型权重、下载缓存、pip/npm/conda 包、大日志、临时测试文件、git 大仓库、生成产物等**与系统运行无关**的内容写入系统盘。一律放 **`/root/autodl-tmp`**（数据盘）。系统盘只保留系统包与极小配置。大目录已软链至 `/root/autodl-tmp/.sys-mirror/`；`TMPDIR=/root/autodl-tmp/tmp`。操作前 `df -h /` 确认 **<80%**。2026-07-15 曾因 `/tmp` 测试残留 + 缓存占满系统盘至 **98%**，已清理并迁移。详见 §1 磁盘表。
 
 **硬约束 · Supervisor / Tunnel（Cursor 改代码必读）**：`deploy/supervisor-autodl.conf` → `/etc/supervisor/conf.d/aistudio.conf` 必须**始终含 5 个 `[program:]` 段**：
 
@@ -71,7 +211,7 @@
 
 | 项 | 值 |
 |----|-----|
-| **当前实例 ID** | `2db141bceb-853ff7b9`（**269 机** · 2026-07-08 自 107 机克隆） |
+| **当前实例 ID** | `6c894481ad-fb224913`（2026-07-16 复核；控制台公网 `:8443` 与 `MEDIA_PUBLIC_BASE` 对齐） |
 | 镜像 | `comfyanonymous/ComfyUI/ComfyUI_2024`（云绘社区版） |
 | GPU | **NVIDIA RTX 4090 24GB** |
 | Python | 3.11.13 |
@@ -80,14 +220,16 @@
 | `nvcc` | **未安装**（纯推理无影响） |
 | 区域 | AutoDL `nm-B1` / `neimengDC3` |
 | 对外端口 | Nginx **6006**（控制台「自定义服务」查公网 URL） |
-| 主机名 | `autodl-container-2db141bceb-853ff7b9` |
+| 主机名 | `autodl-container-6c894481ad-fb224913` |
 
-### 磁盘（2026-07-13 复核）
+### 磁盘（2026-07-16 复核）
 
 | 挂载点 | 容量 | 已用 | 可用 | 说明 |
 |--------|------|------|------|------|
-| `/` 系统盘 | 30G | ~19G | ~12G | ComfyUI 已迁出 |
-| `/root/autodl-tmp` | **350G** | **~182G** | **~169G** | 含 Flux/Wan/HiDream/SeedVR2 + PuLID + LTX2-fp4 + HunyuanVideo + AudioGen（已从 300G 扩容） |
+| `/` **系统盘** | 30G | **~1.1G** | **~29G** | **仅系统包 + 极小配置** |
+| `/root/autodl-tmp` | **450G** | **~374G** | **~77G**（**83%**） | ComfyUI 权重 ~351G；>85% 清 `output/` 或扩容 |
+
+**严禁在系统盘放无关文件**（模型、缓存、临时测试、大日志等）→ 一律 `/root/autodl-tmp`。见文首硬约束。
 
 ### 关键路径（增补）
 

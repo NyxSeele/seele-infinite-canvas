@@ -488,6 +488,11 @@
   left: -20px !important;   /* center = left:0 i.e. card edge */
   right: auto !important;
 }
+.react-flow__handle.gn2-edge-handle--target {
+  left: -20px !important;
+  right: auto !important;
+  z-index: 35 !important;
+}
 
 /* ── Plus zone: fixed at card vertical center, slides out on hover (shared with image-gen) ── */
 .gn2-plus-right-zone {

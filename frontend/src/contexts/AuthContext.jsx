@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
 import api from "../services/api"
+import { getUploadCapabilities } from "../services/mediaApi"
 import { useTeamStore } from "../stores/teamStore"
 import { clearMediaTicket, refreshMediaTicket } from "../utils/mediaTicket"
 import { applyServerProfileToCache, migrateLocalProfileIfNeeded } from "../utils/canvas/profileSync"
@@ -26,6 +27,7 @@ export function AuthProvider({ children }) {
       } catch {
         clearMediaTicket()
       }
+      void getUploadCapabilities().catch(() => {})
       if (!skipMigration) {
         profile = await migrateLocalProfileIfNeeded(profile)
       } else {
@@ -34,10 +36,13 @@ export function AuthProvider({ children }) {
       setUser(profile)
       void useTeamStore.getState().ensureTeamsLoaded()
       return profile
-    } catch {
-      localStorage.removeItem("access_token")
-      localStorage.removeItem("refresh_token")
-      clearMediaTicket()
+    } catch (err) {
+      const status = err?.response?.status
+      if (status === 401) {
+        localStorage.removeItem("access_token")
+        localStorage.removeItem("refresh_token")
+        clearMediaTicket()
+      }
       setUser(null)
       return null
     } finally {
@@ -58,6 +63,7 @@ export function AuthProvider({ children }) {
     } catch {
       clearMediaTicket()
     }
+    void getUploadCapabilities().catch(() => {})
     wsManager.connect()
     await fetchMe()
     return res.data
